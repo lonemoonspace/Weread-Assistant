@@ -1,6 +1,8 @@
 const fs = require("fs");
+const util = require("util");
 
 let logStream = null;
+const writeStdout = console.log.bind(console);
 
 function formatLocalTimestamp(d = new Date()) {
   const pad2 = (n) => String(n).padStart(2, "0");
@@ -12,16 +14,17 @@ function formatLocalTimestamp(d = new Date()) {
   )}.${pad3(d.getMilliseconds())}`;
 }
 
-// Prefix console output with level and timestamp, and mirror it into the log file
+// Prefix console output with level and timestamp, and mirror it into the log file.
+// util.format keeps objects and error stacks readable instead of "[object Object]".
 function redirectConsole(method) {
   console[method] = function (...args) {
-    let logstr = `[${method.toUpperCase()}][${formatLocalTimestamp()}]: ` + args.join(" ");
+    const logstr = `[${method.toUpperCase()}][${formatLocalTimestamp()}]: ${util.format(...args)}`;
 
     if (logStream) {
       logStream.write(logstr + "\r\n");
     }
 
-    console.log(logstr);
+    writeStdout(logstr);
   };
 }
 
@@ -32,8 +35,11 @@ function initLogFile(filePath, { debug = false } = {}) {
 
   logStream = fs.createWriteStream(filePath, { flags: "w" });
 
-  if (!debug) {
-    ["info", "warn", "error"].forEach(redirectConsole);
+  ["info", "warn", "error"].forEach(redirectConsole);
+  if (debug) {
+    redirectConsole("debug");
+  } else {
+    console.debug = () => {};
   }
 }
 

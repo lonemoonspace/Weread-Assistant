@@ -1,52 +1,73 @@
 const fs = require("fs");
-const assert = require("assert");
 const { By, until } = require("selenium-webdriver");
+const { writeFileAtomic } = require("../shared/files");
+const { findElementsWithin, sleep, toBy, waitForAnyXpath, xpathsExist } = require("./dom");
 const { ensureDir } = require("./paths");
-
-const WEREAD_URL = "https://weread.qq.com/";
-const QR_EXPIRED_TEXTS = ["点击刷新二维码", "二维码已失效"]; // 登录二维码过期提示
+const { formatDuration } = require("./timing");
+const {
+  HOME_TITLE,
+  QR_REFRESH_LOCATORS,
+  QR_REFRESH_SCRIPT,
+  WEREAD_HOME_URL,
+  XPATH,
+} = require("./selectors");
 
 async function saveCookies(driver, filePath) {
   const cookies = await driver.manage().getCookies();
-  fs.writeFileSync(filePath, JSON.stringify(cookies, null, 2));
+  writeFileAtomic(filePath, JSON.stringify(cookies, null, 2));
   console.info("Cookies saved successfully.");
 }
 
-async function loadCookies(driver, filePath) {
-  if (!fs.existsSync(filePath)) {
-    console.warn("No cookies file found.");
-    return;
-  }
+// 读取 cookies 文件；内容损坏时改名备份并返回 null，本次转入扫码登录
+function readCookiesFile(filePath) {
+  try {
+    const cookies = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (Array.isArray(cookies)) {
+      return cookies;
+    }
+  } catch (_) {}
 
-  const cookies = JSON.parse(fs.readFileSync(filePath, "utf8"));
-  for (const cookie of cookies) {
-    await driver.manage().addCookie(cookie);
-  }
-  console.info("Cookies loaded successfully.");
+  const backupPath = `${filePath}.corrupt-${Date.now()}`;
+  fs.renameSync(filePath, backupPath);
+  console.warn("cookies 文件已损坏，已备份为", backupPath, "，本次需要重新扫码登录");
+  return null;
 }
 
-// 简化的二维码定位函数
+// 返回是否加载了至少一个 cookie
+async function loadCookies(driver, filePath) {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+
+  const cookies = readCookiesFile(filePath);
+  if (!cookies) {
+    return false;
+  }
+
+  let loaded = 0;
+  for (const cookie of cookies) {
+    try {
+      await driver.manage().addCookie(cookie);
+      loaded += 1;
+    } catch (e) {
+      console.warn(`跳过无法加载的 cookie ${cookie.name}:`, e.message);
+    }
+  }
+  console.info("Cookies loaded successfully.");
+  return loaded > 0;
+}
+
 async function findQRCodeElement(driver) {
   try {
     console.info("正在查找二维码登录元素...");
-    // 使用更精确的定位策略，优先查找二维码图片
-    await driver.wait(
-      until.elementLocated(
-        By.xpath("//img[contains(@class, 'qr') or contains(@src, 'qr') or contains(@alt, '二维码')]")
-      ),
-      3000
-    );
+    // 优先查找二维码图片
+    await driver.wait(until.elementLocated(By.xpath(XPATH.qrImage)), 3000);
     console.info("找到二维码图片元素");
     return true;
   } catch (e) {
     try {
       // 备选方案：查找包含"扫码"或"二维码"文本的元素
-      await driver.wait(
-        until.elementLocated(
-          By.xpath("//*[contains(text(), '扫码') or contains(text(), '二维码')]")
-        ),
-        3000
-      );
+      await driver.wait(until.elementLocated(By.xpath(XPATH.qrHint)), 3000);
       console.info("找到包含'扫码'或'二维码'文本的元素");
       return true;
     } catch (e) {
@@ -56,14 +77,12 @@ async function findQRCodeElement(driver) {
   }
 }
 
-// 从页面二维码图片中解码登录链接并在终端显示为二维码
-async function extractAndDisplayQRCode(driver, notifier) {
+// 从页面二维码图片中解码登录链接，在终端显示为二维码并推送
+async function extractAndDisplayQRCode(driver, ctx) {
   try {
-    const qrImg = await driver.findElement(
-      By.xpath("//img[contains(@class, 'qr') or contains(@src, 'qr') or contains(@alt, '二维码')]")
-    );
-
+    const qrImg = await driver.findElement(By.xpath(XPATH.qrImage));
     const base64Png = await qrImg.takeScreenshot();
+    fs.writeFileSync(ctx.paths.loginQrImage, base64Png, "base64");
 
     const { PNG } = require("pngjs");
     const png = PNG.sync.read(Buffer.from(base64Png, "base64"));
@@ -75,7 +94,7 @@ async function extractAndDisplayQRCode(driver, notifier) {
       console.info("登录链接:", code.data);
       const qrcode = require("qrcode-terminal");
       qrcode.generate(code.data, { small: true });
-      await notifier.loginLink(code.data);
+      await ctx.notifier.loginLink(code.data, ctx.paths.loginQrImage);
       return code.data;
     }
     console.warn("无法从二维码图片中解析登录链接");
@@ -86,11 +105,37 @@ async function extractAndDisplayQRCode(driver, notifier) {
   }
 }
 
-// 截取整页保存为登录二维码图片
-async function captureLoginQrCode(driver, ctx) {
-  await driver.takeScreenshot().then((image) => {
-    fs.writeFileSync(ctx.paths.loginQrCode, image, "base64");
-  });
+// 截取整页保存为登录二维码图片，并解析、推送登录链接
+async function captureQRCode(driver, ctx) {
+  // 避免截图时二维码还未弹出
+  await sleep(1000);
+  const image = await driver.takeScreenshot();
+  fs.writeFileSync(ctx.paths.loginQrCode, image, "base64");
+  console.info("QR code saved, datetime: ", new Date());
+  await extractAndDisplayQRCode(driver, ctx);
+}
+
+// 点击首页的“登录”打开二维码弹窗；返回是否找到二维码
+async function openLoginDialog(driver, ctx) {
+  const loginLinks = await findElementsWithin(driver, XPATH.loginLink, ctx.timing.elementWaitMs);
+  if (loginLinks.length === 0) {
+    console.warn("未找到登录入口");
+    return false;
+  }
+
+  console.info("Login link found. Clicking...");
+  // 避免点击不成功
+  await sleep(1000);
+  await loginLinks[0].click();
+  // 等待弹窗加载
+  await sleep(2000);
+
+  if (!(await findQRCodeElement(driver))) {
+    console.error("未能找到任何二维码相关元素");
+    return false;
+  }
+  await captureQRCode(driver, ctx);
+  return true;
 }
 
 // 安全点击元素函数，处理元素被拦截的情况
@@ -101,10 +146,9 @@ async function safeClickElement(driver, element, description = "元素") {
     if (!isDisplayed) {
       console.warn(`${description}不可见，尝试滚动到元素位置`);
       await driver.executeScript("arguments[0].scrollIntoView({block: 'center'});", element);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
     }
 
-    // 尝试直接点击
     await element.click();
     console.info(`成功点击${description}`);
     return true;
@@ -112,7 +156,6 @@ async function safeClickElement(driver, element, description = "元素") {
     console.warn(`直接点击${description}失败: ${error.message}`);
 
     try {
-      // 尝试使用JavaScript点击
       console.info(`尝试使用JavaScript点击${description}`);
       await driver.executeScript("arguments[0].click();", element);
       console.info(`使用JavaScript成功点击${description}`);
@@ -121,7 +164,6 @@ async function safeClickElement(driver, element, description = "元素") {
       console.warn(`使用JavaScript点击${description}失败: ${jsError.message}`);
 
       try {
-        // 尝试使用Actions类模拟点击
         console.info(`尝试使用Actions类点击${description}`);
         const actions = driver.actions({ bridge: true });
         await actions.move({ origin: element }).click().perform();
@@ -135,198 +177,120 @@ async function safeClickElement(driver, element, description = "元素") {
   }
 }
 
-// 刷新二维码的函数
+// 点击二维码上的刷新入口；返回是否拿到了新的二维码
 async function refreshQRCode(driver, ctx) {
   try {
     console.info("开始刷新二维码...");
 
-    // 尝试多种方式找到刷新按钮
-    const refreshLocators = [
-      By.css(".login_dialog_retry_delegate"),
-      By.xpath("//div[contains(@class, 'login_dialog_retry_delegate')]"),
-      By.xpath("//div[contains(text(), '点击刷新二维码') and @class='wr_login_modal_qr_overlay_text']"),
-      By.xpath("//div[contains(text(), '点击刷新二维码')]"),
-      By.xpath("//div[@class='login_dialog_retry_delegate']"),
-      By.xpath("//div[contains(@class, 'refresh') or contains(@class, 'retry')]"),
-      By.xpath("//button[contains(text(), '刷新')]"),
-      By.xpath("//span[contains(text(), '刷新')]")
-    ];
-
     let refreshClicked = false;
-    let refreshElement = null;
-
-    // 尝试每个定位器
-    for (const locator of refreshLocators) {
+    for (const locator of QR_REFRESH_LOCATORS) {
+      const by = toBy(locator);
+      let refreshElement;
       try {
-        refreshElement = await driver.wait(until.elementLocated(locator), 2000);
-        if (refreshElement) {
-          console.info(`找到刷新元素，尝试点击: ${locator.toString()}`);
-          refreshClicked = await safeClickElement(driver, refreshElement, "刷新按钮");
-          if (refreshClicked) {
-            try {
-              await driver.wait(until.stalenessOf(refreshElement), 3000);
-            } catch (waitError) {
-              console.debug(`刷新元素可能未及时从DOM移除: ${waitError.message}`);
-            }
-            break;
-          }
-        }
+        refreshElement = await driver.wait(until.elementLocated(by), 2000);
       } catch (e) {
-        console.debug(`未找到元素: ${locator.toString()}`);
+        console.debug(`未找到元素: ${by.toString()}`);
+        continue;
+      }
+      console.info(`找到刷新元素，尝试点击: ${by.toString()}`);
+      refreshClicked = await safeClickElement(driver, refreshElement, "刷新按钮");
+      if (refreshClicked) {
+        try {
+          await driver.wait(until.stalenessOf(refreshElement), 3000);
+        } catch (waitError) {
+          console.debug(`刷新元素可能未及时从DOM移除: ${waitError.message}`);
+        }
+        break;
       }
     }
 
     if (!refreshClicked) {
       console.warn("常规定位失败，尝试执行脚本触发刷新");
-      try {
-        const jsClicked = await driver.executeScript(
-          "const delegate = document.querySelector('.login_dialog_retry_delegate'); if (delegate) { delegate.click(); return true; } return false;"
-        );
-        if (!jsClicked) {
-          console.error("无法找到或点击任何刷新按钮");
-          return false;
-        }
-        refreshClicked = true;
-      } catch (scriptError) {
-        console.error(`执行脚本触发刷新失败: ${scriptError.message}`);
+      if (!(await driver.executeScript(QR_REFRESH_SCRIPT))) {
+        console.error("无法找到或点击任何刷新按钮");
         return false;
       }
     }
 
-    // 等待页面加载
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    // 等待新二维码加载
+    await sleep(2000);
 
-    // 检查二维码是否已刷新
-    let qrElementFound = await findQRCodeElement(driver);
-
-    if (qrElementFound) {
-      // 避免截图时二维码还未弹出
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await captureLoginQrCode(driver, ctx);
-      console.info("QR code refreshed, datetime: ", new Date());
-      await extractAndDisplayQRCode(driver, ctx.notifier);
-      return true;
-    } else {
+    if (!(await findQRCodeElement(driver))) {
       console.error("刷新后未能找到任何二维码相关元素");
       return false;
     }
+    await captureQRCode(driver, ctx);
+    return true;
   } catch (error) {
     console.error("刷新二维码过程中发生错误:", error.message);
     return false;
   }
 }
 
-// 打开首页、加载 cookies，需要时展示二维码并等待扫码登录；返回是否登录成功
+// 打开首页、加载 cookies，需要时展示二维码并等待扫码；
+// 返回 true 表示已登录，false 表示在等待时长内没有完成扫码
 async function login(driver, ctx) {
-  const { paths } = ctx;
+  const { paths, timing } = ctx;
+  const homeUrl = ctx.homeUrl || WEREAD_HOME_URL;
 
-  await driver.get(WEREAD_URL);
-
-  if (fs.existsSync(paths.cookies)) {
-    await loadCookies(driver, paths.cookies);
+  await driver.get(homeUrl);
+  if (await loadCookies(driver, paths.cookies)) {
     await driver.navigate().refresh(); // Refresh to apply cookies
   }
 
-  console.info("Going to the URL:", WEREAD_URL);
-
-  let title = await driver.getTitle();
-  assert.equal("微信读书", title);
-  console.info("Successfully opened the url:", WEREAD_URL);
+  console.info("Going to the URL:", homeUrl);
+  const title = await driver.getTitle();
+  if (title !== HOME_TITLE) {
+    throw new Error(`首页标题应为“${HOME_TITLE}”，实际为“${title}”`);
+  }
+  console.info("Successfully opened the url:", homeUrl);
 
   ensureDir(paths.dataDir);
 
-  // Check if "Login" hyperlink exists
+  // 等首页渲染出“登录”入口或“我的书架”
   console.info("Find login links...");
-  let loginLinks = await driver.findElements(
-    By.xpath("//a[contains(text(), '登录')]"),
-    10000
-  );
-  if (loginLinks.length > 0) {
-    console.info("Login link found. Clicking...");
-    // 避免点击不成功
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    await loginLinks[0].click();
-
-    // 等待页面加载
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    let qrElementFound = await findQRCodeElement(driver);
-
-    if (qrElementFound) {
-      // 避免截图时二维码还未弹出
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await captureLoginQrCode(driver, ctx);
-      console.info("QR code saved, datetime: ", new Date());
-      await extractAndDisplayQRCode(driver, ctx.notifier);
-    } else {
-      console.error("未能找到任何二维码相关元素");
-    }
+  const entry = await waitForAnyXpath(driver, [XPATH.loginLink, XPATH.shelfLink], timing.pageWaitMs);
+  if (entry === 0) {
+    await openLoginDialog(driver, ctx);
   }
 
-  let locator1 = By.xpath(
-    "//div[contains(text(), '点击刷新二维码') and @class='wr_login_modal_qr_overlay_text']"
-  );
-  let locator2 = By.xpath(
-    "//div[contains(text(), '我的书架') and @class='wr_index_page_top_section_header_action_link']"
-  );
-
-  let loggedIn = false;
-  let maxRetries = 3;
-  while (maxRetries-- > 0) {
-    console.info("Waiting for login...");
-    const element = await driver.wait(
-      new Promise((resolve, reject) => {
-        driver
-          .wait(until.elementLocated(locator1), 300000)
-          .then(resolve)
-          .catch(() => { });
-        driver
-          .wait(until.elementLocated(locator2), 300000)
-          .then(resolve)
-          .catch(() => { });
-      }),
-      300000 // 5 minutes
-    );
-
-    if (element === undefined) {
-      console.info("no element found");
+  const deadline = Date.now() + timing.loginTimeoutMs;
+  console.info("Waiting for login...");
+  while (Date.now() < deadline) {
+    let state;
+    try {
+      state = await xpathsExist(driver, [XPATH.shelfLink, XPATH.qrExpiredOverlay, XPATH.qrExpiredText]);
+    } catch (e) {
+      // 扫码成功后页面会跳转，跳转过程中执行脚本可能失败，稍后再查
+      console.debug("检查登录状态失败，稍后重试:", e.message);
+      await sleep(timing.loginPollMs);
       continue;
     }
+    const [loggedIn, overlayShown, expiredTextShown] = state;
 
-    let text = await element.getText();
-    // if text contains "我的书架", then login is successful
-    if (text.includes("我的书架")) {
+    if (loggedIn) {
       console.info("Login completed.");
-      loggedIn = true;
-      break;
+      return true;
     }
 
-    // 如果出现二维码过期提示，则自动刷新
-    if (QR_EXPIRED_TEXTS.some((expiredText) => text.includes(expiredText))) {
+    // 二维码过期则刷新；刷新失败时重新加载页面并再次打开登录弹窗
+    if (overlayShown || expiredTextShown) {
       console.info("Refreshing QR code...");
-      let refreshSuccess = await refreshQRCode(driver, ctx);
-
-      if (!refreshSuccess) {
-        console.error("二维码刷新失败，尝试其他方法...");
-        // 如果刷新失败，尝试直接刷新页面
+      if (!(await refreshQRCode(driver, ctx))) {
+        console.error("二维码刷新失败，重新加载页面后再次打开登录弹窗");
         await driver.navigate().refresh();
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-
-        // 再次检查二维码
-        let qrElementFound = await findQRCodeElement(driver);
-        if (qrElementFound) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          await captureLoginQrCode(driver, ctx);
-          console.info("页面刷新后找到二维码, datetime: ", new Date());
-          await extractAndDisplayQRCode(driver, ctx.notifier);
-        }
+        await sleep(3000);
+        await openLoginDialog(driver, ctx);
       }
+      console.info("Waiting for login...");
       continue;
     }
+
+    await sleep(timing.loginPollMs);
   }
 
-  // 重试次数用完仍未看到“我的书架”时 loggedIn 保持 false
-  return loggedIn;
+  console.error(`等待扫码超时（${formatDuration(timing.loginTimeoutMs)}）`);
+  return false;
 }
 
 module.exports = {

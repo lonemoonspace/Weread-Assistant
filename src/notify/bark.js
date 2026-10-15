@@ -13,7 +13,7 @@ async function sendBark(config, title, body, options = {}) {
   const {
     subtitle = "",
     sound = "alarm",
-    group = "WeRead-Challenge",
+    group = "WeReadAssistant",
     icon = "",
     url = "",
     image = "",

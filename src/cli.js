@@ -20,8 +20,11 @@ function showHelp() {
   console.log(`WeReadAssistant ${VERSION}
 
 Usage:
-  node src/cli.js run     Run one reading session, configured by environment variables.
-  node src/cli.js help    Show this help text.
+  node src/cli.js run                Run one reading session, configured by environment variables.
+  node src/cli.js run --login-only   Only log in (scan the QR code if needed) and save cookies.
+  node src/cli.js help               Show this help text.
+
+Exit code is 0 when the run succeeds, 1 when login times out or an error occurs.
 
 Environment variables:
 ${envLines}`);
@@ -40,8 +43,9 @@ async function main(argv) {
       showHelp();
       return;
     }
-    if (rest.length > 0) {
-      throw new Error(`Unexpected arguments for run: ${rest.join(" ")}`);
+    const unexpected = rest.filter((arg) => arg !== "--login-only");
+    if (unexpected.length > 0) {
+      throw new Error(`Unexpected arguments for run: ${unexpected.join(" ")}`);
     }
 
     const config = configFromEnv(process.env);
@@ -50,8 +54,9 @@ async function main(argv) {
     initLogFile(paths.outputLog, { debug: config.debug });
 
     const { runOnce } = require("./reader/run");
-    await runOnce(config);
-    process.exit(0);
+    const result = await runOnce(config, { mode: rest.includes("--login-only") ? "login" : "read" });
+    console.info("Run finished:", result.status);
+    process.exit(result.status === "success" ? 0 : 1);
   }
 
   throw new Error(`Unknown command: ${command}`);

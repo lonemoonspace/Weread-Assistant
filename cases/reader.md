@@ -1,0 +1,14 @@
+## 自动阅读流程验收用例
+
+`scripts/reader-smoke.js` 用本地模拟页面驱动真实浏览器运行 `runOnce`，不访问微信读书。执行方式：`SELENIUM_URL=<Selenium 或 chromedriver 地址> npm run test:reader`。
+
+| 场景 | 前置条件 / 输入 | 预期结果 |
+| --- | --- | --- |
+| smoke 自查 | 启动 Selenium（或 chromedriver）后执行 `npm run test:reader` | 5 个场景全部通过并退出码 0 |
+| 扫码登录 | 未登录；二维码 3 秒过期，第 2 张二维码出现 1.5 秒后扫码；仅登录模式 | 结果为 `success`；至少刷新一次二维码；推送一次「需要扫码」，`click` 为第 1 张二维码解析出的链接；生成 `login.png`、`login-qr.png`；`cookies.json` 含 `wr_vid` |
+| 等待扫码超时 | 未登录；二维码 1.5 秒过期且不扫码；等待时长 25 秒 | 结果为 `login-timeout`；二维码刷新不少于 3 次；推送「运行失败」，正文含“等待扫码超时” |
+| cookies 损坏 | `cookies.json` 内容为 `{broken`；已登录 | 结果为 `success`；生成 `cookies.json.corrupt-*` 备份；新的 `cookies.json` 是合法的 JSON 数组 |
+| 阅读 | 已登录；书架 3 本书、每本 2 章；选书方式 2；阅读 30 秒，翻动间隔 0.1–0.2 秒 | 打开第 2 本书第 1 章并切换到上下滚动模式；翻到第 2 章；读完后回到第 1 章；30 秒内翻动不少于 30 次；推送「阅读完成」，不推送「登录成功」 |
+| 目录只有一项、白屏刷新 | 已登录；书只有 1 章且目录开头有“扉页”；直接打开阅读链接；开启截图，每 4 秒算一分钟 | 读完后点击目录中唯一的条目（扉页）且不报错；生成 `screenshot-1.png`；截图小于 100KB 时刷新页面 |
+| 真实站点：仅登录 | `SELENIUM_URL=<地址> WEREAD_LOGIN_TIMEOUT=2 node src/cli.js run --login-only`，不扫码 | 日志依次出现找到二维码、登录链接、`Refreshing QR code...`（约每分钟一次）、`距上次推送登录链接不足 3 分钟，本次不推送`、`等待扫码超时（2 分钟）`；进程退出码 1 |
+| 真实站点：完整阅读 | 扫码登录后 `node src/cli.js run` | 打开书籍并切换上下滚动，日志出现书名、每分钟的 `Reading minute`，按配置的节奏翻动，结束时推送「阅读完成」 |
