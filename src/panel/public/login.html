@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · WeReadAssistant</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="assets/panel.css">
+</head>
+<body>
+  <main class="card">
+    <h1>WeReadAssistant</h1>
+    <form id="login-form">
+      <label for="password">面板密码</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+      <button type="submit">登录</button>
+      <p id="message" class="message" role="alert"></p>
+    </form>
+  </main>
+  <script src="assets/api.js"></script>
+  <script src="assets/login.js"></script>
+</body>
+</html>

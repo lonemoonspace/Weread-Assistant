@@ -3,8 +3,8 @@
 # data/ holds cookies.json (a WeRead login session), login.png, screenshots and
 # logs. It is never COPYed into the image, but without this file the whole
 # directory is still sent to the daemon, and with a docker-container builder it
-# is uploaded into the builder container. Nothing outside src/, package.json and
-# package-lock.json is needed by the Dockerfile.
+# is uploaded into the builder container. Nothing outside src/, package.json,
+# package-lock.json and docker-entrypoint.sh is needed by the Dockerfile.
 .git
 .github
 .gitignore
