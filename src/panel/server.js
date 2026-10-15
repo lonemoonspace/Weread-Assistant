@@ -2,7 +2,18 @@ const http = require("http");
 const path = require("path");
 const express = require("express");
 const { VERSION } = require("../shared/version");
+const { createAccount, deleteAccount, findAccount, publicAccount, updateAccount } = require("./accounts");
 const { MIN_PASSWORD_LENGTH, SESSION_TTL_MS, createAuth } = require("./auth");
+const {
+  applyConfigPatch,
+  maskValues,
+  publicEffectiveConfig,
+  publicSchema,
+  resolveAccountConfig,
+} = require("./config");
+const { PanelError, badRequest } = require("./errors");
+const { acquirePanelLock } = require("./lock");
+const { applySettingsPatch } = require("./settings");
 const { createStore } = require("./store");
 
 const SESSION_COOKIE = "wa_session";
@@ -52,14 +63,27 @@ function csrfGuard(req, res, next) {
     res.status(403).json({ error: "csrf_header_required" });
     return;
   }
-  if (!req.is("application/json")) {
+  // 没有请求体的请求（例如 DELETE、退出登录）只需要自定义请求头；带请求体时必须是 JSON。
+  // POST 不带请求体时客户端通常仍会发送 Content-Length: 0，这里按实际内容长度判断
+  const hasBody = Number(req.get("Content-Length") || 0) > 0 || req.get("Transfer-Encoding") !== undefined;
+  if (hasBody && !req.is("application/json")) {
     res.status(415).json({ error: "json_required" });
     return;
   }
   next();
 }
 
-function createPanelApp(options, { auth }) {
+function requireObject(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw badRequest("请求体必须是 JSON 对象");
+  }
+  return body;
+}
+
+function createPanelApp(options, { auth, store }) {
+  const panelDataDir = path.resolve(options.dataDir);
+  const settingsView = (data) => ({ settings: data.settings, defaults: maskValues(data.defaults) });
+
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", options.trustProxy);
@@ -194,6 +218,61 @@ function createPanelApp(options, { auth }) {
     res.status(status).json({ error: result.error, minPasswordLength: MIN_PASSWORD_LENGTH });
   });
 
+  api.get("/schema", (req, res) => {
+    res.json(publicSchema());
+  });
+
+  api.get("/settings", (req, res) => {
+    res.json(settingsView(store.get()));
+  });
+
+  // { settings?, defaults? }：settings 为面板设置，defaults 为全局默认运行配置
+  api.patch("/settings", async (req, res) => {
+    const body = requireObject(req.body);
+    const data = await store.update((draft) => {
+      if (body.settings !== undefined) {
+        draft.settings = applySettingsPatch(draft.settings, body.settings);
+      }
+      if (body.defaults !== undefined) {
+        draft.defaults = applyConfigPatch(draft.defaults, body.defaults);
+      }
+    });
+    res.json(settingsView(data));
+  });
+
+  api.get("/accounts", (req, res) => {
+    res.json({ accounts: store.get().accounts.map((account) => publicAccount(account, panelDataDir)) });
+  });
+
+  api.post("/accounts", async (req, res) => {
+    const account = await createAccount(store, panelDataDir, requireObject(req.body));
+    console.info("新建账号:", account.id);
+    res.status(201).json({ account: publicAccount(account, panelDataDir) });
+  });
+
+  // 账号详情与实际生效的配置（账号覆盖 > 全局默认 > 内置默认）
+  api.get("/accounts/:id", (req, res) => {
+    const data = store.get();
+    const account = findAccount(data, req.params.id);
+    res.json({
+      account: publicAccount(account, panelDataDir),
+      effective: publicEffectiveConfig(resolveAccountConfig(data, account, panelDataDir)),
+    });
+  });
+
+  api.patch("/accounts/:id", async (req, res) => {
+    const account = await updateAccount(store, req.params.id, requireObject(req.body));
+    res.json({ account: publicAccount(account, panelDataDir) });
+  });
+
+  // { deleteData?: boolean }：默认保留账号数据目录
+  api.delete("/accounts/:id", async (req, res) => {
+    const body = req.body === undefined ? {} : requireObject(req.body);
+    await deleteAccount(store, panelDataDir, req.params.id, { deleteData: body.deleteData === true });
+    console.info("删除账号:", req.params.id, body.deleteData === true ? "（同时删除数据）" : "");
+    res.status(204).end();
+  });
+
   api.use((req, res) => {
     res.status(404).json({ error: "not_found" });
   });
@@ -205,6 +284,13 @@ function createPanelApp(options, { auth }) {
   app.use((err, req, res, next) => {
     if (res.headersSent) {
       next(err);
+      return;
+    }
+    if (err instanceof PanelError) {
+      if (err.status >= 500) {
+        console.error("面板请求出错:", err);
+      }
+      res.status(err.status).json({ error: err.code, message: err.message });
       return;
     }
     const status = err.status || err.statusCode || 500;
@@ -219,33 +305,46 @@ function createPanelApp(options, { auth }) {
 
 // 启动面板。返回 { server, port, generatedPassword, close }；generatedPassword 只在首次生成密码时非空
 async function startPanel(options) {
-  const store = createStore(path.resolve(options.dataDir));
-  const auth = createAuth({ store, envPassword: options.password, limits: options.limits });
-  const generatedPassword = await auth.init();
-  const app = createPanelApp(options, { auth });
-  const server = http.createServer(app);
-
-  await new Promise((resolve, reject) => {
-    server.once("error", (error) => {
-      if (error.code === "EADDRINUSE") {
-        reject(new Error(`端口 ${options.port} 已被占用，请通过 PANEL_PORT 更换端口`));
-        return;
-      }
-      reject(error);
+  // 先拿到数据目录的锁，再读写 panel.json
+  const lock = acquirePanelLock(options.dataDir);
+  let server;
+  try {
+    const store = createStore(path.resolve(options.dataDir), {
+      seedDefaults: options.seleniumUrl ? { seleniumUrl: options.seleniumUrl } : {},
     });
-    server.listen(options.port, options.host, resolve);
-  });
+    const auth = createAuth({ store, envPassword: options.password, limits: options.limits });
+    const generatedPassword = await auth.init();
+    const app = createPanelApp(options, { auth, store });
+    server = http.createServer(app);
 
-  return {
-    server,
-    port: server.address().port,
-    generatedPassword,
-    close: () =>
-      new Promise((resolve) => {
-        server.close(resolve);
-        server.closeAllConnections();
-      }),
-  };
+    await new Promise((resolve, reject) => {
+      server.once("error", (error) => {
+        if (error.code === "EADDRINUSE") {
+          reject(new Error(`端口 ${options.port} 已被占用，请通过 PANEL_PORT 更换端口`));
+          return;
+        }
+        reject(error);
+      });
+      server.listen(options.port, options.host, resolve);
+    });
+
+    return {
+      server,
+      port: server.address().port,
+      generatedPassword,
+      close: () =>
+        new Promise((resolve) => {
+          server.close(() => {
+            lock.release();
+            resolve();
+          });
+          server.closeAllConnections();
+        }),
+    };
+  } catch (error) {
+    lock.release();
+    throw error;
+  }
 }
 
 module.exports = {

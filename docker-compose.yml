@@ -1,12 +1,36 @@
 services:
+  # Web 面板：docker compose up -d 启动，浏览器访问 http://127.0.0.1:26868/
+  # 首次启动的初始密码：docker compose logs app | grep 面板初始密码
   app:
     image: lonemoonspace/weread-assistant:latest
     build: .
-    # 镜像默认启动面板；面板能调度阅读之前，这里仍按环境变量运行一次阅读
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:26868:26868"
+    environment:
+      - TZ=Asia/Shanghai
+      - SELENIUM_URL=http://selenium:4444 # 首次启动时写入面板的全局默认配置
+      # - PANEL_PASSWORD=change-me
+      # - PANEL_TRUST_PROXY=true
+      # - PANEL_BASE_PATH=/weread/
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      selenium:
+        condition: service_healthy
+    dns:
+      - 223.5.5.5
+
+  # 面板能调度阅读之前，按环境变量运行一次阅读：docker compose run --rm reader
+  # 不随 docker compose up 启动；面板支持调度后删除
+  reader:
+    image: lonemoonspace/weread-assistant:latest
+    profiles: ["reader"]
     command: ["node", "src/cli.js", "run"]
     healthcheck:
       disable: true
     environment:
+      - TZ=Asia/Shanghai
       - SELENIUM_URL=http://selenium:4444
       - WEREAD_DURATION=68
       - WEREAD_SELECTION=-1
@@ -18,11 +42,14 @@ services:
         condition: service_healthy
     dns:
       - 223.5.5.5
+
   selenium:
     image: selenium/standalone-chromium:latest
     pull_policy: if_not_present
+    restart: unless-stopped
     shm_size: 2gb
     environment:
+      - SE_NODE_MAX_SESSIONS=1 # 与面板设置中“同时运行的账号数”一致
       - SE_ENABLE_TRACING=false
       - SE_BIND_HOST=false
       - SE_JAVA_DISABLE_HOSTNAME_VERIFICATION=false

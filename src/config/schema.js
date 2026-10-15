@@ -18,6 +18,7 @@ const CONFIG_SCHEMA = [
     group: "reading",
     label: "阅读时长（分钟）",
     min: 1,
+    max: 1440,
     default: 10,
   },
   {
@@ -75,6 +76,7 @@ const CONFIG_SCHEMA = [
     label: "等待扫码时长（分钟）",
     description: "需要扫码时最多等待的时间，期间二维码过期会自动刷新。",
     min: 1,
+    max: 1440,
     default: 15,
   },
   {

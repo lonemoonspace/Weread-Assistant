@@ -45,6 +45,8 @@ function panelOptionsFromEnv(env = process.env) {
     publicUrl: env.PANEL_PUBLIC_URL || "",
     password: env.PANEL_PASSWORD || "",
     dataDir: env.PANEL_DATA_DIR || "data",
+    // 首次启动时写入全局默认配置，之后以面板中的设置为准
+    seleniumUrl: env.SELENIUM_URL || "",
   };
 }
 

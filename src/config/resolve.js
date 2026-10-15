@@ -26,13 +26,17 @@ function parseBooleanValue(value, defaultValue = false, strict = false) {
   throw new Error(`Invalid boolean value: ${value}`);
 }
 
-// 只接受完整的十进制整数，"10abc" 这类带后缀的值视为错误
+// 只接受完整的十进制整数，"10abc" 这类带后缀的值视为错误；超出安全整数范围（会变成 Infinity 或丢失精度）的也视为错误
 function parseIntegerValue(value, name) {
   const text = String(value).trim();
   if (!INTEGER_PATTERN.test(text)) {
     throw new Error(`${name} 必须是整数：${value}`);
   }
-  return Number.parseInt(text, 10);
+  const parsed = Number.parseInt(text, 10);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} 超出允许的范围：${value}`);
+  }
+  return parsed;
 }
 
 function checkRange(field, name, value, rawValue) {
@@ -46,12 +50,12 @@ function checkRange(field, name, value, rawValue) {
   }
 }
 
-function coerceValue(field, rawValue) {
+// 把单个配置项转换为对应类型并校验；name 用于错误提示，默认使用环境变量名
+function coerceFieldValue(field, rawValue, name = field.env || field.key) {
   if (rawValue === undefined || rawValue === null || rawValue === "") {
     return field.default;
   }
 
-  const name = field.env || field.key;
   let value;
   switch (field.type) {
     case "boolean":
@@ -80,7 +84,7 @@ function coerceValue(field, rawValue) {
 function resolveConfig(values = {}) {
   const config = {};
   for (const field of CONFIG_SCHEMA) {
-    config[field.key] = coerceValue(field, values[field.key]);
+    config[field.key] = coerceFieldValue(field, values[field.key]);
   }
   return Object.freeze(config);
 }
@@ -94,6 +98,7 @@ function configFromEnv(env = process.env) {
 }
 
 module.exports = {
+  coerceFieldValue,
   configFromEnv,
   parseBooleanValue,
   parseIntegerValue,

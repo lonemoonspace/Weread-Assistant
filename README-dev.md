@@ -18,6 +18,10 @@ SELENIUM_URL=http://localhost:4444 npm run debug
 # 启动面板（首次启动时在输出中打印初始密码），浏览器打开 http://localhost:26868/
 npm run panel
 
+# 用 Docker 启动面板与 Selenium；按环境变量运行一次阅读
+docker compose up -d
+docker compose run --rm reader
+
 # 查看帮助与全部环境变量
 node src/cli.js help
 
@@ -30,6 +34,9 @@ npm run test:runtime   # 需要 Docker
 
 # 只登录并保存 cookies
 SELENIUM_URL=http://localhost:4444 node src/cli.js run --login-only
+
+# 按面板中的账号配置运行（账号通过面板接口创建）
+node src/cli.js run --account <id>
 ```
 
 没有 Docker 时，可以用与本机 Chrome 版本一致的 chromedriver 代替 Selenium：先执行 `chromedriver --port=9515`，再以 `SELENIUM_URL=http://localhost:9515` 运行。
