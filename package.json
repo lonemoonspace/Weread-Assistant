@@ -12,8 +12,10 @@
   "scripts": {
     "start": "node src/cli.js run",
     "debug": "DEBUG=true node src/cli.js run",
+    "panel": "node src/cli.js panel",
     "test:notify": "node scripts/notify-smoke.js",
     "test:reader": "node scripts/reader-smoke.js",
+    "test:panel": "node scripts/panel-smoke.js",
     "test:runtime": "node scripts/runtime-smoke.js docker",
     "docker:image:help": "node scripts/docker-image.js help",
     "docker:image:check": "node scripts/docker-image.js check",
@@ -22,6 +24,7 @@
     "docker:image:push:dev": "node scripts/docker-image.js push --tag dev"
   },
   "dependencies": {
+    "express": "^5.2.1",
     "jsqr": "^1.4.0",
     "nodemailer": "^6.9.16",
     "pngjs": "^7.0.0",

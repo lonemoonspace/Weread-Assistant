@@ -1,6 +1,6 @@
 ## CLI 说明
 
-> `run` 目前按环境变量运行，是面板完成前的临时入口。开发计划第 4 步改为 `run --account <id>`，按面板中的账号配置运行，届时同步更新本文。
+> `run` 目前按环境变量运行，是面板完成前的临时入口。开发计划第 4 步改为 `run --account <id>`，按面板中的账号配置运行，届时同步更新本文。面板的配置与接口见 `docs/panel.md`。
 
 ### 职责
 
@@ -8,7 +8,8 @@
 | --- | --- | --- | --- | --- |
 | `run` | 执行一次自动阅读 | 环境变量 | 控制台日志、`<数据目录>/output.log`、cookies、登录二维码、截图、通知 | 只连接 `SELENIUM_URL` 指向的远程 Chromium |
 | `run --login-only` | 只登录（需要时扫码）并保存 cookies | 环境变量 | 同上，不选书、不阅读 | 用于刷新登录态 |
-| `help` / `-h` / `--help` / 无参数 | 输出帮助与环境变量清单 | 无 | 帮助文本 | 不启动浏览器 |
+| `panel` / 无参数 | 启动 Web 面板 | `PANEL_*` 环境变量、`--port` | HTTP 服务、`<面板数据目录>/panel.log` | 镜像默认命令；端口被占用时报错退出 |
+| `help` / `-h` / `--help` | 输出帮助与环境变量清单 | 无 | 帮助文本 | 不启动浏览器 |
 
 ### 配置
 
@@ -33,7 +34,8 @@
 ```mermaid
 flowchart TD
   A[src/cli.js] --> B{命令}
-  B -->|help / 无参数| C[输出帮助]
+  B -->|help| C[输出帮助]
+  B -->|panel / 无参数| P[启动面板，见 docs/panel.md]
   B -->|run / run --login-only| D[configFromEnv 生成不可变配置]
   D --> E[创建数据目录与 output.log]
   E --> F[runOnce，流程见 docs/reader.md]

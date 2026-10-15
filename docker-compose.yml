@@ -2,6 +2,10 @@ services:
   app:
     image: lonemoonspace/weread-assistant:latest
     build: .
+    # 镜像默认启动面板；面板能调度阅读之前，这里仍按环境变量运行一次阅读
+    command: ["node", "src/cli.js", "run"]
+    healthcheck:
+      disable: true
     environment:
       - SELENIUM_URL=http://selenium:4444
       - WEREAD_DURATION=68

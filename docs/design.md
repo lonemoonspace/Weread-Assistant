@@ -65,6 +65,7 @@ flowchart LR
 | `src/reader/timing.js`、`src/reader/dom.js` | 由配置得出等待时间与翻动间隔；显式等待工具 | 浏览器隐式等待为 0 |
 | `src/notify/` | Bark / ntfy / 邮件发送与统一通知入口 | 按事件类型开关；标题带账号名 |
 | `src/shared/` | 日志、HTTP、版本号等公共工具 | 不依赖其他业务模块 |
+| `src/panel/options.js` | 读取 `PANEL_*` 环境变量 | 规范化子路径、代理层数与端口 |
 | `src/panel/auth.js` | 面板密码、会话、登录限速 | 未登录时除登录接口与静态资源外一律 401 |
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入，先写临时文件再 `rename`，文件权限 `0600` |
 | `src/panel/runner.js` | 运行队列、fork、事件处理、停止、日志落盘 | 同一账号不重复排队；并发数可配 |
@@ -325,9 +326,10 @@ services:
 | 项目 | 说明 |
 | --- | --- |
 | 依赖安装 | `npm ci --omit=dev`，按 lockfile 安装 |
-| 基础镜像 | 固定 Node 主版本的 alpine 镜像，不用浮动的 `lts` 标签 |
+| 基础镜像 | `node:24-alpine`，固定 Node 主版本，不用浮动的 `lts` 标签 |
 | 启动命令 | `node src/cli.js panel` |
-| 健康检查 | 镜像内 `HEALTHCHECK` 请求面板健康接口 |
+| 健康检查 | 镜像内 `HEALTHCHECK` 运行 `src/panel/healthcheck.js` 请求面板健康接口；以 `run` 命令运行的容器需关闭健康检查 |
+| 运行用户 | 入口脚本 `docker-entrypoint.sh` 以 root 修正数据目录属主后，通过 `su-exec` 以 `node` 用户运行 |
 
 ### 技术选型
 
@@ -349,7 +351,7 @@ services:
 | 0. 初始化 | 上游代码原样快照、README（非官方声明与致谢）、LICENSE、本文 | 推送到 `main` |
 | 1. 拆分与删减 | 单文件拆成 `cli` / `config` / `reader` / `notify` 模块，配置改为不可变对象；删除 Edge / Firefox / Safari 与本机启动浏览器、统计上报、`schedule`、旧入口与旧目录兼容、`docker logs` 抓取；本步暂时保留按环境变量运行的 `run`，用于与拆分前对比；按审阅意见提前修复登录第 3 次成功被判失败 | `notify-smoke` 通过；连接 Selenium 运行一次，日志中的流程与拆分前一致 |
 | 2. 阅读流程修复 | 登录（按总时长等待、超时单独上报、仅登录模式）；阅读循环（隐式等待、每轮一次往返、显式节奏）；cookies 原子写入与损坏处理；通知（账号名、事件开关、去掉第三方二维码）；日志；目录只有一项时报错等小问题；定位器集中；新增 `reader-smoke` | `reader-smoke` 覆盖各分支且每轮耗时符合配置；树莓派真机完整阅读一次，节奏与改造前接近 |
-| 3. 镜像与面板骨架 | Dockerfile（`npm ci`、固定 Node 版本、非 root、`HEALTHCHECK`、启动面板）；Express 骨架与占位页面；鉴权（密码、会话、限速、CSRF、安全响应头）；反向代理配置项；端口占用时报错退出 | `panel-smoke` 覆盖鉴权；镜像可启动并通过健康检查 |
+| 3. 镜像与面板骨架 | Dockerfile（`npm ci`、固定 Node 版本、非 root、`HEALTHCHECK`、启动面板）；Express 骨架与占位页面；鉴权（密码、会话、限速、CSRF、安全响应头）；反向代理配置项；端口占用时报错退出。面板能调度阅读之前，`docker-compose.yml` 中的 `app` 服务仍显式执行 `run` | `panel-smoke` 覆盖鉴权；镜像可启动并通过健康检查 |
 | 4. 配置与账号 | `panel.json` 存储；配置 schema 与合并；全局设置与账号增删改查接口；密钥只写不读；`run --account <id>` 取代按环境变量运行 | `panel-smoke` 覆盖配置合并、密钥脱敏与账号增删改查 |
 | 5. 运行队列 | fork 子进程；IPC 下发配置、上报事件；并发队列与同账号去重；停止流程；按运行保存日志；SSE 推送；遗留记录标记为中断 | `panel-smoke` 用桩子进程覆盖排队、成功、失败、停止、强杀 |
 | 6. 调度 | croner；每天固定时间 / 每 N 小时 / cron 三种规则；时区；下次运行时间预览 | `panel-smoke` 验证规则换算与下次运行时间 |
