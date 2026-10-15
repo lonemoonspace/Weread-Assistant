@@ -57,11 +57,13 @@ flowchart LR
 | `src/config/schema.js` | 配置项清单：中文名称、分组、类型、可选值、默认值、是否密钥 | 面板表单与配置校验都由它生成 |
 | `src/config/resolve.js` | 默认值 + 全局配置 + 账号覆盖 → 本次运行的配置对象 | 返回不可变对象，替代上游的模块级可变变量 |
 | `src/reader/worker.js` | 阅读子进程入口：接收配置、执行一次阅读、上报事件、处理停止信号 | 只由面板 fork 或 `run --account` 调用 |
+| `src/reader/run.js` | 单次运行编排：连接浏览器、登录、选书、阅读，并在各阶段发送通知 | 由 `worker.js` 调用，不直接退出进程 |
 | `src/reader/browser.js` | 连接 Selenium、设置超时、退出时清理会话 | 只连远程 Chromium |
 | `src/reader/login.js` | 登录检测、二维码解析与刷新、cookies 读写 | cookies 原子写入，损坏时转入扫码 |
 | `src/reader/reading.js` | 选书、切换滚动模式、阅读循环 | 每轮一次 WebDriver 往返汇总页面状态 |
 | `src/reader/selectors.js` | 集中管理页面定位器和关键文案 | 微信读书改版时只改这一个文件 |
 | `src/notify/` | Bark / ntfy / 邮件发送与统一通知入口 | 按事件类型开关；标题带账号名 |
+| `src/shared/` | 日志、HTTP、版本号等公共工具 | 不依赖其他业务模块 |
 | `src/panel/auth.js` | 面板密码、会话、登录限速 | 未登录时除登录接口与静态资源外一律 401 |
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入，先写临时文件再 `rename`，文件权限 `0600` |
 | `src/panel/runner.js` | 运行队列、fork、事件处理、停止、日志落盘 | 同一账号不重复排队；并发数可配 |

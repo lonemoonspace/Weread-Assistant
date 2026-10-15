@@ -1,36 +1,38 @@
-## 如何参与开发
+## 开发说明
+
+浏览器只在 Selenium 中运行，本地开发也需要一个 Selenium 服务。
 
 ```bash
 # 安装依赖
-npm install selenium-webdriver
-npm install nodemailer
+npm install
 
-# 查看 CLI 帮助
-node src/weread-challenge.js -h
+# 启动 Selenium（Chromium 在容器中运行，7900 端口可用浏览器查看画面）
+docker run -d --name selenium -p 4444:4444 -p 7900:7900 --shm-size 2g selenium/standalone-chromium:latest
 
-# 运行主流程
-node src/weread-challenge.js run
+# 运行一次自动阅读，产物写入 ./data
+SELENIUM_URL=http://localhost:4444 npm start
 
-# run 参数优先于同名环境变量
-node src/weread-challenge.js run --weread-browser chrome --weread-duration 30
+# 调试日志
+SELENIUM_URL=http://localhost:4444 npm run debug
 
-# 链接到全局命令
-npm run link:global
+# 查看帮助与全部环境变量
+node src/cli.js help
 
-# 兼容旧全局命令
-weread-challenge
-
-# 取消全局链接
-npm run unlink:global
-
-# 生成计划任务命令
-node src/weread-challenge.js schedule --name weread-hourly --every 60 --workdir /absolute/path
+# 测试
+npm run test:notify
+npm run test:runtime   # 需要 Docker
 ```
 
-本地 CLI 默认优先把 cookies、二维码、日志、截图写到当前工作目录下的 `.weread`；如果未设置 `WEREAD_DATA_DIR` 且当前目录下已存在旧版 `data/`，则继续沿用 `data/`。
+没有 Docker 时，可以用与本机 Chrome 版本一致的 chromedriver 代替 Selenium：先执行 `chromedriver --port=9515`，再以 `SELENIUM_URL=http://localhost:9515` 运行。
 
-`vscode` 内按 `F5` 运行, 选择 `node`, 开始调试, 默认使用 `chrome` 浏览器.
+### 代码结构
 
-## 已知问题
-
-- [ ] `safari`的网页解析不同于`chrome`，暂未测试`safari`的兼容性。
+| 路径 | 内容 |
+| --- | --- |
+| `src/cli.js` | 命令行入口 |
+| `src/config/` | 配置项清单（`schema.js`）与配置解析（`resolve.js`） |
+| `src/reader/` | 自动阅读流程：连接浏览器、登录、选书、阅读循环、单次运行编排 |
+| `src/notify/` | Bark、ntfy、邮件通知 |
+| `src/shared/` | 日志、HTTP、版本号等公共工具 |
+| `scripts/` | smoke 测试与镜像构建脚本 |
+| `docs/`、`cases/` | 功能说明与验收用例；整体设计见 `docs/design.md` |
