@@ -101,7 +101,7 @@ async function main() {
         title: "微信读书挑战",
         body: "登录成功",
         sound: "birdsong",
-        group: "WeRead-Challenge",
+        group: "WeReadAssistant",
         level: "active",
         subtitle: "项目启动",
         url: "https://weread.qq.com/",
@@ -267,11 +267,66 @@ async function main() {
 
       assert.strictEqual(mock.requests.length, 1);
       const payload = parseBody(mock.requests[0]);
+      assert.strictEqual(payload.title, "WeReadAssistant · 需要扫码");
+      assert.strictEqual(payload.priority, 4);
       assert.strictEqual(payload.click, loginUrl);
+      assert.match(payload.message, /登录链接：https:\/\/weread\.qq\.com\/web\/confirm\?uid=smoke/);
       assert.deepStrictEqual(
         payload.actions.map((action) => action.label),
-        ["打开登录链接", "查看二维码"]
+        ["打开登录链接"]
       );
+      // 不再经过第三方服务生成二维码图片
+      assert.strictEqual(payload.attach, undefined);
+      assert.doesNotMatch(mock.requests[0].body, /qrserver/);
+    });
+
+    await scenario("二维码刷新后按最小间隔限制登录链接推送", async () => {
+      config = configFromEnv({
+        NTFY_TOPIC: "weread_smoke_topic",
+        NTFY_SERVER: mock.baseUrl,
+      });
+      const notifier = createNotifier(config, { loginLinkIntervalMs: 60000 });
+
+      await notifier.loginLink("https://weread.qq.com/web/confirm?uid=first");
+      await notifier.loginLink("https://weread.qq.com/web/confirm?uid=second");
+
+      assert.strictEqual(mock.requests.length, 1);
+      assert.strictEqual(parseBody(mock.requests[0]).click, "https://weread.qq.com/web/confirm?uid=first");
+    });
+
+    await scenario("通知标题带账号名，按事件开关推送", async () => {
+      config = configFromEnv({
+        NTFY_TOPIC: "weread_smoke_topic",
+        NTFY_SERVER: mock.baseUrl,
+        WEREAD_ACCOUNT_NAME: "小明",
+      });
+      const notifier = createNotifier(config);
+
+      // 默认只开启需要扫码、阅读完成、运行失败
+      await notifier.event("start", "开始自动阅读");
+      await notifier.event("loginSuccess", "登录成功");
+      assert.strictEqual(mock.requests.length, 0);
+
+      await notifier.event("done", "阅读完成，共 68 分钟");
+      await notifier.event("failure", "运行出错：超时");
+      assert.strictEqual(mock.requests.length, 2);
+      const [done, failure] = mock.requests.map(parseBody);
+      assert.strictEqual(done.title, "WeReadAssistant · 小明 · 阅读完成");
+      assert.deepStrictEqual(done.tags, ["tada"]);
+      assert.strictEqual(failure.title, "WeReadAssistant · 小明 · 运行失败");
+      assert.strictEqual(failure.priority, 5);
+
+      config = configFromEnv({
+        NTFY_TOPIC: "weread_smoke_topic",
+        NTFY_SERVER: mock.baseUrl,
+        NOTIFY_ON_START: "true",
+        NOTIFY_ON_DONE: "false",
+      });
+      const custom = createNotifier(config);
+      await custom.event("start", "开始自动阅读");
+      await custom.event("done", "阅读完成");
+      assert.strictEqual(mock.requests.length, 3);
+      assert.strictEqual(parseBody(mock.requests[2]).title, "WeReadAssistant · 开始运行");
     });
 
     console.log(`\n通知 smoke 全部通过（${results.length} 个场景）`);

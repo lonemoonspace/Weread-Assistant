@@ -13,6 +13,7 @@
     "start": "node src/cli.js run",
     "debug": "DEBUG=true node src/cli.js run",
     "test:notify": "node scripts/notify-smoke.js",
+    "test:reader": "node scripts/reader-smoke.js",
     "test:runtime": "node scripts/runtime-smoke.js docker",
     "docker:image:help": "node scripts/docker-image.js help",
     "docker:image:check": "node scripts/docker-image.js check",

@@ -38,25 +38,8 @@ function resolveEmailAttachments(filePaths = []) {
     });
 }
 
-function buildReportEmailHtml(text, attachments = [], options = {}) {
-  const safeText = escapeHtml(text);
+function wrapEmailHtml(heading, innerHtml) {
   const versionText = escapeHtml(VERSION);
-  const reportDate = escapeHtml(new Date().toLocaleDateString());
-  const extraHtml = options.extraHtml || "";
-  const imageGallery = attachments.length
-    ? `
-            <div class="image-gallery">
-                ${attachments
-                  .map(
-                    (att) => `
-                    <img src="cid:${att.cid}" alt="${escapeHtml(att.filename)}" style="display: block; margin: 10px auto; max-width: 100%;"/>
-                `
-                  )
-                  .join("")}
-            </div>
-      `
-    : "";
-
   return `
     <!DOCTYPE html>
     <html>
@@ -68,76 +51,56 @@ function buildReportEmailHtml(text, attachments = [], options = {}) {
     </head>
     <body>
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-            <div style="text-align: center; margin-bottom: 20px;">
-                <h2 style="color: #2c3e50;">WeRead Challenge Daily Report</h2>
-                <p style="color: #7f8c8d; margin-bottom: 4px;">${reportDate}</p>
-                <p style="color: #7f8c8d; margin-top: 0;">Version ${versionText}</p>
-            </div>
-
-            <div style="background: #f9f9f9; border-left: 4px solid #2980b9; padding: 15px; margin: 20px 0;">
-                <p>Dear User,</p>
-                <p>${safeText}</p>
-                <p>Here are your reading statistics and achievements for today.</p>
-            </div>
-
-            ${extraHtml}
-
-            ${imageGallery}
-
-            <div style="margin: 20px 0;">
-                <p>Best regards,</p>
-                <p style="color: #2980b9;">WeRead Challenge Team</p>
-            </div>
-
+            <h2 style="color: #2c3e50; text-align: center;">${escapeHtml(heading)}</h2>
+            <p style="color: #7f8c8d; text-align: center; margin-top: 0;">${escapeHtml(new Date().toLocaleString())}</p>
+            ${innerHtml}
             <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-
-            <div style="font-size: 12px; color: #7f8c8d; text-align: center;">
-                <p>This is an automated message, please do not reply.</p>
-                <p>Version ${versionText}</p>
-            </div>
+            <p style="font-size: 12px; color: #7f8c8d; text-align: center;">
+                此邮件由 WeReadAssistant 自动发送，请勿回复。Version ${versionText}
+            </p>
         </div>
     </body>
     </html>
 `;
 }
 
-function buildLoginLinkEmailHtml(loginUrl) {
-  const safeUrl = escapeHtml(loginUrl);
-  const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=360x360&data=${encodeURIComponent(loginUrl)}`;
-  const safeQrImageUrl = escapeHtml(qrImageUrl);
-  const versionText = escapeHtml(VERSION);
-  return `
-  <!DOCTYPE html>
-  <html>
-  <head>
-      <meta charset="utf-8">
-      <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-          .card { max-width: 680px; margin: 0 auto; padding: 20px; }
-          .qr-box { background: #f9f9f9; border-left: 4px solid #2d8cf0; padding: 16px; text-align: center; }
-          .qr-img { width: 280px; height: 280px; display: block; margin: 8px auto 12px auto; }
-          .open-link { display: inline-block; background: #2d8cf0; color: #fff !important; text-decoration: none; padding: 8px 14px; border-radius: 6px; }
-      </style>
-  </head>
-  <body>
-      <div class="card">
-          <h2 style="color: #2c3e50;">微信读书登录二维码</h2>
-          <p style="color: #7f8c8d;">Version ${versionText}</p>
-          <p>检测到新的扫码登录链接，请尽快在手机端完成登录。</p>
-          <div class="qr-box">
-            <img class="qr-img" src="${safeQrImageUrl}" alt="微信读书登录二维码" />
-            <a class="open-link" href="${safeUrl}" target="_blank" rel="noopener noreferrer">点击打开登录链接</a>
-          </div>
-          <p style="font-size: 12px; color: #7f8c8d; margin-top: 16px;">
-            该链接由 weread-challenge 自动发送。Version ${versionText}
-          </p>
-      </div>
-  </body>
-  </html>
-`;
+function buildReportEmailHtml(heading, text, attachments = []) {
+  const images = attachments
+    .map(
+      (att) =>
+        `<img src="cid:${att.cid}" alt="${escapeHtml(att.filename)}" style="display: block; margin: 10px auto; max-width: 100%;"/>`
+    )
+    .join("");
+
+  return wrapEmailHtml(
+    heading,
+    `
+            <div style="background: #f9f9f9; border-left: 4px solid #2980b9; padding: 15px; margin: 20px 0; white-space: pre-line;">${escapeHtml(text)}</div>
+            ${images}
+    `
+  );
 }
 
-function canSendLoginLinkEmail(config) {
+// 登录链接邮件：二维码图片作为附件内嵌（qrCid 为附件文件名），不经过第三方服务生成
+function buildLoginLinkEmailHtml(heading, loginUrl, qrCid = "") {
+  const safeUrl = escapeHtml(loginUrl);
+  const qrImage = qrCid
+    ? `<img src="cid:${escapeHtml(qrCid)}" alt="微信读书登录二维码" style="width: 240px; height: 240px; display: block; margin: 8px auto 12px auto;" />`
+    : "";
+
+  return wrapEmailHtml(
+    heading,
+    `
+            <p>需要扫码登录微信读书。二维码约 1 分钟后失效，失效后会自动刷新。</p>
+            <div style="background: #f9f9f9; border-left: 4px solid #2d8cf0; padding: 16px; text-align: center;">
+                ${qrImage}
+                <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" style="display: inline-block; background: #2d8cf0; color: #fff; text-decoration: none; padding: 8px 14px; border-radius: 6px;">在微信中打开登录链接</a>
+            </div>
+    `
+  );
+}
+
+function canSendEmail(config) {
   if (!config.emailEnabled) {
     return false;
   }
@@ -145,12 +108,13 @@ function canSendLoginLinkEmail(config) {
     .filter(([key]) => !config[key])
     .map(([, envName]) => envName);
   if (missed.length) {
-    console.warn("邮件推送登录链接失败：缺少配置", missed.join(", "));
+    console.warn("邮件通知未发送：缺少配置", missed.join(", "));
     return false;
   }
   return true;
 }
 
+// options.heading：邮件正文标题；options.html：完整的自定义 HTML
 async function sendMail(config, subject, text, filePaths = [], options = {}) {
   const nodemailer = require("nodemailer");
 
@@ -181,15 +145,13 @@ async function sendMail(config, subject, text, filePaths = [], options = {}) {
   // Use the sender address if provided, otherwise fall back to the SMTP user
   const fromAddress = config.emailFrom || config.emailUser;
 
-  const defaultHtml = buildReportEmailHtml(text, attachments, options);
-
   let mailOptions = {
     from: fromAddress,
     to: config.emailTo,
     subject: formatEmailSubject(subject),
     text: text,
     attachments: attachments,
-    html: options.html || defaultHtml,
+    html: options.html || buildReportEmailHtml(options.heading || "WeReadAssistant", text, attachments),
   };
 
   try {
@@ -205,6 +167,6 @@ async function sendMail(config, subject, text, filePaths = [], options = {}) {
 
 module.exports = {
   buildLoginLinkEmailHtml,
-  canSendLoginLinkEmail,
+  canSendEmail,
   sendMail,
 };

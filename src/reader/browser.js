@@ -74,9 +74,10 @@ async function createDriver(config) {
     .setChromeOptions(options)
     .build();
 
-  // 全局超时配置，避免单次命令长时间挂起
+  // 全局超时配置，避免单次命令长时间挂起。
+  // 隐式等待设为 0：元素不存在时立即返回，需要等待的地方使用显式等待
   await driver.manage().setTimeouts({
-    implicit: 5000,
+    implicit: 0,
     pageLoad: 60000,
     script: 30000,
   });

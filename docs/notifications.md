@@ -7,7 +7,7 @@
 | `notify(config, title, body, options)`（`src/notify/index.js`） | 统一推送入口，向所有已启用渠道并行发送 | 运行配置、标题、正文、渠道无关选项 | 每个渠道的成功/失败结果数组 | 已启用的渠道配置 | 单渠道失败不影响其他渠道，也不中断主流程 |
 | `sendBark(config, title, body, options)`（`src/notify/bark.js`） | Bark 渠道实现（iOS） | 配置中的 `barkKey`、`barkServer`（`BARK_KEY`、`BARK_SERVER`） | Bark HTTP 请求结果 | `https` / `http` | 保持原有请求路径与负载字段不变 |
 | `sendNtfy(config, title, body, options)`（`src/notify/ntfy.js`） | ntfy 渠道实现（Android 推荐） | 配置中的 `ntfy*`（`NTFY_*`） | ntfy HTTP 请求结果 | `https` / `http` | 主题非法时本地拦截，不发起请求 |
-| `createNotifier(config)`（`src/notify/index.js`） | 绑定一次运行的配置，提供 `notify`、`sendMail`、`loginLink` | 运行配置 | 通知器对象 | 上述渠道与邮件 | 登录链接只在变化时推送 |
+| `createNotifier(config, { loginLinkIntervalMs })`（`src/notify/index.js`） | 绑定一次运行的配置，提供 `event(name, body)`、`loginLink(url, qrImagePath)`、`willEmail(name)` | 运行配置 | 通知器对象 | 上述渠道与邮件 | 按事件开关推送；登录链接只在变化时推送，且受最小推送间隔限制 |
 | `postJson(url, payload, headers)`（`src/shared/http.js`） | 渠道共用的 JSON POST 实现 | 目标地址、负载、附加请求头 | `{ ok, status, body, error }` | `https` / `http` | 带 15s 超时，超时/网络错误统一回落为失败结果 |
 
 ### 渠道与启用条件
@@ -16,6 +16,28 @@
 | --- | --- | --- | --- |
 | Bark | iOS | `BARK_KEY` 非空 | 默认 `https://api.day.app`，可用 `BARK_SERVER` 覆盖 |
 | ntfy | Android / iOS / 桌面 | `NTFY_TOPIC` 非空 | 默认 `https://ntfy.sh`，可用 `NTFY_SERVER` 覆盖（支持自建） |
+
+### 通知事件
+
+阅读流程只通过 `createNotifier(config).event(name, body)` 发送通知。标题为 `WeReadAssistant`，配置了 `WEREAD_ACCOUNT_NAME` 时为 `WeReadAssistant · <账号名>`；副标题为事件名称。推送渠道与邮件都受同一个开关控制。
+
+| 事件 | 开关（默认） | 触发时机 | 副标题 | level / sound |
+| --- | --- | --- | --- | --- |
+| `start` | `NOTIFY_ON_START`（关） | 开始运行 | 开始运行 | `passive` / `beginning` |
+| `loginRequired` | `NOTIFY_ON_LOGIN_REQUIRED`（开） | 出现新的登录二维码 | 需要扫码 | `timeSensitive` / `birdsong` |
+| `loginSuccess` | `NOTIFY_ON_LOGIN_SUCCESS`（关） | 登录成功并打开书籍（仅登录模式下为保存 cookies 后） | 登录成功 | `active` / `birdsong` |
+| `done` | `NOTIFY_ON_DONE`（开） | 阅读完成 | 阅读完成 | `active` / `success` |
+| `failure` | `NOTIFY_ON_FAILURE`（开） | 等待扫码超时或运行出错 | 运行失败 | `critical` / `alarm` |
+
+### 登录链接推送
+
+| 渠道 | 内容 |
+| --- | --- |
+| Bark | 正文含登录链接，点击通知打开登录链接 |
+| ntfy | 正文含登录链接，`click` 为登录链接，附「打开登录链接」按钮 |
+| 邮件 | 内嵌页面上二维码的截图（`login-qr.png` 附件）与登录链接按钮 |
+
+二维码约 1 分钟过期一次并自动刷新。同一链接只推送一次；两次推送至少间隔 3 分钟，期间刷新出的新链接不推送。二维码图片直接截取自页面，不再经过 `api.qrserver.com` 等第三方服务生成。
 
 ### 选项映射
 
@@ -68,5 +90,6 @@ flowchart TD
 | 失败隔离 | 各渠道通过 `Promise.allSettled` 并发发送，单渠道异常只影响自身结果 |
 | 请求超时 | 所有推送请求 15s 超时，避免推送服务无响应时拖住阅读流程 |
 | 主题即密码 | ntfy 公共服务器上主题名等价于密码，仅允许 `[-_A-Za-z0-9]`，长度不超过 64 |
-| 登录链接去重 | 同一次运行中，`createNotifier` 返回的 `loginLink` 只在链接变化时推送 |
+| 登录链接去重与限频 | 同一次运行中，`loginLink` 只在链接变化时推送，两次推送至少间隔 `loginLinkIntervalMs`（运行时为 3 分钟） |
+| 事件开关 | 事件开关关闭时推送渠道与邮件都不发送 |
 | 离线可验证 | `scripts/notify-smoke.js` 使用本地 mock 服务校验负载，不访问外网、不需要真实密钥 |
