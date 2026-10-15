@@ -270,6 +270,7 @@ async function login(driver, ctx) {
     "//div[contains(text(), '我的书架') and @class='wr_index_page_top_section_header_action_link']"
   );
 
+  let loggedIn = false;
   let maxRetries = 3;
   while (maxRetries-- > 0) {
     console.info("Waiting for login...");
@@ -296,6 +297,7 @@ async function login(driver, ctx) {
     // if text contains "我的书架", then login is successful
     if (text.includes("我的书架")) {
       console.info("Login completed.");
+      loggedIn = true;
       break;
     }
 
@@ -323,7 +325,8 @@ async function login(driver, ctx) {
     }
   }
 
-  return maxRetries > 0;
+  // 重试次数用完仍未看到“我的书架”时 loggedIn 保持 false
+  return loggedIn;
 }
 
 module.exports = {
