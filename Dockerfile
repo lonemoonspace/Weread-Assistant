@@ -1,8 +1,8 @@
 FROM node:lts-alpine
 
 WORKDIR /app
-COPY ./src/weread-challenge.js ./app.js
 COPY package.json package-lock.json ./
 RUN npm install --omit=dev
+COPY src ./src
 
-CMD ["node", "app.js"]
+CMD ["node", "src/cli.js", "run"]

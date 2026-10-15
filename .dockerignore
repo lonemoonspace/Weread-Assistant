@@ -1,7 +1,7 @@
 # Keep the build context minimal, and keep runtime state out of it.
 #
-# .weread/ and data/ hold cookies.json (a WeRead login session), login.png and
-# logs. They are never COPYed into the image, but without this file the whole
+# data/ holds cookies.json (a WeRead login session), login.png, screenshots and
+# logs. It is never COPYed into the image, but without this file the whole
 # directory is still sent to the daemon, and with a docker-container builder it
 # is uploaded into the builder container. Nothing outside src/, package.json and
 # package-lock.json is needed by the Dockerfile.
@@ -10,5 +10,4 @@
 .gitignore
 node_modules
 data
-.weread
 npm-debug.log
