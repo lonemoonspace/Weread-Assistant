@@ -168,7 +168,7 @@ async function main() {
       assert.match(home.text, /WeReadAssistant/);
       assert.strictEqual((await panel.request("login", { cookie })).headers.get("location"), "./");
 
-      const logout = await panel.request("api/auth/logout", { method: "POST", body: {}, headers: CSRF, cookie });
+      const logout = await panel.request("api/auth/logout", { method: "POST", headers: CSRF, cookie });
       assert.strictEqual(logout.status, 204);
       assert.strictEqual((await panel.request("api/auth/session", { cookie })).status, 401);
     });
@@ -338,7 +338,8 @@ async function main() {
         [{ settings: { maxConcurrentRuns: 0 } }, /同时运行的账号数 必须在 1–10 之间/],
         [{ settings: { vncUrl: "ftp://host" } }, /noVNC 地址只能是 http 或 https 地址/],
         [{ settings: { bogus: 1 } }, /未知的设置项：bogus/],
-        [{ defaults: { duration: 0 } }, /阅读时长（分钟） 必须不小于 1/],
+        [{ defaults: { duration: 0 } }, /阅读时长（分钟） 必须在 1–1440 之间/],
+        [{ defaults: { duration: "9".repeat(400) } }, /阅读时长（分钟） 超出允许的范围/],
         [{ defaults: { selection: 9 } }, /选书方式 只能是/],
         [{ defaults: { dataDir: "/etc" } }, /未知的配置项：dataDir/],
       ];
@@ -403,7 +404,9 @@ async function main() {
       fs.writeFileSync(path.join(accountsDir, "me", "cookies.json"), "[]");
       const noCsrf = await panel.request("api/accounts/me", { method: "DELETE", body: {}, cookie: panel.cookie });
       assert.strictEqual(noCsrf.status, 403);
-      assert.strictEqual((await panel.call("DELETE", "api/accounts/me")).status, 204);
+      // deleteData 可选：不带请求体、只带自定义请求头也能删除
+      const noBody = await panel.request("api/accounts/me", { method: "DELETE", headers: CSRF, cookie: panel.cookie });
+      assert.strictEqual(noBody.status, 204);
       assert.strictEqual((await panel.call("GET", "api/accounts/me")).status, 404);
       assert.ok(fs.existsSync(path.join(accountsDir, "me", "cookies.json")));
       const readded = await panel.call("POST", "api/accounts", { id: "me" });
@@ -511,6 +514,37 @@ async function main() {
       assert.deepStrictEqual(Object.keys(upgraded), ["version", "auth", "settings", "defaults", "accounts"]);
       assert.deepStrictEqual(upgraded.defaults, { seleniumUrl: "http://selenium:4444" });
       assert.deepStrictEqual(upgraded.accounts, []);
+    });
+
+    await scenario("同一数据目录只能运行一个面板；关闭后释放", async () => {
+      const first = await start();
+      const lockFile = path.join(first.options.dataDir, "panel.lock");
+      assert.ok(fs.existsSync(lockFile));
+      await assert.rejects(start({ dataDir: first.options.dataDir }), /另一个面板实例.*正在使用数据目录/);
+      await first.close();
+      assert.ok(!fs.existsSync(lockFile), "关闭后应删除锁文件");
+      const second = await start({ dataDir: first.options.dataDir });
+      assert.strictEqual(second.generatedPassword, "");
+    });
+
+    await scenario("遗留的锁文件：进程已不存在或心跳过期时接管，其他主机心跳正常时拒绝", async () => {
+      const lockAt = (dataDir) => path.join(dataDir, "panel.lock");
+      const write = (dataDir, info) => fs.writeFileSync(lockAt(dataDir), JSON.stringify(info));
+
+      const deadProcess = tempDir();
+      write(deadProcess, { pid: 2 ** 22 + 12345, hostname: os.hostname(), startedAt: "2026-01-01T00:00:00.000Z" });
+      await start({ dataDir: deadProcess });
+
+      const otherHost = tempDir();
+      write(otherHost, { pid: 1, hostname: "another-container", startedAt: "2026-01-01T00:00:00.000Z" });
+      await assert.rejects(start({ dataDir: otherHost }), /主机 another-container，进程 1/);
+      const old = new Date(Date.now() - 60000);
+      fs.utimesSync(lockAt(otherHost), old, old);
+      await start({ dataDir: otherHost });
+
+      const corrupt = tempDir();
+      fs.writeFileSync(lockAt(corrupt), "{broken");
+      await start({ dataDir: corrupt });
     });
 
     await scenario("端口被占用时给出明确错误", async () => {

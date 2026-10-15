@@ -47,11 +47,19 @@ const scenarios = [
     rejects(() => configFromEnv({ WEREAD_DURATION: "1.5" }), /WEREAD_DURATION 必须是整数/);
   }],
 
-  ["阅读时长与等待扫码时长必须为正整数", () => {
-    rejects(() => configFromEnv({ WEREAD_DURATION: "0" }), /WEREAD_DURATION 必须不小于 1：0/);
-    rejects(() => configFromEnv({ WEREAD_DURATION: "-5" }), /WEREAD_DURATION 必须不小于 1/);
-    rejects(() => configFromEnv({ WEREAD_LOGIN_TIMEOUT: "0" }), /WEREAD_LOGIN_TIMEOUT 必须不小于 1/);
+  ["阅读时长与等待扫码时长必须在 1–1440 分钟之间", () => {
+    rejects(() => configFromEnv({ WEREAD_DURATION: "0" }), /WEREAD_DURATION 必须在 1–1440 之间：0/);
+    rejects(() => configFromEnv({ WEREAD_DURATION: "-5" }), /WEREAD_DURATION 必须在 1–1440 之间/);
+    rejects(() => configFromEnv({ WEREAD_DURATION: "1441" }), /WEREAD_DURATION 必须在 1–1440 之间/);
+    rejects(() => configFromEnv({ WEREAD_LOGIN_TIMEOUT: "0" }), /WEREAD_LOGIN_TIMEOUT 必须在 1–1440 之间/);
     assert.strictEqual(configFromEnv({ WEREAD_DURATION: "1" }).duration, 1);
+    assert.strictEqual(configFromEnv({ WEREAD_DURATION: "1440" }).duration, 1440);
+  }],
+
+  ["超出安全整数范围的值报错，不会变成 Infinity", () => {
+    rejects(() => configFromEnv({ WEREAD_DURATION: "9".repeat(400) }), /WEREAD_DURATION 超出允许的范围/);
+    rejects(() => configFromEnv({ EMAIL_PORT: "9007199254740993" }), /EMAIL_PORT 超出允许的范围/);
+    rejects(() => panelOptionsFromEnv({ PANEL_PORT: "9".repeat(30) }), /PANEL_PORT 超出允许的范围/);
   }],
 
   ["SMTP 端口必须在 1–65535 之间", () => {
@@ -97,7 +105,7 @@ const scenarios = [
 
     const badDuration = run(["run"], { WEREAD_DURATION: "0" });
     assert.strictEqual(badDuration.status, 1);
-    assert.match(badDuration.stderr, /WEREAD_DURATION 必须不小于 1/);
+    assert.match(badDuration.stderr, /WEREAD_DURATION 必须在 1–1440 之间/);
 
     const badPort = run(["panel"], { PANEL_PORT: "0" });
     assert.strictEqual(badPort.status, 1);
@@ -122,11 +130,18 @@ const scenarios = [
     const store = createStore(dataDir, { seedDefaults: { seleniumUrl: "http://127.0.0.1:9" } });
     await store.update((data) => {
       data.accounts.push({ id: "me", name: "小明", enabled: true, createdAt: new Date().toISOString(), overrides: { loginTimeout: 1 } });
+      data.accounts.push({ id: "off", name: "停用", enabled: false, createdAt: new Date().toISOString(), overrides: {} });
     });
+    const panelJson = fs.readFileSync(path.join(dataDir, "panel.json"), "utf8");
 
     const missing = runCli(["run", "--account", "nobody"], { PANEL_DATA_DIR: dataDir });
     assert.strictEqual(missing.status, 1);
     assert.match(missing.stderr, /账号不存在：nobody/);
+
+    const disabled = runCli(["run", "--account", "off"], { PANEL_DATA_DIR: dataDir });
+    assert.strictEqual(disabled.status, 1);
+    assert.match(disabled.stderr, /账号已停用：off/);
+    assert.ok(!fs.existsSync(path.join(dataDir, "accounts", "off", "output.log")), "停用的账号不应开始运行");
 
     const result = runCli(["run", "--account", "me", "--login-only"], { PANEL_DATA_DIR: dataDir, SELENIUM_URL: "http://ignored:4444" });
     assert.strictEqual(result.status, 1, "连接不到 Selenium 时应以退出码 1 结束");
@@ -134,6 +149,7 @@ const scenarios = [
     assert.match(log, /账号: me 数据目录: .*accounts[\\/]me/);
     assert.match(log, /SELENIUM_URL:  http:\/\/127\.0\.0\.1:9/, "使用面板中的全局配置，而不是环境变量");
     assert.match(log, /Run finished: error/);
+    assert.strictEqual(fs.readFileSync(path.join(dataDir, "panel.json"), "utf8"), panelJson, "按账号运行时只读取 panel.json");
     fs.rmSync(dataDir, { recursive: true, force: true });
   }],
 ];

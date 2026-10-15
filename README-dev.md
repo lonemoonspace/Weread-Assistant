@@ -18,6 +18,10 @@ SELENIUM_URL=http://localhost:4444 npm run debug
 # 启动面板（首次启动时在输出中打印初始密码），浏览器打开 http://localhost:26868/
 npm run panel
 
+# 用 Docker 启动面板与 Selenium；按环境变量运行一次阅读
+docker compose up -d
+docker compose run --rm reader
+
 # 查看帮助与全部环境变量
 node src/cli.js help
 

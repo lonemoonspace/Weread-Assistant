@@ -12,7 +12,7 @@
 - `SELENIUM_URL=http://localhost:4444 npm start`：连接本地 Selenium 运行一次；`npm run debug` 打开调试日志。浏览器只在 Selenium 中运行，不支持在本机启动浏览器。
 - `npm run panel`：本地启动面板（默认端口 26868，首次启动在输出中打印初始密码）。
 - `node src/cli.js help`：查看命令与全部环境变量。
-- `docker compose up -d`：拉起 `app` + `selenium`；结束后执行 `docker compose down` 清理资源。
+- `docker compose up -d`：拉起面板（`app`）与 `selenium`；`docker compose run --rm reader` 按环境变量运行一次阅读（第 6 步前的临时方式）；结束后执行 `docker compose down` 清理资源。
 
 ## 编码风格与命名约定
 - 统一采用 2 space 缩进；CommonJS `require` / `module.exports`；异步流程优先 async/await。

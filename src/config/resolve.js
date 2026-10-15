@@ -26,13 +26,17 @@ function parseBooleanValue(value, defaultValue = false, strict = false) {
   throw new Error(`Invalid boolean value: ${value}`);
 }
 
-// 只接受完整的十进制整数，"10abc" 这类带后缀的值视为错误
+// 只接受完整的十进制整数，"10abc" 这类带后缀的值视为错误；超出安全整数范围（会变成 Infinity 或丢失精度）的也视为错误
 function parseIntegerValue(value, name) {
   const text = String(value).trim();
   if (!INTEGER_PATTERN.test(text)) {
     throw new Error(`${name} 必须是整数：${value}`);
   }
-  return Number.parseInt(text, 10);
+  const parsed = Number.parseInt(text, 10);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} 超出允许的范围：${value}`);
+  }
+  return parsed;
 }
 
 function checkRange(field, name, value, rawValue) {

@@ -5,15 +5,18 @@
 ### 启动
 
 ```bash
-node src/cli.js                      # 不带参数即启动面板
+docker compose up -d                 # 启动面板（app）与 Selenium，面板映射到 127.0.0.1:26868
+node src/cli.js                      # 本地开发：不带参数即启动面板
 PANEL_PORT=30000 node src/cli.js panel
 ```
 
 镜像默认命令就是启动面板。首次启动且未设置 `PANEL_PASSWORD` 时，面板随机生成一个 16 位密码，只在标准输出（`docker logs`）中打印一次，不写入 `panel.log`：
 
 ```bash
-docker logs <容器名> 2>&1 | grep 面板初始密码
+docker compose logs app | grep 面板初始密码
 ```
+
+面板能调度阅读之前（第 6 步），`docker-compose.yml` 中另有一个按环境变量运行一次阅读的 `reader` 服务，不随 `docker compose up` 启动，需要时执行 `docker compose run --rm reader`。
 
 ### 配置
 
@@ -60,7 +63,7 @@ docker logs <容器名> 2>&1 | grep 面板初始密码
 | `POST api/accounts` | 是 | `{ id, name? }`；成功 201，ID 已存在 409，ID 或名称非法 400；同时创建账号数据目录 |
 | `GET api/accounts/:id` | 是 | `{ account, effective }`：账号与实际生效的运行配置 |
 | `PATCH api/accounts/:id` | 是 | `{ name?, enabled?, overrides? }`；ID 不可修改 |
-| `DELETE api/accounts/:id` | 是 | `{ deleteData? }`；默认只从面板移除，`deleteData: true` 时同时删除账号数据目录 |
+| `DELETE api/accounts/:id` | 是 | `{ deleteData? }`，可以不带请求体；默认只从面板移除，`deleteData: true` 时同时删除账号数据目录 |
 
 接口返回的错误为 `{ error, message }`，`message` 可直接展示给用户。
 
@@ -70,6 +73,7 @@ docker logs <容器名> 2>&1 | grep 面板初始密码
 data/
   panel.json              # 面板设置、全局默认配置、账号、密码哈希（0600）
   panel.log
+  panel.lock              # 面板运行期间存在，防止同一数据目录启动多个面板
   accounts/<id>/          # 账号数据：cookies.json、login.png、login-qr.png、截图、output.log
 ```
 
@@ -101,6 +105,7 @@ data/
 | 密钥只写不读 | 接口返回 `••••••`；提交掩码或空字符串表示不修改，提交 `null` 表示清除 |
 | 账号 ID | 小写字母、数字与短横线，1–32 位，不以短横线开头或结尾；创建后不可修改 |
 | 删除账号 | 默认保留数据目录，重新添加同 ID 的账号时沿用其中的 cookies |
+| 停用账号 | `enabled: false` 的账号不会被调度，也不能手动运行（`run --account` 直接报错） |
 | 按账号运行 | `node src/cli.js run --account <id>` 按上述合并结果运行一次，见 `docs/cli.md` |
 
 ### 安全
@@ -140,5 +145,8 @@ location /weread/ {
 | 约束 | 说明 |
 | --- | --- |
 | 端口被占用 | 直接报错退出并提示通过 `PANEL_PORT` 更换，不自动换用其他端口 |
+| 单实例 | 同一数据目录只能运行一个面板：启动时创建 `panel.lock`（记录主机名与进程号，每 10 秒更新修改时间），已被其他运行中的面板持有时报错退出。持有者进程已不存在、是本进程号（容器重启）或其他主机的锁超过 30 秒未更新时视为遗留并接管；正常停止时删除 |
+| 只由面板写入 | `panel.json` 只由持有锁的面板写入；`run --account` 以只读方式读取 |
+| 请求体 | 修改类请求带请求体时必须是 JSON；不带请求体（如删除账号、退出登录）时只需 `X-WA-Request` 请求头 |
 | 停止信号 | 收到 SIGTERM / SIGINT 时关闭服务后退出，`docker stop` 不需要等待超时 |
 | 日志 | 写入标准输出与 `<数据目录>/panel.log`（每次启动覆盖） |

@@ -12,6 +12,7 @@ const {
   resolveAccountConfig,
 } = require("./config");
 const { PanelError, badRequest } = require("./errors");
+const { acquirePanelLock } = require("./lock");
 const { applySettingsPatch } = require("./settings");
 const { createStore } = require("./store");
 
@@ -62,7 +63,10 @@ function csrfGuard(req, res, next) {
     res.status(403).json({ error: "csrf_header_required" });
     return;
   }
-  if (!req.is("application/json")) {
+  // 没有请求体的请求（例如 DELETE、退出登录）只需要自定义请求头；带请求体时必须是 JSON。
+  // POST 不带请求体时客户端通常仍会发送 Content-Length: 0，这里按实际内容长度判断
+  const hasBody = Number(req.get("Content-Length") || 0) > 0 || req.get("Transfer-Encoding") !== undefined;
+  if (hasBody && !req.is("application/json")) {
     res.status(415).json({ error: "json_required" });
     return;
   }
@@ -263,7 +267,7 @@ function createPanelApp(options, { auth, store }) {
 
   // { deleteData?: boolean }：默认保留账号数据目录
   api.delete("/accounts/:id", async (req, res) => {
-    const body = requireObject(req.body);
+    const body = req.body === undefined ? {} : requireObject(req.body);
     await deleteAccount(store, panelDataDir, req.params.id, { deleteData: body.deleteData === true });
     console.info("删除账号:", req.params.id, body.deleteData === true ? "（同时删除数据）" : "");
     res.status(204).end();
@@ -301,35 +305,46 @@ function createPanelApp(options, { auth, store }) {
 
 // 启动面板。返回 { server, port, generatedPassword, close }；generatedPassword 只在首次生成密码时非空
 async function startPanel(options) {
-  const store = createStore(path.resolve(options.dataDir), {
-    seedDefaults: options.seleniumUrl ? { seleniumUrl: options.seleniumUrl } : {},
-  });
-  const auth = createAuth({ store, envPassword: options.password, limits: options.limits });
-  const generatedPassword = await auth.init();
-  const app = createPanelApp(options, { auth, store });
-  const server = http.createServer(app);
-
-  await new Promise((resolve, reject) => {
-    server.once("error", (error) => {
-      if (error.code === "EADDRINUSE") {
-        reject(new Error(`端口 ${options.port} 已被占用，请通过 PANEL_PORT 更换端口`));
-        return;
-      }
-      reject(error);
+  // 先拿到数据目录的锁，再读写 panel.json
+  const lock = acquirePanelLock(options.dataDir);
+  let server;
+  try {
+    const store = createStore(path.resolve(options.dataDir), {
+      seedDefaults: options.seleniumUrl ? { seleniumUrl: options.seleniumUrl } : {},
     });
-    server.listen(options.port, options.host, resolve);
-  });
+    const auth = createAuth({ store, envPassword: options.password, limits: options.limits });
+    const generatedPassword = await auth.init();
+    const app = createPanelApp(options, { auth, store });
+    server = http.createServer(app);
 
-  return {
-    server,
-    port: server.address().port,
-    generatedPassword,
-    close: () =>
-      new Promise((resolve) => {
-        server.close(resolve);
-        server.closeAllConnections();
-      }),
-  };
+    await new Promise((resolve, reject) => {
+      server.once("error", (error) => {
+        if (error.code === "EADDRINUSE") {
+          reject(new Error(`端口 ${options.port} 已被占用，请通过 PANEL_PORT 更换端口`));
+          return;
+        }
+        reject(error);
+      });
+      server.listen(options.port, options.host, resolve);
+    });
+
+    return {
+      server,
+      port: server.address().port,
+      generatedPassword,
+      close: () =>
+        new Promise((resolve) => {
+          server.close(() => {
+            lock.release();
+            resolve();
+          });
+          server.closeAllConnections();
+        }),
+    };
+  } catch (error) {
+    lock.release();
+    throw error;
+  }
 }
 
 module.exports = {

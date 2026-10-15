@@ -31,13 +31,16 @@ function restrictPermissions(filePath) {
 }
 
 // panel.json 的读写。写入串行执行、原子替换，文件权限 0600（其中保存密码哈希与各类密钥）。
-// options.seedDefaults：首次初始化全局默认配置时使用的值，例如来自 SELENIUM_URL 的 Selenium 地址
-function createStore(dataDir, { seedDefaults = {} } = {}) {
+// options.seedDefaults：首次初始化全局默认配置时使用的值，例如来自 SELENIUM_URL 的 Selenium 地址；
+// options.readOnly：只读取，不升级、不写入（供面板以外的进程使用，写入只由持有锁的面板进行）
+function createStore(dataDir, { seedDefaults = {}, readOnly = false } = {}) {
   const filePath = path.join(dataDir, "panel.json");
   let raw = {};
 
   if (fs.existsSync(filePath)) {
-    restrictPermissions(filePath);
+    if (!readOnly) {
+      restrictPermissions(filePath);
+    }
     try {
       raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
     } catch (e) {
@@ -48,7 +51,7 @@ function createStore(dataDir, { seedDefaults = {} } = {}) {
   }
 
   let data = normalizeData(raw, seedDefaults);
-  if (JSON.stringify(data) !== JSON.stringify(raw)) {
+  if (!readOnly && JSON.stringify(data) !== JSON.stringify(raw)) {
     writeFileAtomic(filePath, JSON.stringify(data, null, 2), { mode: 0o600 });
   }
 
@@ -62,6 +65,9 @@ function createStore(dataDir, { seedDefaults = {} } = {}) {
     },
     // mutator 接收数据副本并直接修改；按调用顺序依次写入。mutator 抛出错误时不写入，错误交给调用方
     update(mutator) {
+      if (readOnly) {
+        return Promise.reject(new Error("只读模式下不能修改面板数据"));
+      }
       const run = pending.then(() => {
         const next = this.get();
         mutator(next);

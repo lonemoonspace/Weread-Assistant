@@ -1,6 +1,6 @@
 ## CLI 说明
 
-> `run --account <id>` 按面板中保存的账号配置运行。按环境变量运行的 `run` 保留到第 6 步：面板能调度阅读、`docker-compose.yml` 改为启动面板之后删除。面板的配置与接口见 `docs/panel.md`。
+> `run --account <id>` 按面板中保存的账号配置运行，停用的账号会被拒绝。按环境变量运行的 `run` 保留到第 6 步（面板能调度阅读之后删除），目前由 `docker-compose.yml` 中的 `reader` 服务使用：`docker compose run --rm reader`。面板的配置与接口见 `docs/panel.md`。
 
 ### 职责
 
@@ -16,7 +16,7 @@
 
 环境变量与配置项一一对应，清单以 `src/config/schema.js` 为准，`help` 输出同一份清单。未设置或为空的变量使用默认值。
 
-取值会按清单校验，非法时直接报错并以退出码 1 结束：整数必须是完整的十进制数（`10abc` 不接受）；`WEREAD_DURATION`、`WEREAD_LOGIN_TIMEOUT` 不小于 1；`EMAIL_PORT`、`PANEL_PORT` 在 1–65535 之间；`WEREAD_SELECTION` 只能是 -1 到 4；`WEREAD_SPEED` 只能是 `slow`、`normal`、`fast`；布尔值只接受 `true/false`、`1/0`、`yes/no`、`y/n`、`on/off`。
+取值会按清单校验，非法时直接报错并以退出码 1 结束：整数必须是完整的十进制数（`10abc` 不接受）且在安全整数范围内；`WEREAD_DURATION`、`WEREAD_LOGIN_TIMEOUT` 在 1–1440 分钟之间；`EMAIL_PORT`、`PANEL_PORT` 在 1–65535 之间；`WEREAD_SELECTION` 只能是 -1 到 4；`WEREAD_SPEED` 只能是 `slow`、`normal`、`fast`；布尔值只接受 `true/false`、`1/0`、`yes/no`、`y/n`、`on/off`。
 
 相对上游的变化：
 
@@ -55,7 +55,7 @@ flowchart TD
 | 约束 | 说明 |
 | --- | --- |
 | 只用远程浏览器 | 不在本机启动浏览器；本地开发同样需要一个 Selenium 服务或 chromedriver |
-| 退出码 | `run` 成功时为 0；等待扫码超时、运行出错、命令或参数错误、账号或面板数据不存在时为 1 |
+| 退出码 | `run` 成功时为 0；等待扫码超时、运行出错、命令或参数错误、账号不存在或已停用、面板数据不存在时为 1 |
 | 日志完整 | 退出前等待日志文件写入完成，`output.log` 包含最后的 `Run finished` 行 |
 | 配置不可变 | 每次运行生成一份冻结的配置对象，各模块通过参数接收，不再读写模块级变量 |
 | 配置校验 | 拼写错误或超出范围的取值不会被悄悄改成默认值或截断，而是报错退出，见 `cases/config.md` |

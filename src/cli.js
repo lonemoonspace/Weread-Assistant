@@ -87,7 +87,7 @@ function parseRunArgs(args) {
   return parsed;
 }
 
-// 按面板中保存的账号配置生成运行配置；面板数据不存在或账号不存在时报错
+// 按面板中保存的账号配置生成运行配置；面板数据不存在、账号不存在或已停用时报错
 function configFromPanelAccount(accountId) {
   const options = panelOptionsFromEnv(process.env);
   const dataDir = path.resolve(options.dataDir);
@@ -97,8 +97,12 @@ function configFromPanelAccount(accountId) {
   const { createStore } = require("./panel/store");
   const { findAccount } = require("./panel/accounts");
   const { resolveAccountConfig } = require("./panel/config");
-  const data = createStore(dataDir).get();
-  return resolveAccountConfig(data, findAccount(data, accountId), dataDir);
+  const data = createStore(dataDir, { readOnly: true }).get();
+  const account = findAccount(data, accountId);
+  if (!account.enabled) {
+    throw new Error(`账号已停用：${accountId}，请先在面板中启用`);
+  }
+  return resolveAccountConfig(data, account, dataDir);
 }
 
 async function main(argv) {
