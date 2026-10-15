@@ -3,7 +3,7 @@
 ## 项目结构与模块组织
 - 整体设计与开发计划见 `docs/design.md`，改动前先确认属于计划中的哪一步。
 - `src/cli.js` 是唯一入口；`src/config/` 定义配置项清单与解析，`src/reader/` 是自动阅读流程（浏览器、登录、选书、阅读循环），`src/notify/` 是 Bark / ntfy / 邮件通知，`src/panel/` 是 Web 面板（服务端、鉴权、存储与页面），`src/shared/` 放日志、HTTP 等公共工具。
-- 新增配置项时只改 `src/config/schema.js`，帮助输出与后续面板表单都由它生成。
+- 新增配置项时只改 `src/config/schema.js`，帮助输出与后续面板表单都由它生成；整数项用 `min` / `max` 限定范围，枚举项用 `options` 列出可选值，解析时会据此校验。
 - 页面定位器与关键文案集中在 `src/reader/selectors.js`；浏览器隐式等待为 0，需要等元素出现时使用 `src/reader/dom.js` 中的显式等待。
 - 运行产物（cookies.json、login.png、截图、output.log）写入数据目录（默认 `data/`），该目录已在 `.gitignore` 与 `.dockerignore` 中排除。
 
@@ -21,7 +21,7 @@
 - 日志通过 `console.info|warn|error` 输出，由 `src/shared/log.js` 统一加前缀并写入日志文件。
 
 ## 测试指南
-- 提交前至少执行 `npm run test:notify` 与 `npm run test:panel`；改动阅读流程时执行 `SELENIUM_URL=... npm run test:reader`（本地模拟页面）；改动镜像时执行 `npm run test:runtime`。
+- 提交前至少执行 `npm run test:notify`、`npm run test:panel` 与 `npm run test:config`；改动阅读流程时执行 `SELENIUM_URL=... npm run test:reader`（本地模拟页面）；改动镜像时执行 `npm run test:runtime`。
 - 改动阅读流程或定位器时，再连接 Selenium 对真实站点运行一次，确认登录、翻页链路；验收用例见 `cases/`。
 
 ## 提交与 Pull Request 指南

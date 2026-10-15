@@ -8,12 +8,14 @@
 | --- | --- | --- | --- | --- |
 | `run` | 执行一次自动阅读 | 环境变量 | 控制台日志、`<数据目录>/output.log`、cookies、登录二维码、截图、通知 | 只连接 `SELENIUM_URL` 指向的远程 Chromium |
 | `run --login-only` | 只登录（需要时扫码）并保存 cookies | 环境变量 | 同上，不选书、不阅读 | 用于刷新登录态 |
-| `panel` / 无参数 | 启动 Web 面板 | `PANEL_*` 环境变量、`--port` | HTTP 服务、`<面板数据目录>/panel.log` | 镜像默认命令；端口被占用时报错退出 |
+| `panel` / 无参数 | 启动 Web 面板 | `PANEL_*` 环境变量 | HTTP 服务、`<面板数据目录>/panel.log` | 镜像默认命令；不接受额外参数；端口被占用时报错退出 |
 | `help` / `-h` / `--help` | 输出帮助与环境变量清单 | 无 | 帮助文本 | 不启动浏览器 |
 
 ### 配置
 
 环境变量与配置项一一对应，清单以 `src/config/schema.js` 为准，`help` 输出同一份清单。未设置或为空的变量使用默认值。
+
+取值会按清单校验，非法时直接报错并以退出码 1 结束：整数必须是完整的十进制数（`10abc` 不接受）；`WEREAD_DURATION`、`WEREAD_LOGIN_TIMEOUT` 不小于 1；`EMAIL_PORT`、`PANEL_PORT` 在 1–65535 之间；`WEREAD_SELECTION` 只能是 -1 到 4；`WEREAD_SPEED` 只能是 `slow`、`normal`、`fast`；布尔值只接受 `true/false`、`1/0`、`yes/no`、`y/n`、`on/off`。
 
 相对上游的变化：
 
@@ -52,4 +54,5 @@ flowchart TD
 | 只用远程浏览器 | 不在本机启动浏览器；本地开发同样需要一个 Selenium 服务或 chromedriver |
 | 退出码 | `run` 成功时为 0；等待扫码超时、运行出错、命令或参数错误时为 1 |
 | 配置不可变 | 每次运行生成一份冻结的配置对象，各模块通过参数接收，不再读写模块级变量 |
+| 配置校验 | 拼写错误或超出范围的取值不会被悄悄改成默认值或截断，而是报错退出，见 `cases/config.md` |
 | 不上报 | 不向任何服务器发送使用数据 |

@@ -11,12 +11,27 @@ function defaultData() {
   };
 }
 
+// 已有文件（例如手工复制或从备份恢复的）可能对其他用户可读，启动时收紧为 0600；改不了时拒绝启动
+function restrictPermissions(filePath) {
+  const mode = fs.statSync(filePath).mode & 0o777;
+  if (mode === 0o600) {
+    return;
+  }
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch (e) {
+    throw new Error(`${filePath} 的权限为 ${mode.toString(8)}，无法改为 600：${e.message}`);
+  }
+  console.warn(`${filePath} 的权限为 ${mode.toString(8)}，已改为 600`);
+}
+
 // panel.json 的读写。写入串行执行、原子替换，文件权限 0600（其中保存密码哈希与各类密钥）
 function createStore(dataDir) {
   const filePath = path.join(dataDir, "panel.json");
   let data;
 
   if (fs.existsSync(filePath)) {
+    restrictPermissions(filePath);
     try {
       data = { ...defaultData(), ...JSON.parse(fs.readFileSync(filePath, "utf8")) };
     } catch (e) {

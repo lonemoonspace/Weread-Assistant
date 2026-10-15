@@ -66,6 +66,8 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
   let globalFailures = [];
   let globalLockedUntil = 0;
   let envPasswordHash = "";
+  // 修改密码串行执行：并发请求都通过旧密码校验时，后完成的会清空先完成者刚创建的会话
+  let passwordChange = Promise.resolve();
 
   function currentHash() {
     return envPasswordHash || store.get().auth.passwordHash;
@@ -178,25 +180,31 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     },
 
     // 返回 { ok: true, token } 或 { ok: false, error: "password_from_env" | "wrong_password" | "password_too_short" }。
-    // 修改成功后所有会话失效，并为调用者创建新会话
-    async changePassword(currentPassword, nextPassword) {
-      if (envPassword) {
-        return { ok: false, error: "password_from_env" };
-      }
-      if (!(await verifyPassword(String(currentPassword || ""), currentHash()))) {
-        return { ok: false, error: "wrong_password" };
-      }
-      if (typeof nextPassword !== "string" || nextPassword.length < MIN_PASSWORD_LENGTH) {
-        return { ok: false, error: "password_too_short" };
-      }
-      const passwordHash = await hashPassword(nextPassword);
-      await store.update((data) => {
-        data.auth.passwordHash = passwordHash;
-      });
-      sessions.clear();
-      return { ok: true, token: createSession() };
+    // 修改成功后所有会话失效，并为调用者创建新会话。多个请求依次处理，后到的请求按新密码校验
+    changePassword(currentPassword, nextPassword) {
+      const run = passwordChange.then(() => applyPasswordChange(currentPassword, nextPassword));
+      passwordChange = run.catch(() => {});
+      return run;
     },
   };
+
+  async function applyPasswordChange(currentPassword, nextPassword) {
+    if (envPassword) {
+      return { ok: false, error: "password_from_env" };
+    }
+    if (!(await verifyPassword(String(currentPassword || ""), currentHash()))) {
+      return { ok: false, error: "wrong_password" };
+    }
+    if (typeof nextPassword !== "string" || nextPassword.length < MIN_PASSWORD_LENGTH) {
+      return { ok: false, error: "password_too_short" };
+    }
+    const passwordHash = await hashPassword(nextPassword);
+    await store.update((data) => {
+      data.auth.passwordHash = passwordHash;
+    });
+    sessions.clear();
+    return { ok: true, token: createSession() };
+  }
 }
 
 module.exports = {

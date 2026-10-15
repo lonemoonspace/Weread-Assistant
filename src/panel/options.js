@@ -19,21 +19,26 @@ function parseTrustProxy(raw) {
     const hops = Number(value);
     return hops > 0 ? hops : false;
   }
-  return parseBooleanValue(value, false, true) ? 1 : false;
+  try {
+    return parseBooleanValue(value, false, true) ? 1 : false;
+  } catch (_) {
+    throw new Error(`PANEL_TRUST_PROXY 只能是 true、false 或代理层数：${raw}`);
+  }
 }
 
+// 端口只从 PANEL_PORT 读取，与镜像健康检查保持一致；0（随机端口）只供测试直接调用 startPanel 时使用
 function parsePort(raw) {
   const port = parseIntegerValue(raw, "PANEL_PORT");
-  if (port < 0 || port > 65535) {
-    throw new Error(`PANEL_PORT 超出范围: ${raw}`);
+  if (port < 1 || port > 65535) {
+    throw new Error(`PANEL_PORT 必须在 1–65535 之间：${raw}`);
   }
   return port;
 }
 
-// 面板自身的运行参数，来自 PANEL_* 环境变量；flags 中的 --port 优先
-function panelOptionsFromEnv(env = process.env, flags = {}) {
+// 面板自身的运行参数，来自 PANEL_* 环境变量；取值非法时抛出错误
+function panelOptionsFromEnv(env = process.env) {
   return {
-    port: parsePort(flags.port !== undefined ? flags.port : env.PANEL_PORT || DEFAULT_PANEL_PORT),
+    port: parsePort(env.PANEL_PORT || DEFAULT_PANEL_PORT),
     host: env.PANEL_HOST || "0.0.0.0",
     basePath: normalizeBasePath(env.PANEL_BASE_PATH),
     trustProxy: parseTrustProxy(env.PANEL_TRUST_PROXY),

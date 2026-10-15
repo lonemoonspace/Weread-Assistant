@@ -228,7 +228,7 @@ async function startPanel(options) {
   await new Promise((resolve, reject) => {
     server.once("error", (error) => {
       if (error.code === "EADDRINUSE") {
-        reject(new Error(`端口 ${options.port} 已被占用，请通过 PANEL_PORT 或 --port 更换端口`));
+        reject(new Error(`端口 ${options.port} 已被占用，请通过 PANEL_PORT 更换端口`));
         return;
       }
       reject(error);

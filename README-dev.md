@@ -24,6 +24,7 @@ node src/cli.js help
 # 测试
 npm run test:notify
 npm run test:panel     # 面板鉴权与接口，不需要浏览器
+npm run test:config    # 配置解析与校验
 SELENIUM_URL=http://localhost:4444 npm run test:reader   # 用本地模拟页面跑阅读流程，需要 Selenium
 npm run test:runtime   # 需要 Docker
 

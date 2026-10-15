@@ -22,7 +22,7 @@ function showHelp() {
   console.log(`WeReadAssistant ${VERSION}
 
 Usage:
-  node src/cli.js [panel] [--port <port>]   Start the web panel (default command).
+  node src/cli.js [panel]                  Start the web panel (default command).
   node src/cli.js run                      Run one reading session, configured by environment variables.
   node src/cli.js run --login-only         Only log in (scan the QR code if needed) and save cookies.
   node src/cli.js help                     Show this help text.
@@ -42,21 +42,12 @@ Run environment variables:
 ${envLines}`);
 }
 
-function parsePanelFlags(args) {
-  const flags = {};
-  for (let i = 0; i < args.length; i += 1) {
-    if (args[i] === "--port" && args[i + 1] !== undefined) {
-      flags.port = args[i + 1];
-      i += 1;
-    } else {
-      throw new Error(`Unexpected arguments for panel: ${args.slice(i).join(" ")}`);
-    }
-  }
-  return flags;
-}
-
 async function startPanelCommand(args) {
-  const options = panelOptionsFromEnv(process.env, parsePanelFlags(args));
+  // 面板只读环境变量，端口等参数与镜像健康检查使用同一来源
+  if (args.length > 0) {
+    throw new Error(`Unexpected arguments for panel: ${args.join(" ")}`);
+  }
+  const options = panelOptionsFromEnv(process.env);
   ensureDir(path.resolve(options.dataDir));
   initLogFile(path.join(path.resolve(options.dataDir), "panel.log"));
 
@@ -86,8 +77,8 @@ async function main(argv) {
     return;
   }
 
-  if (!command || command === "panel" || command === "--port") {
-    await startPanelCommand(command === "--port" ? argv : rest);
+  if (!command || command === "panel") {
+    await startPanelCommand(rest);
     return;
   }
 

@@ -109,6 +109,15 @@ async function main() {
       assert.strictEqual((await login(second, first.generatedPassword)).status, 204);
     });
 
+    await scenario("已有 panel.json 权限过宽时，启动时收紧为 0600", async () => {
+      const dataDir = tempDir();
+      const file = path.join(dataDir, "panel.json");
+      fs.writeFileSync(file, JSON.stringify({ version: 1, auth: { passwordHash: "" } }), { mode: 0o644 });
+      fs.chmodSync(file, 0o644);
+      await start({ dataDir, password: "correct-horse" });
+      assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
+    });
+
     await scenario("未登录：健康检查可访问，页面跳转到登录页，接口返回 401", async () => {
       const panel = await start();
       assert.deepStrictEqual((await panel.request("healthz")).json, { status: "ok" });
@@ -254,6 +263,30 @@ async function main() {
       assert.strictEqual(refused.status, 409);
     });
 
+    await scenario("并发修改密码依次处理：只有一个成功，成功者的新会话保持有效", async () => {
+      const panel = await start();
+      const original = panel.generatedPassword;
+      const cookieA = sessionCookie(await login(panel, original));
+      const cookieB = sessionCookie(await login(panel, original));
+      const change = (cookie, next) =>
+        panel.request("api/auth/password", { method: "POST", body: { current: original, next }, headers: CSRF, cookie });
+
+      const [first, second] = await Promise.all([change(cookieA, "first-password-1"), change(cookieB, "second-password-2")]);
+      const results = [first, second];
+      const winners = results.filter((res) => res.status === 204);
+      assert.strictEqual(winners.length, 1, `应只有一个请求成功，实际状态 ${results.map((res) => res.status)}`);
+      const loser = results.find((res) => res.status !== 204);
+      assert.strictEqual(loser.status, 400);
+      assert.strictEqual(loser.json.error, "wrong_password");
+
+      // 成功者拿到的新会话没有被另一个请求清除
+      assert.strictEqual((await panel.request("api/auth/session", { cookie: sessionCookie(winners[0]) })).status, 200);
+      const winningPassword = winners[0] === first ? "first-password-1" : "second-password-2";
+      const losingPassword = winners[0] === first ? "second-password-2" : "first-password-1";
+      assert.strictEqual((await login(panel, winningPassword)).status, 204);
+      assert.strictEqual((await login(panel, losingPassword)).status, 401);
+    });
+
     await scenario("页面与接口带安全响应头，接口禁止缓存", async () => {
       const panel = await start();
       const page = await panel.request("login");
@@ -273,7 +306,7 @@ async function main() {
       await new Promise((resolve) => blocker.listen(0, "127.0.0.1", resolve));
       const { port } = blocker.address();
       try {
-        await assert.rejects(startPanel(panelOptions({ port })), /端口 \d+ 已被占用，请通过 PANEL_PORT 或 --port 更换端口/);
+        await assert.rejects(startPanel(panelOptions({ port })), /端口 \d+ 已被占用，请通过 PANEL_PORT 更换端口/);
       } finally {
         await new Promise((resolve) => blocker.close(resolve));
       }

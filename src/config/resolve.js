@@ -1,5 +1,7 @@
 const { CONFIG_SCHEMA } = require("./schema");
 
+const INTEGER_PATTERN = /^[+-]?\d+$/;
+
 function parseBooleanValue(value, defaultValue = false, strict = false) {
   if (value === undefined || value === null || value === "") {
     return defaultValue;
@@ -24,12 +26,24 @@ function parseBooleanValue(value, defaultValue = false, strict = false) {
   throw new Error(`Invalid boolean value: ${value}`);
 }
 
+// 只接受完整的十进制整数，"10abc" 这类带后缀的值视为错误
 function parseIntegerValue(value, name) {
-  const parsed = Number.parseInt(String(value), 10);
-  if (!Number.isInteger(parsed)) {
-    throw new Error(`${name} must be an integer`);
+  const text = String(value).trim();
+  if (!INTEGER_PATTERN.test(text)) {
+    throw new Error(`${name} 必须是整数：${value}`);
   }
-  return parsed;
+  return Number.parseInt(text, 10);
+}
+
+function checkRange(field, name, value, rawValue) {
+  const hasMin = field.min !== undefined;
+  const hasMax = field.max !== undefined;
+  if ((hasMin && value < field.min) || (hasMax && value > field.max)) {
+    const range = hasMin && hasMax
+      ? `在 ${field.min}–${field.max} 之间`
+      : hasMin ? `不小于 ${field.min}` : `不大于 ${field.max}`;
+    throw new Error(`${name} 必须${range}：${rawValue}`);
+  }
 }
 
 function coerceValue(field, rawValue) {
@@ -37,17 +51,32 @@ function coerceValue(field, rawValue) {
     return field.default;
   }
 
+  const name = field.env || field.key;
+  let value;
   switch (field.type) {
     case "boolean":
-      return parseBooleanValue(rawValue, field.default, false);
+      try {
+        value = parseBooleanValue(rawValue, field.default, true);
+      } catch (_) {
+        throw new Error(`${name} 只能是 true 或 false：${rawValue}`);
+      }
+      break;
     case "integer":
-      return parseIntegerValue(rawValue, field.env || field.key);
+      value = parseIntegerValue(rawValue, name);
+      checkRange(field, name, value, rawValue);
+      break;
     default:
-      return String(rawValue);
+      value = String(rawValue);
   }
+
+  if (field.options && !field.options.some((option) => option.value === value)) {
+    const allowed = field.options.map((option) => option.value).join("、");
+    throw new Error(`${name} 只能是 ${allowed}：${rawValue}`);
+  }
+  return value;
 }
 
-// 按配置项清单补齐默认值并转换类型，返回不可变的运行配置
+// 按配置项清单补齐默认值、转换类型并校验取值，返回不可变的运行配置；取值非法时抛出错误
 function resolveConfig(values = {}) {
   const config = {};
   for (const field of CONFIG_SCHEMA) {
