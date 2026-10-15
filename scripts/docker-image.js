@@ -8,7 +8,7 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 const PACKAGE_JSON_PATH = path.join(ROOT_DIR, 'package.json');
 const packageJson = JSON.parse(fs.readFileSync(PACKAGE_JSON_PATH, 'utf8'));
 
-// Only linux/arm64 is published: this fork targets ARM64 boards (Raspberry Pi and
+// Only linux/arm64 is published: this project targets ARM64 boards (Raspberry Pi and
 // similar). amd64 is deliberately not built, so a release cannot reintroduce it.
 const DEFAULT_PUSH_PLATFORM = 'linux/arm64';
 
@@ -24,7 +24,7 @@ Commands:
 
 Options:
   --image <name>            Target image name
-                            default: docker.io/lonemoonspace/weread-challenge
+                            default: docker.io/lonemoonspace/weread-assistant
   --tag <tag>               Primary tag
                             default: package.json version (${packageJson.version})
   --extra-tags <list>       Extra tags separated by commas
@@ -114,7 +114,7 @@ function parsePlatforms(value) {
 }
 
 function resolveConfig(command, rawOptions) {
-  const image = rawOptions.image || process.env.DOCKER_IMAGE || 'docker.io/lonemoonspace/weread-challenge';
+  const image = rawOptions.image || process.env.DOCKER_IMAGE || 'docker.io/lonemoonspace/weread-assistant';
   const tag = rawOptions.tag || process.env.DOCKER_TAG || packageJson.version;
   const extraTags = uniqueTags(
     (rawOptions['extra-tags'] || process.env.DOCKER_EXTRA_TAGS || '')

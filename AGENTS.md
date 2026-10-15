@@ -1,33 +1,33 @@
 # Repository Guidelines
 
 ## 项目结构与模块组织
-- 主流程集中在 `src/weread-challenge.js`，覆盖 login flow、reading loop、telemetry push 等职责；文件内部按函数块划分，后续可按场景拆分成 modules。
-- `data/` 在首次运行时生成 cookies.json、login.png、output.log；新增缓存文件时请同步更新 `.gitignore`，保持工作树 clean。
-- `docker-compose.yml`、`Dockerfile` 负责 orchestrate Selenium standalone chrome，`README-dev.md` 概述 VS Code 调试；若需要自定义 remote browser，请在 compose 文件中调整 service name 与 network。
+- 整体设计与开发计划见 `docs/design.md`，改动前先确认属于计划中的哪一步。
+- `src/cli.js` 是唯一入口；`src/config/` 定义配置项清单与解析，`src/reader/` 是自动阅读流程（浏览器、登录、选书、阅读循环），`src/notify/` 是 Bark / ntfy / 邮件通知，`src/shared/` 放日志、HTTP 等公共工具。
+- 新增配置项时只改 `src/config/schema.js`，帮助输出与后续面板表单都由它生成。
+- 运行产物（cookies.json、login.png、截图、output.log）写入数据目录（默认 `data/`），该目录已在 `.gitignore` 与 `.dockerignore` 中排除。
 
 ## 构建、测试与开发命令
-- `npm install`：安装 `selenium-webdriver` 与 `nodemailer`，建议为每次依赖升级记录 package-lock 差异。
-- `npm run start`：在 shell 里注入 `WEREAD_REMOTE_BROWSER=http://172.18.0.2:4444` 并执行脚本；若本地无远程节点，请改用 `WEREAD_REMOTE_BROWSER=` 覆盖。
-- `node src/weread-challenge.js`：本地快速调试入口，可结合 `DEBUG=true`、`WEREAD_BROWSER=chrome`、`WEREAD_DURATION=68` 验证长时间阅读。
-- `docker compose up -d`：拉起 `app` + `selenium`，常用于验收生产镜像；结束后执行 `docker compose down` 清理资源。
+- `npm install`：安装依赖，依赖升级时记录 package-lock 差异。
+- `SELENIUM_URL=http://localhost:4444 npm start`：连接本地 Selenium 运行一次；`npm run debug` 打开调试日志。浏览器只在 Selenium 中运行，不支持在本机启动浏览器。
+- `node src/cli.js help`：查看命令与全部环境变量。
+- `docker compose up -d`：拉起 `app` + `selenium`；结束后执行 `docker compose down` 清理资源。
 
 ## 编码风格与命名约定
-- 统一采用 2 space 缩进、单引号转义保持最小化；CommonJS `require` / `module.exports` 为默认模块规范。
-- 常量使用 SCREAMING_SNAKE_CASE（如 `WEREAD_DURATION`），内部变量与函数沿用 camelCase；异步流程优先 async/await。
-- 日志通过 `console.info|warn|error` 输出，文件句柄在顶部集中创建；新增监控点时复用 `redirectConsole` 逻辑，避免重复实现。
+- 统一采用 2 space 缩进；CommonJS `require` / `module.exports`；异步流程优先 async/await。
+- 常量使用 SCREAMING_SNAKE_CASE，内部变量与函数沿用 camelCase。
+- 运行配置是不可变对象，通过参数传给各模块，不要新增模块级可变状态。
+- 日志通过 `console.info|warn|error` 输出，由 `src/shared/log.js` 统一加前缀并写入日志文件。
 
 ## 测试指南
-- 目前不存在自动化单测，验证依赖真实浏览器运行；提交前至少执行一次 `npm run start` 或 `docker compose up -d`，确认登录、翻页链路；如改动统计上报，再以 `WEREAD_AGREE_TERMS=true` 验证一次。
-- 建议新增 `tests/` 目录，用 `selenium-webdriver` 编写 smoke case（命名示例：`tests/login-smoke.spec.js`），覆盖登录二维码刷新、章节跳转、通知推送开关。
-- 若引入断言库，可选 `assert` 内置模块或 `mocha`，并在 README-dev.md 追加用法；同时为每个 case 描述期望阅读时长与触发条件。
+- 提交前至少执行 `npm run test:notify`；改动镜像时执行 `npm run test:runtime`。
+- 改动阅读流程时，连接 Selenium 实际运行一次，确认登录、翻页链路；验收用例见 `cases/`。
 
 ## 提交与 Pull Request 指南
-- Git 历史遵循 Conventional Commits，示例：`feat: implement QR code detection`、`ci: update docker image registry`、`feat(docker): add docker-compose setup`。
-- Commit message 建议格式为 `type(scope?): subject`，subject 使用动词原形且描述业务成果；多文件变更时可以进一步拆分 commits，便于 review。
-- Pull Request 描述需包含：背景、变更要点、运行命令、环境变量配置、截图或 `data/output.log` 片段；若关联 issue 请在描述结尾附 `Closes #id`。
+- Git 历史遵循 Conventional Commits，格式为 `type(scope?): subject`，例如 `feat(panel): add login page`、`fix(reader): ...`。
+- Pull Request 描述需包含：背景、变更要点、运行命令、环境变量配置、截图或 `output.log` 片段；若关联 issue 请在描述结尾附 `Closes #id`。
 
 ## 配置与安全提示
-- 所有敏感凭据通过环境变量传递，严禁在仓库中硬编码邮箱密码、Bark key、ntfy topic/token；推荐使用 `.env.local` 并加入 `.gitignore`。
-- 默认 `WEREAD_AGREE_TERMS=false`（统计上报需显式开启，数据发往上游 `weread-challenge.techfetch.dev`）；若扩展统计字段，需在 PR 中说明并同步更新 README 隐私政策。
-- 部署 Docker 方案时确认宿主机具备 `--shm-size 2gb` 以避免 Chrome crash；远程运行后及时清理 `data/login.png` 并轮换 cookies。
-- 维护 `cron` 任务时可用 `docker run --rm` 方案，将 `-v $HOME/weread-challenge/<user>/data:/app/data` 挂载到宿主机，确保多账户日志与二维码清晰分层。
+- 本项目是非官方项目，不得以微信读书或腾讯官方名义描述或包装。
+- 不收集、不上报任何使用数据，不要新增统计上报。
+- 所有敏感凭据通过配置传递，严禁在仓库中硬编码邮箱密码、Bark key、ntfy topic/token；本地可用 `.env.local`（已在 `.gitignore` 中）。
+- 部署 Selenium 时保证 `--shm-size 2gb` 以避免 Chrome crash；远程运行后及时清理 `login.png` 并注意 cookies 等同于登录态。

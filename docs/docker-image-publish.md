@@ -1,6 +1,6 @@
 ## Docker image 推送脚本说明
 
-本仓库只发布 `linux/arm64`：`push` 的默认平台就是 `linux/arm64`，`amd64` 不再构建。
+本项目只发布 `linux/arm64`：`push` 的默认平台就是 `linux/arm64`，`amd64` 不再构建。
 
 ### 职责
 
@@ -14,7 +14,7 @@
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--image` | `docker.io/lonemoonspace/weread-challenge` | 目标镜像仓库 |
+| `--image` | `docker.io/lonemoonspace/weread-assistant` | 目标镜像仓库 |
 | `--tag` | `package.json` 中的 `version` | 主 tag |
 | `--extra-tags` | 空 | 额外 tag，使用英文逗号分隔 |
 | `--platform` | `build`: 宿主平台；`check` / `push`: `linux/arm64` | 目标平台，英文逗号分隔；会先去空白并去重 |
