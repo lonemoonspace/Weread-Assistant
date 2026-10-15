@@ -10,6 +10,8 @@
 | `run` 拒绝额外参数 | 执行 `node src/cli.js run --weread-duration 30` | 报错 `Unexpected arguments for run`，退出码 1 |
 | 连接 Selenium | 启动 Selenium（或 chromedriver）后执行 `SELENIUM_URL=http://localhost:4444 node src/cli.js run` | 日志依次出现 `Selenium 健康检查 /status 响应: ready=true`、`SELENIUM_URL:`、`Browser launched successfully.`、`Successfully opened the url: https://weread.qq.com/` |
 | 未登录时展示二维码 | 数据目录中没有 `cookies.json` | 保存 `login.png` 与 `login-qr.png`，日志输出 `登录链接: https://weread.qq.com/web/confirm?uid=...`，进入 `Waiting for login...`；二维码约 1 分钟过期，日志出现 `Refreshing QR code...` 并自动刷新，直到扫码成功或超过 `WEREAD_LOGIN_TIMEOUT` |
+| 按账号运行 | 面板中已有账号 `me`，执行 `node src/cli.js run --account me` | 日志首行为 `账号: me 数据目录: <面板数据目录>/accounts/me`，按面板中的配置运行，产物写入该目录 |
+| 账号不存在 | 执行 `node src/cli.js run --account nobody` | 报错 `账号不存在：nobody`，退出码 1 |
 | 仅登录 | 执行 `node src/cli.js run --login-only` | 登录并保存 `cookies.json` 后结束，不打开书籍；成功时退出码 0 |
 | 退出码 | 不扫码，`WEREAD_LOGIN_TIMEOUT=2` 执行 `run` | 约 2 分钟后日志出现 `等待扫码超时（2 分钟）`、`Run finished: login-timeout`，退出码 1 |
 | 默认数据目录 | 不设置 `WEREAD_DATA_DIR` 执行 `run` | 产物写入当前目录下的 `data/` |

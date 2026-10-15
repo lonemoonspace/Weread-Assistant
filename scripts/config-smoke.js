@@ -6,16 +6,27 @@
  */
 
 const assert = require("assert");
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
 const { configFromEnv } = require(path.resolve(__dirname, "..", "src", "config", "resolve"));
 const { panelOptionsFromEnv } = require(path.resolve(__dirname, "..", "src", "panel", "options"));
+const { createStore } = require(path.resolve(__dirname, "..", "src", "panel", "store"));
 
 const CLI = path.resolve(__dirname, "..", "src", "cli.js");
 
 function rejects(fn, pattern) {
   assert.throws(fn, pattern);
+}
+
+function runCli(args, env) {
+  return spawnSync(process.execPath, [CLI, ...args], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, ...env },
+    timeout: 30000,
+  });
 }
 
 const scenarios = [
@@ -82,11 +93,7 @@ const scenarios = [
   }],
 
   ["CLI：非法配置与多余参数直接报错退出", () => {
-    const run = (args, env) => spawnSync(process.execPath, [CLI, ...args], {
-      encoding: "utf8",
-      env: { PATH: process.env.PATH, ...env },
-      timeout: 10000,
-    });
+    const run = runCli;
 
     const badDuration = run(["run"], { WEREAD_DURATION: "0" });
     assert.strictEqual(badDuration.status, 1);
@@ -99,18 +106,49 @@ const scenarios = [
     const portFlag = run(["panel", "--port", "1234"], {});
     assert.strictEqual(portFlag.status, 1);
     assert.match(portFlag.stderr, /Unexpected arguments for panel: --port 1234/);
+
+    const missingValue = run(["run", "--account"], {});
+    assert.strictEqual(missingValue.status, 1);
+    assert.match(missingValue.stderr, /Unexpected arguments for run: --account/);
+  }],
+
+  ["CLI：run --account 按面板中的账号配置运行，日志写入账号目录", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "config-smoke-"));
+    const noPanel = runCli(["run", "--account", "me"], { PANEL_DATA_DIR: dataDir });
+    assert.strictEqual(noPanel.status, 1);
+    assert.match(noPanel.stderr, /面板数据不存在/);
+
+    // 全局默认指向一个不可达的 Selenium，账号覆盖等待扫码时长
+    const store = createStore(dataDir, { seedDefaults: { seleniumUrl: "http://127.0.0.1:9" } });
+    await store.update((data) => {
+      data.accounts.push({ id: "me", name: "小明", enabled: true, createdAt: new Date().toISOString(), overrides: { loginTimeout: 1 } });
+    });
+
+    const missing = runCli(["run", "--account", "nobody"], { PANEL_DATA_DIR: dataDir });
+    assert.strictEqual(missing.status, 1);
+    assert.match(missing.stderr, /账号不存在：nobody/);
+
+    const result = runCli(["run", "--account", "me", "--login-only"], { PANEL_DATA_DIR: dataDir, SELENIUM_URL: "http://ignored:4444" });
+    assert.strictEqual(result.status, 1, "连接不到 Selenium 时应以退出码 1 结束");
+    const log = fs.readFileSync(path.join(dataDir, "accounts", "me", "output.log"), "utf8");
+    assert.match(log, /账号: me 数据目录: .*accounts[\\/]me/);
+    assert.match(log, /SELENIUM_URL:  http:\/\/127\.0\.0\.1:9/, "使用面板中的全局配置，而不是环境变量");
+    assert.match(log, /Run finished: error/);
+    fs.rmSync(dataDir, { recursive: true, force: true });
   }],
 ];
 
-let passed = 0;
-for (const [name, fn] of scenarios) {
-  try {
-    fn();
-  } catch (error) {
-    console.error(`配置 smoke 失败（${name}）: ${error.message}`);
-    process.exit(1);
+(async () => {
+  let passed = 0;
+  for (const [name, fn] of scenarios) {
+    try {
+      await fn();
+    } catch (error) {
+      console.error(`配置 smoke 失败（${name}）: ${error.message}`);
+      process.exit(1);
+    }
+    passed += 1;
+    console.log(`✅ ${name}`);
   }
-  passed += 1;
-  console.log(`✅ ${name}`);
-}
-console.log(`\n配置 smoke 全部通过（${passed} 个场景）`);
+  console.log(`\n配置 smoke 全部通过（${passed} 个场景）`);
+})();

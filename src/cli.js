@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+const fs = require("fs");
 const path = require("path");
 const { CONFIG_SCHEMA } = require("./config/schema");
 const { configFromEnv } = require("./config/resolve");
 const { DEFAULT_PANEL_PORT, panelOptionsFromEnv } = require("./panel/options");
 const { ensureDir, getDataPaths } = require("./reader/paths");
-const { initLogFile } = require("./shared/log");
+const { closeLogFile, initLogFile } = require("./shared/log");
 const { VERSION } = require("./shared/version");
 
 function formatDefault(field) {
@@ -23,8 +24,9 @@ function showHelp() {
 
 Usage:
   node src/cli.js [panel]                  Start the web panel (default command).
+  node src/cli.js run --account <id>       Run one reading session for a panel account, using its saved settings.
   node src/cli.js run                      Run one reading session, configured by environment variables.
-  node src/cli.js run --login-only         Only log in (scan the QR code if needed) and save cookies.
+  add --login-only to either run form      Only log in (scan the QR code if needed) and save cookies.
   node src/cli.js help                     Show this help text.
 
 run exits with 0 when the run succeeds, 1 when login times out or an error occurs.
@@ -63,10 +65,40 @@ async function startPanelCommand(args) {
   const shutdown = async (signal) => {
     console.info(`收到 ${signal}，正在停止面板...`);
     await panel.close();
+    await closeLogFile();
     process.exit(0);
   };
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   process.once("SIGINT", () => shutdown("SIGINT"));
+}
+
+function parseRunArgs(args) {
+  const parsed = { accountId: "", loginOnly: false };
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === "--login-only") {
+      parsed.loginOnly = true;
+    } else if (args[i] === "--account" && args[i + 1] && !args[i + 1].startsWith("-")) {
+      parsed.accountId = args[i + 1];
+      i += 1;
+    } else {
+      throw new Error(`Unexpected arguments for run: ${args.slice(i).join(" ")}`);
+    }
+  }
+  return parsed;
+}
+
+// 按面板中保存的账号配置生成运行配置；面板数据不存在或账号不存在时报错
+function configFromPanelAccount(accountId) {
+  const options = panelOptionsFromEnv(process.env);
+  const dataDir = path.resolve(options.dataDir);
+  if (!fs.existsSync(path.join(dataDir, "panel.json"))) {
+    throw new Error(`面板数据不存在：${path.join(dataDir, "panel.json")}，请先启动面板并创建账号（或设置 PANEL_DATA_DIR）`);
+  }
+  const { createStore } = require("./panel/store");
+  const { findAccount } = require("./panel/accounts");
+  const { resolveAccountConfig } = require("./panel/config");
+  const data = createStore(dataDir).get();
+  return resolveAccountConfig(data, findAccount(data, accountId), dataDir);
 }
 
 async function main(argv) {
@@ -87,19 +119,19 @@ async function main(argv) {
       showHelp();
       return;
     }
-    const unexpected = rest.filter((arg) => arg !== "--login-only");
-    if (unexpected.length > 0) {
-      throw new Error(`Unexpected arguments for run: ${unexpected.join(" ")}`);
-    }
-
-    const config = configFromEnv(process.env);
+    const { accountId, loginOnly } = parseRunArgs(rest);
+    const config = accountId ? configFromPanelAccount(accountId) : configFromEnv(process.env);
     const paths = getDataPaths(config);
     ensureDir(paths.dataDir);
     initLogFile(paths.outputLog, { debug: config.debug });
 
     const { runOnce } = require("./reader/run");
-    const result = await runOnce(config, { mode: rest.includes("--login-only") ? "login" : "read" });
+    if (accountId) {
+      console.info("账号:", accountId, "数据目录:", config.dataDir);
+    }
+    const result = await runOnce(config, { mode: loginOnly ? "login" : "read" });
     console.info("Run finished:", result.status);
+    await closeLogFile();
     process.exit(result.status === "success" ? 0 : 1);
   }
 

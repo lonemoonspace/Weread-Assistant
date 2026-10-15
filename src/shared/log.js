@@ -43,7 +43,21 @@ function initLogFile(filePath, { debug = false } = {}) {
   }
 }
 
+// 关闭日志文件并等待写入完成；退出进程前调用，否则最后几行日志可能来不及写入
+function closeLogFile() {
+  return new Promise((resolve) => {
+    if (!logStream) {
+      resolve();
+      return;
+    }
+    const stream = logStream;
+    logStream = null;
+    stream.end(resolve);
+  });
+}
+
 module.exports = {
+  closeLogFile,
   formatLocalTimestamp,
   initLogFile,
 };
