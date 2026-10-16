@@ -8,8 +8,40 @@ const EXISTS_SCRIPT = `
   );
 `;
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+// 运行被停止（面板中点击停止，或进程收到 SIGTERM / SIGINT）
+class RunStoppedError extends Error {
+  constructor() {
+    super("运行已停止");
+    this.name = "RunStoppedError";
+  }
+}
+
+function throwIfStopped(signal) {
+  if (signal && signal.aborted) {
+    throw new RunStoppedError();
+  }
+}
+
+// 传入 signal 时，停止后立即结束等待并抛出 RunStoppedError
+function sleep(ms, signal) {
+  if (!signal) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new RunStoppedError());
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new RunStoppedError());
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function randomBetween(min, max) {
@@ -48,9 +80,11 @@ async function waitForAnyXpath(driver, xpaths, timeoutMs, pollMs = 500) {
 }
 
 module.exports = {
+  RunStoppedError,
   findElementsWithin,
   randomBetween,
   sleep,
+  throwIfStopped,
   toBy,
   waitForAnyXpath,
   xpathsExist,

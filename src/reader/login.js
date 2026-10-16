@@ -1,7 +1,7 @@
 const fs = require("fs");
 const { By, until } = require("selenium-webdriver");
 const { writeFileAtomic } = require("../shared/files");
-const { findElementsWithin, sleep, toBy, waitForAnyXpath, xpathsExist } = require("./dom");
+const { findElementsWithin, sleep, throwIfStopped, toBy, waitForAnyXpath, xpathsExist } = require("./dom");
 const { ensureDir } = require("./paths");
 const { formatDuration } = require("./timing");
 const {
@@ -77,7 +77,7 @@ async function findQRCodeElement(driver) {
   }
 }
 
-// 从页面二维码图片中解码登录链接，在终端显示为二维码并推送
+// 从页面二维码图片中解码登录链接，在终端显示为二维码并推送；返回登录链接，解析失败时返回 null
 async function extractAndDisplayQRCode(driver, ctx) {
   try {
     const qrImg = await driver.findElement(By.xpath(XPATH.qrImage));
@@ -92,8 +92,11 @@ async function extractAndDisplayQRCode(driver, ctx) {
 
     if (code && code.data) {
       console.info("登录链接:", code.data);
-      const qrcode = require("qrcode-terminal");
-      qrcode.generate(code.data, { small: true });
+      // 由面板运行时二维码显示在面板页面上，不在日志中打印
+      if (ctx.terminalQr) {
+        const qrcode = require("qrcode-terminal");
+        qrcode.generate(code.data, { small: true });
+      }
       await ctx.notifier.loginLink(code.data, ctx.paths.loginQrImage);
       return code.data;
     }
@@ -112,7 +115,9 @@ async function captureQRCode(driver, ctx) {
   const image = await driver.takeScreenshot();
   fs.writeFileSync(ctx.paths.loginQrCode, image, "base64");
   console.info("QR code saved, datetime: ", new Date());
-  await extractAndDisplayQRCode(driver, ctx);
+  const url = await extractAndDisplayQRCode(driver, ctx);
+  // 解析不出链接时也上报，面板据此显示“等待扫码”
+  ctx.report("login-required", { url: url || "" });
 }
 
 // 点击首页的“登录”打开二维码弹窗；返回是否找到二维码
@@ -257,13 +262,14 @@ async function login(driver, ctx) {
   const deadline = Date.now() + timing.loginTimeoutMs;
   console.info("Waiting for login...");
   while (Date.now() < deadline) {
+    throwIfStopped(ctx.signal);
     let state;
     try {
       state = await xpathsExist(driver, [XPATH.shelfLink, XPATH.qrExpiredOverlay, XPATH.qrExpiredText]);
     } catch (e) {
       // 扫码成功后页面会跳转，跳转过程中执行脚本可能失败，稍后再查
       console.debug("检查登录状态失败，稍后重试:", e.message);
-      await sleep(timing.loginPollMs);
+      await sleep(timing.loginPollMs, ctx.signal);
       continue;
     }
     const [loggedIn, overlayShown, expiredTextShown] = state;
@@ -286,7 +292,7 @@ async function login(driver, ctx) {
       continue;
     }
 
-    await sleep(timing.loginPollMs);
+    await sleep(timing.loginPollMs, ctx.signal);
   }
 
   console.error(`等待扫码超时（${formatDuration(timing.loginTimeoutMs)}）`);

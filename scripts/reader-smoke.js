@@ -4,16 +4,18 @@
  *
  * 用本地模拟页面（scripts/fixtures/mock-weread.js）驱动真实浏览器跑完整的 runOnce，
  * 覆盖扫码登录、二维码过期刷新、等待超时、cookies 损坏、选书、翻章、读完回到目录、白屏刷新等分支，
- * 并检查阅读循环的翻动节奏是否符合配置。不访问微信读书。
+ * 并检查阅读循环的翻动节奏是否符合配置；再以面板的方式启动阅读子进程（src/reader/worker.js），
+ * 检查经 IPC 上报的事件，以及收到 SIGTERM 后关闭浏览器。不访问微信读书。
  *
  * 用法: SELENIUM_URL=http://localhost:4444 node scripts/reader-smoke.js
- *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / timeout / corrupt / reading / single）。
+ *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / timeout / corrupt / reading / single / worker / worker-stop）。
  *   SELENIUM_URL 默认 http://localhost:4444，也可以直接指向 chromedriver（如 http://localhost:9515）。
  *   浏览器需要能访问本机的模拟服务；Selenium 跑在容器里时用 --network host 启动，
  *   或通过 MOCK_HOST 指定浏览器访问本机时使用的地址。
  */
 
 const assert = require("assert");
+const { fork } = require("child_process");
 const fs = require("fs");
 const http = require("http");
 const os = require("os");
@@ -23,6 +25,7 @@ const { resolveConfig } = require(path.resolve(__dirname, "..", "src", "config",
 const { runOnce } = require(path.resolve(__dirname, "..", "src", "reader", "run"));
 const { startMockWeread } = require("./fixtures/mock-weread");
 
+const WORKER_PATH = path.resolve(__dirname, "..", "src", "reader", "worker.js");
 const SELENIUM_URL = process.env.SELENIUM_URL || "http://localhost:4444";
 const ONLY = process.env.READER_SMOKE_ONLY || "";
 
@@ -72,6 +75,36 @@ async function withCapturedConsole(fn) {
 
 function countEvents(events, type) {
   return events.filter((event) => event.type === type).length;
+}
+
+async function until(check, timeoutMs, message) {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) {
+      throw new Error(message);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+// 与面板相同的方式启动阅读子进程：经 IPC 下发配置，收集上报的事件与标准输出
+function startWorker(message) {
+  const child = fork(WORKER_PATH, [], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
+  const reported = [];
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { output += chunk; });
+  child.on("message", (event) => reported.push(event));
+  const exited = new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal })));
+  child.send({ type: "start", ...message });
+  return { child, reported, exited, output: () => output };
+}
+
+// 会话被删除后，WebDriver 对该会话的请求返回 invalid session id
+async function sessionClosed(sessionId) {
+  const res = await fetch(`${SELENIUM_URL.replace(/\/+$/, "")}/session/${sessionId}/url`);
+  const body = await res.json().catch(() => ({}));
+  return res.status === 404 && body.value && body.value.error === "invalid session id";
 }
 
 async function main() {
@@ -192,6 +225,95 @@ async function main() {
         assert.ok(events.some((event) => event.type === "chapter" && event.ch === "0"), "应点击目录中唯一的条目");
         assert.ok(fs.existsSync(path.join(dataDir, "screenshot-1.png")));
         assert.ok(countEvents(events, "reload") >= 1, "白屏截图后应刷新页面");
+      },
+    });
+
+    // 以下两个场景以子进程方式运行，不经过 runOnce 的场景封装
+    const workerScenario = async (title, { name, site, values = () => ({}), mode = "read", timing, run }) => {
+      if (ONLY && ONLY !== name) {
+        return;
+      }
+      const homeUrl = mock.addScenario(name, site);
+      const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `reader-smoke-${name}-`));
+      ntfy.requests.length = 0;
+      const config = resolveConfig({
+        seleniumUrl: SELENIUM_URL,
+        dataDir,
+        ntfyTopic: "reader_smoke",
+        ntfyServer: ntfy.baseUrl,
+        screenshot: false,
+        accountName: "子进程",
+        ...values(homeUrl),
+      });
+      const startedAt = Date.now();
+      const worker = startWorker({ mode, config, homeUrl, timing: { ...FAST_TIMING, ...timing } });
+      let note;
+      try {
+        note = await run({ worker, events: mock.events(name), pushes: ntfy.requests, dataDir });
+      } catch (error) {
+        worker.child.kill("SIGKILL");
+        error.capturedLogs = [worker.output()];
+        throw error;
+      }
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      results.push(title);
+      const seconds = Math.round((Date.now() - startedAt) / 1000);
+      console.log(`✅ ${title}（${seconds} 秒${note ? `，${note}` : ""}）`);
+    };
+
+    await workerScenario("阅读子进程：经 IPC 接收配置，按顺序上报登录、选书、进度与完成事件", {
+      name: "worker",
+      site: { qrExpireMs: 60000, scanOnQr: 1, scanDelayMs: 6000, chapters: 3, contentHeight: 1800 },
+      values: (homeUrl) => ({ selection: -1, bookUrl: `${homeUrl}reader?book=1&ch=1`, screenshot: true }),
+      timing: { loginTimeoutMs: 30000, durationMs: 9000, minuteMs: 3000, pressIntervalMs: [300, 500] },
+      async run({ worker, dataDir }) {
+        const { code, signal } = await worker.exited;
+        assert.deepStrictEqual({ code, signal }, { code: 0, signal: null });
+        const names = worker.reported.map((event) => event.event);
+        const order = ["started", "session", "login-required", "login-ok", "book-opened", "reading-minute", "done"];
+        assert.deepStrictEqual(names.filter((name, i) => name !== names[i - 1]), order);
+        const byName = (name) => worker.reported.find((event) => event.event === name).data;
+        assert.strictEqual(byName("login-required").url, mock.loginUrlFor("worker", 1));
+        assert.strictEqual(byName("book-opened").title, "Mock Book 1");
+        const minutes = worker.reported.filter((event) => event.event === "reading-minute").map((event) => event.data);
+        // 9 秒、每“分钟” 3 秒：第 3 次可能正好落在结束时刻
+        assert.ok(minutes.length >= 2 && minutes.every((data, i) => data.minute === i + 1), "阅读进度应逐分钟上报");
+        assert.ok(minutes.every((data) => data.total === 3));
+        assert.strictEqual(minutes[0].screenshot, "screenshot-1.png");
+        assert.ok(fs.existsSync(path.join(dataDir, "screenshot-1.png")));
+        assert.ok(await sessionClosed(byName("session").sessionId), "运行结束后应关闭浏览器会话");
+        const output = worker.output();
+        assert.match(output, /^\[INFO\]\[[^\]]+\]: /m, "日志应带级别与时间");
+        assert.match(output, /Run finished: success/);
+        assert.ok(!/[▄▀█]/.test(output), "由面板运行时不在日志中打印二维码");
+      },
+    });
+
+    await workerScenario("阅读子进程：收到 SIGTERM 后关闭浏览器并退出，不上报失败、不发送失败通知", {
+      name: "worker-stop",
+      site: { loggedIn: true, chapters: 3, contentHeight: 1800 },
+      timing: { durationMs: 120000, minuteMs: 2000, pressIntervalMs: [8000, 10000] },
+      async run({ worker, pushes }) {
+        await until(() => worker.reported.some((event) => event.event === "reading-minute"), 30000, "没有开始阅读");
+        // 等这一轮的页面操作做完，在两次翻动之间的等待中停止
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const stopAt = Date.now();
+        worker.child.kill("SIGTERM");
+        const { code, signal } = await worker.exited;
+        const seconds = (Date.now() - stopAt) / 1000;
+        assert.deepStrictEqual({ code, signal }, { code: 0, signal: null });
+        // 翻动间隔为 8–10 秒，停止应打断等待而不是等到下一轮
+        assert.ok(seconds < 4, `从 SIGTERM 到退出用了 ${seconds} 秒`);
+        const names = worker.reported.map((event) => event.event);
+        assert.ok(!names.includes("error") && !names.includes("done"), `不应上报结果：${names.join(",")}`);
+        const { sessionId } = worker.reported.find((event) => event.event === "session").data;
+        assert.ok(await sessionClosed(sessionId), "停止后应关闭浏览器会话");
+        const output = worker.output();
+        assert.match(output, /收到 SIGTERM，停止运行/);
+        assert.match(output, /Browser closed\./);
+        assert.match(output, /Run finished: stopped/);
+        assert.ok(!pushes.some((push) => push.title.endsWith("运行失败")), "停止不应发送失败通知");
+        return `${seconds.toFixed(1)} 秒内退出`;
       },
     });
 

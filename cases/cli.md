@@ -14,6 +14,7 @@
 | 账号不存在 | 执行 `node src/cli.js run --account nobody` | 报错 `账号不存在：nobody`，退出码 1 |
 | 账号已停用 | 账号 `off` 在面板中已停用，执行 `node src/cli.js run --account off` | 报错 `账号已停用：off，请先在面板中启用`，退出码 1，不连接浏览器 |
 | 仅登录 | 执行 `node src/cli.js run --login-only` | 登录并保存 `cookies.json` 后结束，不打开书籍；成功时退出码 0 |
+| 停止 | `run --login-only` 等待扫码时发送 SIGTERM（或按 Ctrl+C） | 日志出现 `收到 SIGTERM，正在停止...`、`Browser closed.`、`Run finished: stopped`，约 0.1 秒内以退出码 1 退出，不推送「运行失败」 |
 | 退出码 | 不扫码，`WEREAD_LOGIN_TIMEOUT=2` 执行 `run` | 约 2 分钟后日志出现 `等待扫码超时（2 分钟）`、`Run finished: login-timeout`，退出码 1 |
 | 默认数据目录 | 不设置 `WEREAD_DATA_DIR` 执行 `run` | 产物写入当前目录下的 `data/` |
 | 镜像默认命令 | 执行 `docker run -d -p 127.0.0.1:26868:26868 -v ./data:/app/data <镜像>` | 启动面板，`panel.json` 写入宿主机 `./data`；按环境变量阅读时需显式执行 `node src/cli.js run` |

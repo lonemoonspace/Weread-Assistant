@@ -56,7 +56,7 @@ flowchart LR
 | `src/cli.js` | 唯一入口：`panel`（默认）启动面板；`run --account <id>` 按面板配置单次运行一个账号，用于调试 | 镜像 `CMD` 为 `panel` |
 | `src/config/schema.js` | 配置项清单：中文名称、分组、类型、可选值、默认值、是否密钥 | 面板表单与配置校验都由它生成 |
 | `src/config/resolve.js` | 默认值 + 全局配置 + 账号覆盖 → 本次运行的配置对象 | 返回不可变对象，替代上游的模块级可变变量 |
-| `src/reader/worker.js` | 阅读子进程入口：接收配置、执行一次阅读、上报事件、处理停止信号 | 只由面板 fork 或 `run --account` 调用 |
+| `src/reader/worker.js` | 阅读子进程入口：接收配置、执行一次阅读、上报事件、处理停止信号 | 只由面板 fork；`run --account` 在进程内直接调用 `run.js` |
 | `src/reader/run.js` | 单次运行编排：连接浏览器、登录、选书、阅读，并在各阶段发送通知 | 由 `worker.js` 调用，不直接退出进程 |
 | `src/reader/browser.js` | 连接 Selenium、设置超时、退出时清理会话 | 只连远程 Chromium |
 | `src/reader/login.js` | 登录检测、二维码解析与刷新、cookies 读写 | cookies 原子写入，损坏时转入扫码 |
@@ -79,7 +79,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | `started` | 子进程开始 | `version` | 运行状态 → 启动中 |
 | `session` | WebDriver 会话建立后 | `sessionId` | 强制停止时清理 Selenium 会话 |
-| `login-required` | 解出登录链接（含二维码刷新后） | `url` | 页面显示二维码，状态 → 等待扫码 |
+| `login-required` | 截取二维码后（含二维码刷新后） | `url`（解析失败时为空） | 页面显示二维码，状态 → 等待扫码 |
 | `login-ok` | 登录成功 | - | 隐藏二维码 |
 | `login-timeout` | 等待扫码超过设定时长 | - | 运行结果 → 失败（等待扫码超时） |
 | `book-opened` | 打开书籍并切换到滚动模式后 | `title` | 显示"正在读《书名》" |
@@ -284,6 +284,7 @@ services:
   assistant:
     image: lonemoonspace/weread-assistant:latest
     restart: unless-stopped
+    stop_grace_period: 30s     # 停止时先结束进行中的阅读
     ports:
       - "127.0.0.1:26868:26868"
     environment:

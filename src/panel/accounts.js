@@ -81,19 +81,27 @@ async function updateAccount(store, id, body = {}) {
   return findAccount(data, id);
 }
 
-// 默认只从面板移除账号、保留数据目录；deleteData 为 true 时一并删除 cookies、截图等数据
-async function deleteAccount(store, panelDataDir, id, { deleteData = false } = {}) {
+// 默认只从面板移除账号、保留数据目录；deleteData 为 true 时一并删除 cookies、截图与运行记录。
+// isBusy(id) 为 true（账号正在运行或排队）时拒绝删除
+async function deleteAccount(store, panelDataDir, id, { deleteData = false, isBusy = () => false } = {}) {
   await store.update((draft) => {
     findAccount(draft, id);
+    if (isBusy(id)) {
+      throw new PanelError(409, "account_busy", `账号正在运行或排队，请先停止：${id}`);
+    }
     draft.accounts = draft.accounts.filter((account) => account.id !== id);
   });
   if (deleteData) {
-    const accountsRoot = path.join(path.resolve(panelDataDir), "accounts");
-    const dir = accountDataDir(panelDataDir, id);
-    if (path.dirname(dir) !== accountsRoot) {
-      throw new PanelError(500, "invalid_account_dir", `拒绝删除账号目录之外的路径：${dir}`);
+    const root = path.resolve(panelDataDir);
+    for (const [parent, dir] of [
+      [path.join(root, "accounts"), accountDataDir(panelDataDir, id)],
+      [path.join(root, "runs"), path.join(root, "runs", id)],
+    ]) {
+      if (path.dirname(dir) !== parent) {
+        throw new PanelError(500, "invalid_account_dir", `拒绝删除账号目录之外的路径：${dir}`);
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
     }
-    fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
