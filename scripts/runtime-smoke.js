@@ -117,8 +117,14 @@ function runPanelSmoke(imageTag) {
     console.log(`Smoke passed: panel is healthy, runs as node, owns its data and stops in ${stopMs}ms.`);
   } finally {
     spawnSync('docker', ['rm', '-f', container], { stdio: 'pipe' });
-    // 容器内创建的文件属于 node 用户，用容器清理
-    spawnSync('docker', ['run', '--rm', '--entrypoint', 'rm', '-v', `${dataDir}:/data`, imageTag, '-rf', '/data/panel.json', '/data/panel.log'], { stdio: 'pipe' });
+    // 入口脚本把数据目录及其中的文件改为容器内 node 用户所有；以非 root 用户运行时（如 CI）
+    // 当前用户无权删除，先在容器中（root）改回当前用户所有再删除
+    if (typeof process.getuid === 'function') {
+      spawnSync('docker', [
+        'run', '--rm', '--entrypoint', 'chown', '-v', `${dataDir}:/data`, imageTag,
+        '-R', `${process.getuid()}:${process.getgid()}`, '/data',
+      ], { stdio: 'pipe' });
+    }
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 }
