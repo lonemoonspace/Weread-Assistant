@@ -28,6 +28,7 @@ flowchart TD
 | --- | --- |
 | 验证边界 | 只验证镜像入口与面板启动，不做真实登录、扫码或阅读 |
 | 容器来源 | 默认基于当前工作树里的 `Dockerfile` 本地构建；设置 `RUNTIME_SMOKE_IMAGE` 时直接使用该镜像，结束后不删除 |
+| 架构 | 设置 `RUNTIME_SMOKE_ARCH`（如 `arm64`）时，镜像的架构与容器内 Node.js 报告的架构都必须与之一致（Node.js 把 amd64 报告为 `x64`）；CI 在 QEMU 中运行 arm64 镜像时用它确认检查的确实是发布的架构 |
 | 校验关键字 | 帮助输出需包含 `src/cli.js run`、`help`、`SELENIUM_URL` 与 `PANEL_PORT` |
 | 健康检查 | 运行时把检查间隔缩短为 2 秒，60 秒内需变为 `healthy` |
 | 运行用户 | 1 号进程属于 `node`；`/app/data/panel.json` 属于 `node` 且权限为 600 |

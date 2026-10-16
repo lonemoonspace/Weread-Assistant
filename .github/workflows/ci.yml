@@ -1,0 +1,125 @@
+# Pull Request 与 main 分支的检查：自查、各项 smoke、依赖安全检查与镜像运行检查。
+# 第三方 Action 按提交固定版本，升级时同时更新注释中的版本号
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  checks:
+    name: 自查与 smoke（通知、配置、面板）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: 自查（语法、第三方文件校验值、页面约定）
+        run: npm run check
+      - name: 检查 docker-compose.yml
+        run: docker compose config --quiet
+      - run: npm run test:notify
+      - run: npm run test:config
+      - run: npm run test:panel
+
+  audit:
+    name: 依赖安全检查
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: 镜像中安装的依赖没有高危漏洞
+        run: npm audit --omit=dev --audit-level=high
+
+  browser:
+    name: 阅读流程与页面（Selenium）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # 与部署相同的 Selenium 镜像；使用主机网络，容器中的浏览器才能访问本机的模拟页面与面板
+      - name: 启动 Selenium
+        run: |
+          docker run -d --name selenium --network host --shm-size 2g selenium/standalone-chromium:latest
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:4444/status | grep -q '"ready": *true'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs selenium
+          exit 1
+      - name: 阅读流程 smoke（本地模拟页面）
+        run: npm run test:reader
+        env:
+          SELENIUM_URL: http://localhost:4444
+      - name: 页面 smoke
+        run: npm run test:ui
+        env:
+          SELENIUM_URL: http://localhost:4444
+          UI_SMOKE_SCREENSHOTS: ${{ runner.temp }}/ui-smoke
+      - name: 上传页面截图
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-smoke-screenshots
+          path: ${{ runner.temp }}/ui-smoke
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Selenium 日志
+        if: failure()
+        run: docker logs selenium
+
+  # 只发布 linux/arm64：在 QEMU 模拟的 arm64 环境中构建并运行与发布相同的镜像
+  image:
+    name: arm64 镜像构建与运行检查
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: 构建 arm64 镜像
+        run: node scripts/docker-image.js build --platform linux/arm64 --tag ci
+      - name: 检查 CLI、健康检查、运行用户、数据目录与停止
+        run: npm run test:runtime
+        env:
+          RUNTIME_SMOKE_IMAGE: docker.io/lonemoonspace/weread-assistant:ci
+          RUNTIME_SMOKE_ARCH: arm64

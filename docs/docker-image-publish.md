@@ -56,3 +56,23 @@ flowchart TD
 | check 不要求 buildx | `check` 只解析与校验配置，不执行构建，因此不会因为环境缺少 buildx 插件而失败 |
 | build 仅单平台 | `build` 使用 `--load`，多平台无法载入本地镜像，直接报错并提示改用 `push` |
 | 平台串归一化 | `--platform` 会去空白并去重后再转发；`buildx` 不会 trim，`containerd` 也会拒绝空白，原样转发只会在 buildx 内部才失败 |
+| 镜像标签 | 名称、说明、源码地址与许可写在 `Dockerfile` 的 `LABEL` 中；`build` 与 `push` 另加 `org.opencontainers.image.version`（主 tag）与 `org.opencontainers.image.revision`（`DOCKER_REVISION`，未设置时取当前提交，没有 git 时省略） |
+
+### 自动发布
+
+`.github/workflows/release.yml` 在 GitHub Actions 中调用本脚本发布，不需要在本机推送：
+
+| 触发 | 发布的 tag | 说明 |
+| --- | --- | --- |
+| `main` 分支的 CI 通过 | `dev` | 只处理本仓库 main 分支推送后的 CI，Pull Request 触发的 CI 不发布；构建的是 CI 通过的那个提交 |
+| 推送版本 tag，如 `v0.1.0` | `0.1.0`、`latest` | tag 必须与 `package.json` 的 `version` 一致；同时用 `CHANGELOG.md` 中该版本的一节创建 GitHub Release |
+| 手动运行（workflow_dispatch） | 在 `main` 上为 `dev`，在版本 tag 上为对应版本 | 其他分支拒绝发布 |
+
+每次发布前先用 QEMU 构建 `linux/arm64` 镜像并运行 `scripts/runtime-smoke.js`（`RUNTIME_SMOKE_ARCH=arm64`），通过后再登录 Docker Hub 推送。需要在仓库 Settings → Secrets and variables → Actions 中添加 `DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN`（Docker Hub 的 Personal access token，权限 Read & Write），缺少时发布在构建前失败并提示。
+
+发布新版本：修改 `package.json` 的 `version`（并 `npm install --package-lock-only` 同步 lockfile），在 `CHANGELOG.md` 中加一节 `## <版本号>`，合并到 `main` 后执行：
+
+```bash
+git tag v0.1.0 origin/main
+git push origin v0.1.0
+```

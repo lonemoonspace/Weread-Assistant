@@ -2,15 +2,19 @@
 /**
  * 通知渠道 smoke 测试。
  *
- * 通过本地 mock HTTP 服务校验 Bark / ntfy 的实际请求负载，不访问外网、不需要真实密钥。
+ * 通过本地 mock HTTP 服务校验 Bark / ntfy 的实际请求负载，用本地 SMTP 服务校验邮件，不访问外网、不需要真实密钥。
  * 用法: node scripts/notify-smoke.js
  */
 
 const assert = require("assert");
+const fs = require("fs");
 const http = require("http");
+const net = require("net");
+const os = require("os");
 const path = require("path");
+const { PNG } = require("pngjs");
 
-const { createNotifier, notify, sendBark, sendNtfy } = require(path.resolve(__dirname, "..", "src", "notify"));
+const { createNotifier, notify, sendBark, sendNtfy, sendTestNotification } = require(path.resolve(__dirname, "..", "src", "notify"));
 const { resolveConfig } = require(path.resolve(__dirname, "..", "src", "config", "resolve"));
 
 function startMockServer() {
@@ -41,6 +45,88 @@ function startMockServer() {
       });
     });
   });
+}
+
+// 最简单的 SMTP 服务（不支持 TLS）：记录认证信息、发件人、收件人与邮件原文；rejectAuth 为 true 时拒绝认证
+function startMockSmtp() {
+  const messages = [];
+  const state = { rejectAuth: false };
+  const server = net.createServer((socket) => {
+    let buffer = "";
+    let inData = false;
+    let current = { auth: "", from: "", to: [], data: "" };
+    const reply = (line) => socket.write(`${line}\r\n`);
+    reply("220 mock-smtp ESMTP");
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString("latin1");
+      for (;;) {
+        if (inData) {
+          const end = buffer.indexOf("\r\n.\r\n");
+          if (end === -1) {
+            return;
+          }
+          messages.push({ ...current, data: buffer.slice(0, end) });
+          buffer = buffer.slice(end + 5);
+          inData = false;
+          current = { auth: current.auth, from: "", to: [], data: "" };
+          reply("250 OK queued");
+          continue;
+        }
+        const end = buffer.indexOf("\r\n");
+        if (end === -1) {
+          return;
+        }
+        const line = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        const command = line.split(" ")[0].toUpperCase();
+        if (command === "EHLO") {
+          socket.write("250-mock-smtp\r\n250-AUTH PLAIN LOGIN\r\n250 8BITMIME\r\n");
+        } else if (command === "AUTH") {
+          current.auth = line.slice(5);
+          reply(state.rejectAuth ? "535 5.7.8 Authentication credentials invalid" : "235 Authentication successful");
+        } else if (command === "MAIL") {
+          current.from = line;
+          reply("250 OK");
+        } else if (command === "RCPT") {
+          current.to.push(line);
+          reply("250 OK");
+        } else if (command === "DATA") {
+          inData = true;
+          reply("354 End data with <CR><LF>.<CR><LF>");
+        } else if (command === "QUIT") {
+          reply("221 Bye");
+          socket.end();
+        } else {
+          reply("250 OK");
+        }
+      }
+    });
+    socket.on("error", () => {});
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolve({
+        messages,
+        state,
+        port: server.address().port,
+        close: () => new Promise((done) => server.close(done)),
+      });
+    });
+  });
+}
+
+// 解码邮件头中的 =?UTF-8?B?...?= / =?UTF-8?Q?...?=
+function decodeHeader(value) {
+  return value.replace(/\?=\s+=\?/g, "?==?").replace(/=\?UTF-8\?([BQ])\?([^?]*)\?=/gi, (_, encoding, text) =>
+    encoding.toUpperCase() === "B"
+      ? Buffer.from(text, "base64").toString("utf8")
+      : Buffer.from(text.replace(/_/g, " ").replace(/=([0-9A-F]{2})/gi, (__, hex) => String.fromCharCode(parseInt(hex, 16))), "latin1").toString("utf8")
+  );
+}
+
+function mailHeader(data, name) {
+  const match = data.match(new RegExp(`^${name}: ((?:.*)(?:\r\n[ \t].*)*)`, "mi"));
+  return match ? decodeHeader(match[1].replace(/\r\n[ \t]/g, " ")) : "";
 }
 
 async function withQuietConsole(fn) {
@@ -329,6 +415,49 @@ async function main() {
       await custom.event("done", "阅读完成");
       assert.strictEqual(mock.requests.length, 3);
       assert.strictEqual(parseBody(mock.requests[2]).title, "WeReadAssistant · 开始运行");
+    });
+
+    await scenario("邮件：经 SMTP 认证后发送，主题带账号名与版本，截图作为内嵌附件；测试通知返回成功；认证失败、无法连接时返回失败，日志中不出现密码", async (logs) => {
+      const smtp = await startMockSmtp();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "notify-smoke-"));
+      try {
+        const screenshot = path.join(dir, "screenshot-1.png");
+        fs.writeFileSync(screenshot, PNG.sync.write(new PNG({ width: 4, height: 4 })));
+        const emailConfig = {
+          accountName: "小明",
+          emailEnabled: "true",
+          emailSmtp: "127.0.0.1",
+          emailPort: smtp.port,
+          emailUser: "reader@example.com",
+          emailPass: "smtp-pass-123",
+          emailTo: "me@example.com",
+        };
+        config = resolveConfig(emailConfig);
+        await createNotifier(config).event("done", "阅读完成，共 68 分钟", { attachments: [screenshot] });
+        assert.strictEqual(smtp.messages.length, 1);
+        const [message] = smtp.messages;
+        assert.strictEqual(Buffer.from(message.auth.replace(/^PLAIN /, ""), "base64").toString(), "\0reader@example.com\0smtp-pass-123");
+        assert.match(message.from, /^MAIL FROM:<reader@example\.com>/);
+        assert.deepStrictEqual(message.to, ["RCPT TO:<me@example.com>"]);
+        assert.match(mailHeader(message.data, "Subject"), /^WeReadAssistant · 小明 · 阅读完成 \[v\d+\.\d+\.\d+\]$/);
+        assert.match(message.data, /Content-Type: image\/png;\s+name=screenshot-1\.png/);
+        assert.match(message.data, /Content-ID: <screenshot-1\.png>/);
+        assert.match(message.data, /Content-Type: text\/html/);
+
+        const results = await sendTestNotification(config);
+        assert.deepStrictEqual(results, [{ channel: "email", ok: true }]);
+        assert.match(mailHeader(smtp.messages[1].data, "Subject"), /^WeReadAssistant · 小明 · 测试通知/);
+
+        smtp.state.rejectAuth = true;
+        assert.deepStrictEqual(await sendTestNotification(config), [{ channel: "email", ok: false }], "认证失败");
+        await smtp.close();
+        assert.deepStrictEqual(await sendTestNotification(config), [{ channel: "email", ok: false }], "无法连接");
+        const credentials = Buffer.from("\0reader@example.com\0smtp-pass-123").toString("base64");
+        assert.ok(!logs.some((line) => line.includes("smtp-pass-123") || line.includes(credentials)), "日志中不应出现邮箱密码");
+      } finally {
+        await smtp.close().catch(() => {});
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     console.log(`\n通知 smoke 全部通过（${results.length} 个场景）`);

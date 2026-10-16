@@ -182,6 +182,16 @@ function ensureBuildxAvailable() {
   }
 }
 
+// The commit the image is built from, recorded as an OCI label: DOCKER_REVISION when
+// set, otherwise the checked-out commit; left out when git is unavailable.
+function resolveRevision() {
+  if (process.env.DOCKER_REVISION) {
+    return process.env.DOCKER_REVISION;
+  }
+  const result = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8', stdio: 'pipe' });
+  return result.status === 0 ? result.stdout.trim() : '';
+}
+
 function buildxCommandArgs(config) {
   const args = ['buildx', 'build'];
   // Forward the normalised list: buildx splits on "," without trimming and
@@ -194,6 +204,10 @@ function buildxCommandArgs(config) {
   config.buildTags.forEach((tag) => {
     args.push('-t', `${config.image}:${tag}`);
   });
+  args.push('--label', `org.opencontainers.image.version=${config.tag}`);
+  if (config.revision) {
+    args.push('--label', `org.opencontainers.image.revision=${config.revision}`);
+  }
   // Every tag is published from this one invocation, so all tags always carry
   // the same image rather than being pushed separately.
   args.push(config.command === 'push' ? '--push' : '--load');
@@ -269,6 +283,7 @@ function main() {
     return;
   }
 
+  config.revision = resolveRevision();
   const buildArgs = buildxCommandArgs(config);
   console.log(`running: docker ${buildArgs.join(' ')}`);
   runCommand('docker', buildArgs);

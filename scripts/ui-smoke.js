@@ -496,19 +496,23 @@ async function mobile(env, h, driver, results) {
 async function main() {
   const env = await startSeededPanel();
   const results = [];
-  const drivers = [];
+  let driver = null;
   try {
+    // 桌面与手机依次进行，同一时间只占用一个浏览器会话（Selenium 默认只有 1 个会话）
     for (const [run, options, prefix] of [
       [desktop, {}, "d"],
       [mobile, { mobile: true }, ""],
     ]) {
-      const driver = await createDriver(options);
-      drivers.push(driver);
+      driver = await createDriver(options);
       await run(env, helpers(driver, prefix), driver, results);
+      await driver.quit();
+      driver = null;
     }
     console.log(`\n页面 smoke 全部通过（${results.length} 项）。截图：${SHOTS}`);
   } finally {
-    await Promise.all(drivers.map((driver) => driver.quit().catch(() => {})));
+    if (driver) {
+      await driver.quit().catch(() => {});
+    }
     await env.panel.close();
     await env.selenium.stop();
     fs.rmSync(env.dataDir, { recursive: true, force: true });

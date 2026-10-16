@@ -1,6 +1,6 @@
 ## 面板页面验收用例
 
-`scripts/ui-smoke.js` 启动面板（用桩子进程 `scripts/fixtures/stub-worker.js` 代替阅读子进程，Selenium 地址指向模拟的 Selenium `scripts/fixtures/mock-selenium.js`，预先写入本月的运行记录、调度规则与月卡挑战），用浏览器走通各页面并截图，不访问微信读书。执行方式：`SELENIUM_URL=<Selenium 或 chromedriver 地址> npm run test:ui`，截图目录见输出。
+`scripts/ui-smoke.js` 启动面板（用桩子进程 `scripts/fixtures/stub-worker.js` 代替阅读子进程，Selenium 地址指向模拟的 Selenium `scripts/fixtures/mock-selenium.js`，预先写入本月的运行记录、调度规则与月卡挑战），用浏览器走通各页面并截图，不访问微信读书。桌面与手机宽度依次进行，同一时间只占用一个浏览器会话，Selenium 默认的 1 个会话即可。执行方式：`SELENIUM_URL=<Selenium 或 chromedriver 地址> npm run test:ui`，截图目录见输出。
 
 | 场景 | 操作 | 预期结果 |
 | --- | --- | --- |

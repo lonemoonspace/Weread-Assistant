@@ -1,6 +1,6 @@
 ## 自动阅读流程验收用例
 
-`scripts/reader-smoke.js` 用本地模拟页面驱动真实浏览器运行 `runOnce`，并以面板的方式启动阅读子进程，不访问微信读书。执行方式：`SELENIUM_URL=<Selenium 或 chromedriver 地址> npm run test:reader`。
+`scripts/reader-smoke.js` 用本地模拟页面驱动真实浏览器运行 `runOnce`，并以面板的方式启动阅读子进程，不访问微信读书（书架中找不到书时打开的默认阅读链接也指向模拟页面）。执行方式：`SELENIUM_URL=<Selenium 或 chromedriver 地址> npm run test:reader`。
 
 | 场景 | 前置条件 / 输入 | 预期结果 |
 | --- | --- | --- |
