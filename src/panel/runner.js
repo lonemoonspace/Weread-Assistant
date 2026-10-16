@@ -24,9 +24,31 @@ const RUN_MODES = ["read", "login"];
 const MODE_LABELS = { read: "阅读", login: "仅登录" };
 const TRIGGER_LABELS = { manual: "手动", schedule: "定时" };
 
-// 子进程的环境变量中去掉 PANEL_*（其中有面板密码）；运行配置经 IPC 下发
+// 子进程只继承运行 Node 与联网所需的环境变量（白名单，另加 LC_*）。运行配置与密钥经 IPC 下发，
+// 面板所在环境中的 PANEL_PASSWORD、BARK_KEY、EMAIL_PASS 等变量都不会传给子进程
+const CHILD_ENV_KEYS = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "TZ",
+  "TMPDIR",
+  "LANG",
+  "LANGUAGE",
+  "NODE_OPTIONS",
+  "NODE_EXTRA_CA_CERTS",
+  "NODE_USE_ENV_PROXY",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+]);
+
 function childEnv() {
-  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("PANEL_")));
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => CHILD_ENV_KEYS.has(key) || key.startsWith("LC_"))
+  );
 }
 
 function publicRun(run, { withLog = false } = {}) {
@@ -464,6 +486,7 @@ function createRunner({
 }
 
 module.exports = {
+  CHILD_ENV_KEYS,
   KILL_TIMEOUT_MS,
   createRunner,
 };

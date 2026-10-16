@@ -42,7 +42,7 @@ process.once("message", async ({ mode, config }) => {
   }
 
   log(`mode=${mode} account=${config.accountName} dataDir=${config.dataDir}`);
-  log(`PANEL_* 环境变量: [${Object.keys(process.env).filter((key) => key.startsWith("PANEL_")).join(",")}]`);
+  log(`环境变量: ${JSON.stringify(Object.keys(process.env).sort())}`);
   log(`barkKey 已下发: ${Boolean(config.barkKey)}`);
   send("started", { version: "stub" });
   await sleep(50);

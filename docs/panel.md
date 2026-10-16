@@ -77,7 +77,9 @@ docker compose logs app | grep 面板初始密码
 
 ### 运行队列
 
-每次运行（立即运行或仅登录，第 6 步起还有定时触发）都 fork 一个阅读子进程 `src/reader/worker.js`。子进程经 IPC 接收本次运行的配置（账号覆盖 > 全局默认 > 内置默认，在开始运行时合并），密钥不进入子进程的环境变量；子进程的环境变量中也去掉了 `PANEL_*`。
+每次运行（立即运行或仅登录，第 6 步起还有定时触发）都 fork 一个阅读子进程 `src/reader/worker.js`。子进程经 IPC 接收本次运行的配置（账号覆盖 > 全局默认 > 内置默认，在开始运行时合并），密钥不进入子进程的环境变量。
+
+子进程只继承以下环境变量（白名单）：`PATH`、`HOME`、`USER`、`TZ`、`TMPDIR`、`LANG`、`LANGUAGE`、`LC_*`、`NODE_OPTIONS`、`NODE_EXTRA_CA_CERTS`、`NODE_USE_ENV_PROXY`，以及 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`（含小写形式）。面板所在环境中的其他变量都不会传给子进程，包括 `PANEL_PASSWORD`，以及 `BARK_KEY`、`EMAIL_PASS` 等按环境变量运行时使用的配置。
 
 | 状态 | 值 | 进入条件 |
 | --- | --- | --- |
@@ -121,7 +123,7 @@ docker compose logs app | grep 面板初始密码
 | `run` | 运行状态 | 任一运行的状态或进度变化 |
 | `log` | `{ runId, accountId, line }` | 运行日志新增一行 |
 
-响应头带 `Cache-Control: no-cache` 与 `X-Accel-Buffering: no`，`retry: 3000` 让浏览器断线 3 秒后重连。每 15 秒发送一次心跳注释，同时检查会话：退出登录、修改密码或会话过期后断开连接，长连接不会延长会话有效期。
+响应头带 `Cache-Control: no-cache` 与 `X-Accel-Buffering: no`，`retry: 3000` 让浏览器断线 3 秒后重连。退出登录、修改密码时立即断开相应会话的连接（修改密码会断开所有旧会话的连接）。每 15 秒发送一次心跳注释，同时检查会话是否过期，过期的连接在下一次心跳时断开。长连接不会延长会话有效期。
 
 ### 数据与配置
 

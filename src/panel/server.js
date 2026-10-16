@@ -324,7 +324,7 @@ function createPanelApp(options, { auth, store, runner }) {
   });
 
   // 实时推送（SSE）：连接后先发送一次完整状态 snapshot，之后推送运行状态变化 run 与新的日志行 log。
-  // 定期发送心跳注释，会话失效（退出登录、修改密码、过期）后断开
+  // 退出登录、修改密码时立即断开；定期发送心跳注释，同时检查会话是否过期
   api.get("/events", (req, res) => {
     res.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
@@ -338,21 +338,37 @@ function createPanelApp(options, { auth, store, runner }) {
         res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       }
     };
-    res.write("retry: 3000\n\n");
-    send("snapshot", { runs: runner.list({ withLog: true }) });
-    const unsubscribe = runner.subscribe(send);
-    const heartbeat = setInterval(() => {
-      if (!auth.isSessionValid(req.sessionToken)) {
+    let heartbeat = null;
+    let unsubscribe = () => {};
+    let unwatch = () => {};
+    const disconnect = () => {
+      if (open) {
         cleanup();
         res.end();
+      }
+    };
+    res.write("retry: 3000\n\n");
+    send("snapshot", { runs: runner.list({ withLog: true }) });
+    unsubscribe = runner.subscribe(send);
+    unwatch = auth.watchSession(req.sessionToken, disconnect);
+    if (!open) {
+      return;
+    }
+    heartbeat = setInterval(() => {
+      if (!auth.isSessionValid(req.sessionToken)) {
+        disconnect();
         return;
       }
       res.write(": ping\n\n");
     }, options.sseHeartbeatMs || SSE_HEARTBEAT_MS);
     function cleanup() {
+      if (!open) {
+        return;
+      }
       open = false;
       clearInterval(heartbeat);
       unsubscribe();
+      unwatch();
     }
     res.on("close", cleanup);
     res.on("error", cleanup);

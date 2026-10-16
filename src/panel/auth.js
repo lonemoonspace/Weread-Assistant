@@ -62,6 +62,8 @@ function hashToken(token) {
 function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
   const cfg = { ...DEFAULT_LIMITS, ...limits };
   const sessions = new Map();
+  // 令牌哈希 → 会话结束时的回调；供实时推送在退出登录、修改密码时立即断开
+  const sessionWatchers = new Map();
   const attempts = new Map();
   let globalFailures = [];
   let globalLockedUntil = 0;
@@ -71,6 +73,22 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
 
   function currentHash() {
     return envPasswordHash || store.get().auth.passwordHash;
+  }
+
+  function endSession(key) {
+    sessions.delete(key);
+    const watchers = sessionWatchers.get(key);
+    if (!watchers) {
+      return;
+    }
+    sessionWatchers.delete(key);
+    for (const callback of watchers) {
+      try {
+        callback();
+      } catch (e) {
+        console.error("处理会话结束失败:", e);
+      }
+    }
   }
 
   function createSession() {
@@ -162,7 +180,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
       const session = sessions.get(key);
       const t = now();
       if (!session || session.expiresAt <= t) {
-        sessions.delete(key);
+        endSession(key);
         return null;
       }
       session.expiresAt = t + SESSION_TTL_MS;
@@ -182,9 +200,31 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
       return Boolean(session && session.expiresAt > now());
     },
 
+    // 会话结束（退出登录、修改密码、过期被发现）时调用 callback；返回取消监听的函数。
+    // 会话已经无效时立即调用
+    watchSession(token, callback) {
+      const key = hashToken(token || "");
+      if (!sessions.has(key)) {
+        callback();
+        return () => {};
+      }
+      let watchers = sessionWatchers.get(key);
+      if (!watchers) {
+        watchers = new Set();
+        sessionWatchers.set(key, watchers);
+      }
+      watchers.add(callback);
+      return () => {
+        watchers.delete(callback);
+        if (watchers.size === 0 && sessionWatchers.get(key) === watchers) {
+          sessionWatchers.delete(key);
+        }
+      };
+    },
+
     destroySession(token) {
       if (token) {
-        sessions.delete(hashToken(token));
+        endSession(hashToken(token));
       }
     },
 
@@ -211,7 +251,9 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     await store.update((data) => {
       data.auth.passwordHash = passwordHash;
     });
-    sessions.clear();
+    for (const key of [...sessions.keys()]) {
+      endSession(key);
+    }
     return { ok: true, token: createSession() };
   }
 }
