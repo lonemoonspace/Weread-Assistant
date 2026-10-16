@@ -40,7 +40,7 @@ const SETTINGS_FIELDS = [
     key: "vncUrl",
     type: "string",
     label: "noVNC 地址",
-    description: "填写后在面板中显示查看实时浏览器画面的链接，留空则不显示。",
+    description: "填写后在总览与实时页面显示查看浏览器画面的链接，留空则不显示。",
     default: "",
   },
 ];

@@ -6,8 +6,9 @@
 # 安装依赖
 npm install
 
-# 启动 Selenium（Chromium 在容器中运行，7900 端口可用浏览器查看画面）
-docker run -d --name selenium -p 4444:4444 -p 7900:7900 --shm-size 2g selenium/standalone-chromium:latest
+# 启动 Selenium（Chromium 在容器中运行，http://localhost:7900/ 可查看画面，VNC 默认密码 secret；
+# 在面板设置中填写该地址后，总览会显示 noVNC 链接）
+docker run -d --name selenium -p 4444:4444 -p 127.0.0.1:7900:7900 --shm-size 2g selenium/standalone-chromium:latest
 
 # 启动面板（首次启动时在输出中打印初始密码），浏览器打开 http://localhost:26868/
 # SELENIUM_URL 只在首次启动时写入面板的全局配置，之后在面板中修改

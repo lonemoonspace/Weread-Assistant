@@ -312,6 +312,10 @@ services:
       - SE_ENABLE_TRACING=false
       - SE_BIND_HOST=false
       - SE_JAVA_DISABLE_HOSTNAME_VERIFICATION=false
+      # - SE_VNC_PASSWORD=change-me   # 开启 noVNC 时修改默认密码 secret
+      # - SE_VNC_VIEW_ONLY=1          # 只能看，不能操作
+    # ports:                          # noVNC，只映射到本机或可信局域网
+    #   - "127.0.0.1:7900:7900"
     dns:
       - 223.5.5.5
     healthcheck:

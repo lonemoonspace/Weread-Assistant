@@ -20,6 +20,7 @@ const chrome = require("selenium-webdriver/chrome");
 
 const { startPanel } = require(path.resolve(__dirname, "..", "src", "panel", "server"));
 const { dateInZone } = require(path.resolve(__dirname, "..", "src", "panel", "history"));
+const { startMockSelenium } = require("./fixtures/mock-selenium");
 const { minutesFrom, writeRun } = require("./fixtures/run-records");
 
 const SELENIUM_URL = process.env.SELENIUM_URL || "http://localhost:4444";
@@ -33,6 +34,8 @@ const NEW_PASSWORD = "new-password-123";
 
 async function startSeededPanel() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ui-smoke-data-"));
+  // 面板查询的 Selenium 状态来自模拟的 Selenium（运行使用桩子进程，不连接它）
+  const selenium = await startMockSelenium();
   const panel = await startPanel({
     port: 0,
     host: "0.0.0.0",
@@ -41,7 +44,7 @@ async function startSeededPanel() {
     publicUrl: "",
     password: "",
     dataDir,
-    seleniumUrl: "",
+    seleniumUrl: selenium.url,
     runner: { workerPath: STUB_WORKER, killTimeoutMs: 500 },
   });
   const base = `http://127.0.0.1:${panel.port}/`;
@@ -80,7 +83,7 @@ async function startSeededPanel() {
     const start = `${date}T01:00:00.000Z`;
     writeRun(dataDir, "ok-1", { queuedAt: start, marks: minutesFrom(start, day === 3 ? 3 : 68), endedAt: start });
   }
-  return { panel, dataDir, call, base: `http://${BROWSER_HOST}:${panel.port}/` };
+  return { panel, selenium, dataDir, call, base: `http://${BROWSER_HOST}:${panel.port}/` };
 }
 
 // ---------- 浏览器 ----------
@@ -221,7 +224,7 @@ async function login(h, base, password) {
 // ---------- 桌面 ----------
 
 async function desktop(env, h, driver, results) {
-  const { base, call, panel } = env;
+  const { base, call, panel, selenium } = env;
   const step = (name) => {
     results.push(name);
     console.log(`✅ ${name}`);
@@ -239,8 +242,32 @@ async function desktop(env, h, driver, results) {
   await login(h, base, panel.generatedPassword);
   assert.strictEqual((await driver.findElements(By.css(".account-card"))).length, 3);
   await h.waitText(".account-card", "下次运行");
+  await h.waitText(".selenium-card", "就绪");
+  await h.waitText(".selenium-card", "已用 0/1 个会话");
   await h.shot("02-overview");
-  step("登录与总览：密码错误有提示；登录后显示 3 个账号卡片、今日分钟数与下次运行时间");
+  step("登录与总览：密码错误有提示；登录后显示 Selenium 状态、3 个账号卡片、今日分钟数与下次运行时间");
+
+  assert.strictEqual((await driver.findElements(By.css(".vnc-link"))).length, 0, "未设置 noVNC 地址时不显示链接");
+  selenium.state.used = 1;
+  await h.clickButton("刷新", await h.waitFor(".selenium-card"));
+  await h.waitText(".selenium-card .badge", "会话已满");
+  await h.waitText(".selenium-card", "其中 1 个会话不属于面板正在进行的运行");
+  selenium.state.availability = "DOWN";
+  await h.clickButton("刷新", await h.waitFor(".selenium-card"));
+  await h.waitText(".selenium-card .alert-warn", "Selenium 未就绪：Selenium Grid not ready。");
+  selenium.state.availability = "UP";
+  await selenium.stop();
+  await h.clickButton("刷新", await h.waitFor(".selenium-card"));
+  await h.waitText(".selenium-card .alert-error", "无法连接 Selenium：连接被拒绝");
+  await h.waitText(".selenium-card .alert-error", "docker compose up -d selenium");
+  await h.waitText(".selenium-card .badge", "无法连接");
+  await h.shot("02b-overview-selenium-down");
+  await selenium.start();
+  selenium.state.used = 0;
+  await h.clickButton("刷新", await h.waitFor(".selenium-card"));
+  await h.waitText(".selenium-card .badge", "就绪");
+  assert.strictEqual((await driver.findElements(By.css(".selenium-card .alert-error"))).length, 0, "恢复后不再提示无法连接");
+  step("Selenium 状态：会话被占用时显示会话已满与不属于面板的会话；节点不可用时显示未就绪；Selenium 停止后显示无法连接与处理办法，恢复后刷新即就绪");
 
   await h.clickButton("仅登录", await h.card("扫码测试"));
   const qr = await h.waitFor(".scan-card img.qr");
@@ -329,9 +356,17 @@ async function desktop(env, h, driver, results) {
   await h.go("#/settings");
   const concurrency = await h.waitText(".settings-grid label", "同时运行的账号数");
   await h.type(await concurrency.findElement(By.css("input")), "2");
+  assert.strictEqual((await driver.findElements(By.css(".callout"))).length, 0, "未填写 noVNC 地址时不显示安全提示");
+  const vnc = await h.waitText(".settings-grid label", "noVNC 地址");
+  await h.type(await vnc.findElement(By.css("input")), "http://192.168.1.10:7900/?autoconnect=1&view_only=1");
+  const callout = await h.waitText(".callout", "SE_VNC_PASSWORD");
+  await h.waitText(".callout", "SE_VNC_VIEW_ONLY=1");
+  await driver.executeScript("arguments[0].scrollIntoView({ block: 'center' })", callout);
+  await h.shot("12a-settings-vnc");
   await h.clickButton("保存");
   await h.waitText(".notice", "面板设置已保存");
-  assert.strictEqual((await call("GET", "api/settings")).settings.maxConcurrentRuns, 2);
+  const saved = (await call("GET", "api/settings")).settings;
+  assert.deepStrictEqual([saved.maxConcurrentRuns, saved.vncUrl], [2, "http://192.168.1.10:7900/?autoconnect=1&view_only=1"]);
   const globalDuration = await h.field("阅读时长（分钟）");
   await h.type(await globalDuration.findElement(By.css("input")), "68");
   await h.openGroup("Bark 推送");
@@ -356,7 +391,18 @@ async function desktop(env, h, driver, results) {
   await call("POST", "api/auth/login", { password: NEW_PASSWORD });
   assert.ok(Array.isArray((await call("GET", "api/accounts")).accounts), "新密码应能登录");
   await h.shot("12-settings");
-  step("设置：保存面板设置与全局默认配置（密钥只显示已设置）；修改面板密码");
+  step("设置：保存面板设置（填写 noVNC 地址时显示安全提示）与全局默认配置（密钥只显示已设置）；修改面板密码");
+
+  await h.go("#/");
+  const vncLink = await h.waitFor(".selenium-card .vnc-link");
+  assert.deepStrictEqual(
+    await Promise.all(["href", "target", "rel"].map((name) => vncLink.getAttribute(name))),
+    ["http://192.168.1.10:7900/?autoconnect=1&view_only=1", "_blank", "noopener noreferrer"]
+  );
+  // 同时运行的账号数为 2，3 个账号都使用这个只有 1 个会话的 Selenium
+  await h.waitText(".selenium-card .alert-warn", "只有 1 个会话");
+  await h.shot("12b-overview-vnc");
+  step("总览：设置 noVNC 地址后显示在新窗口打开的链接；同时运行的账号数超过 Selenium 会话数时提示");
 
   await h.go("#/accounts/new");
   const form = await h.waitFor("article.narrow form");
@@ -383,6 +429,7 @@ async function desktop(env, h, driver, results) {
   await driver.wait(async () => (await driver.findElements(By.css(".connection"))).length === 0, 15000, "应自动重新连接");
   await call("POST", "api/accounts/slow-1/runs", {});
   await h.waitText(".live-status", "阅读中");
+  await h.waitText(".live-status .vnc-link", "查看浏览器画面");
   await h.clickButton("停止");
   await h.waitText(".live-status", "已停止");
   step("实时推送断开后提示并自动重连，重连后继续收到运行状态");
@@ -421,7 +468,7 @@ async function mobile(env, h, driver, results) {
   await h.clickButton("仅登录", await h.card("扫码测试"));
   await h.waitFor(".scan-card img.qr");
   const pages = [
-    ["m01-overview", "#/", ".account-card"],
+    ["m01-overview", "#/", ".selenium-card .badge"],
     ["m02-live-scan", "#/accounts/qr-1/live", ".live .qr-login img.qr"],
     ["m03-history", "#/accounts/ok-1/history", "table.history tbody tr"],
     ["m04-calendar", "#/accounts/ok-1/calendar", ".calendar .day"],
@@ -432,6 +479,7 @@ async function mobile(env, h, driver, results) {
   for (const [name, hash, css] of pages) {
     await h.go(hash);
     await h.waitFor(css);
+    await driver.executeScript("window.scrollTo(0, 0)");
     await driver.sleep(300);
     await h.noHorizontalScroll(name);
     await h.shot(name);
@@ -462,6 +510,7 @@ async function main() {
   } finally {
     await Promise.all(drivers.map((driver) => driver.quit().catch(() => {})));
     await env.panel.close();
+    await env.selenium.stop();
     fs.rmSync(env.dataDir, { recursive: true, force: true });
   }
 }

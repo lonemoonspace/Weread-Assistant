@@ -292,6 +292,7 @@ async function main() {
         assert.ok(await sessionClosed(byName("session").sessionId), "运行结束后应关闭浏览器会话");
         const output = worker.output();
         assert.match(output, /^\[INFO\]\[[^\]]+\]: /m, "日志应带级别与时间");
+        assert.match(output, /Selenium 状态（[^）]+）：就绪/, "连接浏览器前记录 Selenium 状态");
         assert.match(output, /Run finished: success/);
         assert.ok(!/[▄▀█]/.test(output), "由面板运行时不在日志中打印二维码");
         // 登录链接只经事件交给面板，不写入日志
@@ -326,6 +327,34 @@ async function main() {
         assert.match(output, /Run finished: stopped/);
         assert.ok(!pushes.some((push) => push.title.endsWith("运行失败")), "停止不应发送失败通知");
         return `${seconds.toFixed(1)} 秒内退出`;
+      },
+    });
+
+    // 一个没有程序监听的端口
+    const closedPort = await new Promise((resolve) => {
+      const server = http.createServer();
+      server.listen(0, "127.0.0.1", () => {
+        const { port } = server.address();
+        server.close(() => resolve(port));
+      });
+    });
+    await workerScenario("阅读子进程：连不上 Selenium 时上报写明地址与原因的错误，日志中不出现地址里的密码", {
+      name: "worker-no-selenium",
+      site: {},
+      values: () => ({ seleniumUrl: `http://robot:pw-9527@127.0.0.1:${closedPort}` }),
+      async run({ worker, pushes }) {
+        const { code, signal } = await worker.exited;
+        assert.deepStrictEqual({ code, signal }, { code: 0, signal: null });
+        const error = worker.reported.find((event) => event.event === "error");
+        assert.ok(error, "应上报错误");
+        assert.strictEqual(
+          error.data.message,
+          `无法连接 Selenium（http://127.0.0.1:${closedPort}）：连接被拒绝（ECONNREFUSED），请确认 Selenium 正在运行、地址正确`
+        );
+        const output = worker.output();
+        assert.match(output, new RegExp(`Selenium 状态（http://127\\.0\\.0\\.1:${closedPort}）：无法连接，连接被拒绝（ECONNREFUSED）`));
+        assert.ok(!output.includes("pw-9527"), "日志中不应出现 Selenium 地址里的密码");
+        assert.ok(pushes.some((push) => push.title.endsWith("运行失败")), "应发送失败通知");
       },
     });
 

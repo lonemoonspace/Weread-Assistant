@@ -4,6 +4,7 @@ const path = require("path");
 const express = require("express");
 const { resolveConfig } = require("../config/resolve");
 const { sendTestNotification } = require("../notify");
+const { createSeleniumChecker, displaySeleniumUrl, normalizeSeleniumUrl } = require("../shared/selenium");
 const { VERSION } = require("../shared/version");
 const { createAccount, deleteAccount, findAccount, publicAccount, updateAccount } = require("./accounts");
 const { MIN_PASSWORD_LENGTH, SESSION_TTL_MS, createAuth } = require("./auth");
@@ -133,6 +134,7 @@ function createPanelApp(options, { auth, store, runner }) {
     }
     return normalizeSchedules(body.schedules);
   };
+  const checkSelenium = createSeleniumChecker({ timeoutMs: options.seleniumTimeoutMs });
 
   const app = express();
   app.disable("x-powered-by");
@@ -393,6 +395,48 @@ function createPanelApp(options, { auth, store, runner }) {
       throw badRequest(`配置无效：${e.message}`);
     }
     res.json({ results: await sendTestNotification(config) });
+  });
+
+  // Selenium 的状态与会话数：全局默认配置与各账号实际使用的 Selenium 地址各查询一次。
+  // accounts 为使用该地址的账号，panelRuns 为面板在该地址上已启动的运行数（每个占用一个会话）
+  api.get("/selenium/status", async (req, res) => {
+    const data = store.get();
+    const servers = new Map();
+    const serverFor = (url) => {
+      const key = normalizeSeleniumUrl(url);
+      if (!servers.has(key)) {
+        servers.set(key, { key, url: displaySeleniumUrl(key), isDefault: false, accounts: [], panelRuns: 0 });
+      }
+      return servers.get(key);
+    };
+    try {
+      serverFor(resolveConfig(data.defaults).seleniumUrl).isDefault = true;
+    } catch (_) {
+      // 全局默认配置无效时只列出各账号使用的地址
+    }
+    for (const account of data.accounts) {
+      let config;
+      try {
+        config = resolveAccountConfig(data, account, panelDataDir);
+      } catch (_) {
+        // 配置无效的账号无法运行，不列出
+        continue;
+      }
+      serverFor(config.seleniumUrl).accounts.push({ id: account.id, name: account.name });
+    }
+    for (const url of runner.seleniumUrls()) {
+      if (url) {
+        serverFor(url).panelRuns += 1;
+      }
+    }
+    const results = await Promise.all(
+      [...servers.values()].map(async ({ key, ...server }) => ({ ...server, ...(await checkSelenium(key)) }))
+    );
+    res.json({
+      checkedAt: new Date().toISOString(),
+      maxConcurrentRuns: data.settings.maxConcurrentRuns,
+      servers: results,
+    });
   });
 
   // 排队中与进行中的运行，带最近的日志

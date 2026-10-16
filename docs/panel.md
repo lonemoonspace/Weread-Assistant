@@ -1,6 +1,6 @@
 ## Web 面板说明
 
-> 已完成：登录、会话、修改密码、反向代理支持，全局设置、默认配置与账号管理接口，运行队列（立即运行、仅登录、停止、运行日志、实时推送），按账号的调度规则与定时运行，运行历史、按天统计、打卡日历与挑战进度、按保留策略清理，以及完整的页面。Selenium 状态与 noVNC 链接在第 9 步加入。
+> 已完成：登录、会话、修改密码、反向代理支持，全局设置、默认配置与账号管理接口，运行队列（立即运行、仅登录、停止、运行日志、实时推送），按账号的调度规则与定时运行，运行历史、按天统计、打卡日历与挑战进度、按保留策略清理，Selenium 状态与 noVNC 链接，以及完整的页面。
 
 ### 启动
 
@@ -45,6 +45,7 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
 | `src/panel/history.js` | 运行历史、按天统计、打卡日历与挑战进度、按保留策略清理 | 按面板时区统计；口径为本工具的运行记录，非微信读书官方数据 |
 | `src/panel/challenge.js` | 阅读挑战（月卡、年卡）的规则与设置校验 | |
+| `src/shared/selenium.js` | 查询 Selenium 的 `/status`：是否就绪、已用/总会话数；面板总览与阅读子进程的运行日志共用 | 先 `/status`，不是 Selenium 状态时再试 `/wd/hub/status`；3 秒超时；展示的地址去掉其中的用户名与密码 |
 | `src/reader/worker.js` | 阅读子进程入口：经 IPC 接收配置、上报事件，收到 SIGTERM 时关闭浏览器后退出 | 只由面板启动，见 `docs/reader.md` |
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入、先写临时文件再重命名、权限 0600；启动时把已有文件的权限收紧为 0600，改不了或文件损坏时拒绝启动；补齐缺少的部分（旧文件自动升级） |
 | `src/panel/auth.js` | 密码哈希、会话、登录限速、修改密码 | 密码以 scrypt 哈希保存；会话只在内存中保存令牌哈希，面板重启后需重新登录 |
@@ -78,6 +79,7 @@ docker compose logs app | grep 面板初始密码
 | `POST api/accounts/:id/stop` | 是 | 停止账号当前的运行：排队中的直接取消，进行中的结束子进程；返回 202 与运行状态；没有运行时 404 `run_not_active` |
 | `POST api/notifications/test` | 是 | `{ accountId? }`：按账号的实际配置（不提供时按全局默认配置）向已配置的 Bark、ntfy、邮件各发送一条测试通知，不受事件开关影响；返回 `{ results: [{ channel, ok }] }`，没有配置任何渠道时为空数组 |
 | `GET api/runs` | 是 | 排队中与进行中的运行，按加入队列的顺序，每个运行带最近 200 行日志 |
+| `GET api/selenium/status` | 是 | 全局默认配置与各账号实际使用的每个 Selenium 地址的状态与会话数，见下文“Selenium 状态与 noVNC” |
 | `GET api/accounts/:id/runs` | 是 | 运行历史，最新的在前：`{ runs, nextBefore }`；`?limit=`（1–100，默认 20）、`?before=<nextBefore>` 翻页。每条为运行记录加 `hasLog` 与截图文件名 `screenshots` |
 | `GET api/accounts/:id/runs/:runId` | 是 | `{ run }`：运行记录、截图文件名与按天拆分的阅读分钟数 `minutesByDate` |
 | `GET api/accounts/:id/runs/:runId/screenshots/:name` | 是 | 截图（`image/png`），运行中也可读取最新的截图；文件名只接受 `screenshot-<分钟>.png` |
@@ -94,14 +96,14 @@ docker compose logs app | grep 面板初始密码
 | 页面 | 地址 | 内容 |
 | --- | --- | --- |
 | 登录 | `login` | 面板密码登录 |
-| 总览 | `#/` | 需要扫码的账号置顶并直接显示二维码；运行队列；每个账号一张卡片：运行状态或上次运行结果、今天的阅读分钟与是否打卡、下次运行时间、立即运行 / 仅登录 / 停止 |
-| 账号 · 实时 | `#/accounts/<id>/live` | 状态、“正在读《书名》第 23/68 分钟”与进度条、二维码与“复制登录链接”、最新截图、实时日志 |
+| 总览 | `#/` | 顶部 Selenium 状态（就绪、已用/总会话数，连不上时的提示与处理办法）与 noVNC 链接；需要扫码的账号置顶并直接显示二维码；运行队列；每个账号一张卡片：运行状态或上次运行结果、今天的阅读分钟与是否打卡、下次运行时间、立即运行 / 仅登录 / 停止 |
+| 账号 · 实时 | `#/accounts/<id>/live` | 状态、“正在读《书名》第 23/68 分钟”与进度条、二维码与“复制登录链接”、最新截图、实时日志；运行进行中且设置了 noVNC 地址时显示查看浏览器画面的链接 |
 | 账号 · 历史 | `#/accounts/<id>/history` | 运行列表（开始时间、时长、触发方式、结果、阅读分钟），展开查看日志与截图，下载日志，加载更多 |
 | 账号 · 打卡日历 | `#/accounts/<id>/calendar` | 按月显示每天的阅读分钟与打卡状态（已打卡、不足 5 分钟、今天未打卡高亮），本月合计；挑战进度与设置 |
 | 账号 · 调度 | `#/accounts/<id>/schedules` | 编辑多条规则（每天固定时间 / 每 N 小时 / cron），单独启停，预览接下来的运行时间，保存后立即生效 |
 | 账号 · 配置 | `#/accounts/<id>/config` | 名称与启用状态；运行配置的每一项可“继承全局”或“单独设置”；发送测试通知；删除账号（可选同时删除数据） |
 | 新建账号 | `#/accounts/new` | 账号 ID 与名称，创建后进入账号页面并提示扫码 |
-| 设置 | `#/settings` | 面板设置（时区、并发数、保留策略、noVNC 地址）；全局默认配置与测试通知；修改面板密码 |
+| 设置 | `#/settings` | 面板设置（时区、并发数、保留策略、noVNC 地址，填写 noVNC 地址时显示安全提示）；全局默认配置与测试通知；修改面板密码 |
 
 | 规则 | 说明 |
 | --- | --- |
@@ -218,6 +220,60 @@ docker compose logs app | grep 面板初始密码
 | `log` | `{ runId, accountId, line }` | 运行日志新增一行 |
 
 响应头带 `Cache-Control: no-cache` 与 `X-Accel-Buffering: no`，`retry: 3000` 让浏览器断线 3 秒后重连。退出登录、修改密码时立即断开相应会话的连接（修改密码会断开所有旧会话的连接）。每 15 秒发送一次心跳注释，同时检查会话是否过期，过期的连接在下一次心跳时断开。长连接不会延长会话有效期。
+
+### Selenium 状态与 noVNC
+
+`GET api/selenium/status` 对全局默认配置与各账号实际生效配置中的每个 Selenium 地址查询一次 `/status`（同一地址同时只发一个请求）：
+
+```json
+{
+  "checkedAt": "2026-10-16T10:00:00.000Z",
+  "maxConcurrentRuns": 1,
+  "servers": [
+    {
+      "url": "http://selenium:4444",
+      "isDefault": true,
+      "accounts": [{ "id": "me", "name": "我" }],
+      "panelRuns": 1,
+      "state": "busy",
+      "ready": false,
+      "message": "Selenium Grid not ready.",
+      "sessions": { "used": 1, "total": 1 },
+      "nodes": 1,
+      "error": ""
+    }
+  ]
+}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `url` | Selenium 地址，没有协议时按 `http://` 处理；去掉了其中的用户名与密码（查询时仍会带上） |
+| `isDefault` / `accounts` | 是否为全局默认配置中的地址；实际使用该地址的账号（配置无效的账号不列出） |
+| `panelRuns` | 面板在该地址上已启动的运行数，每个运行占用一个会话 |
+| `state` | `ready` 就绪；`busy` 会话已满（Grid 在会话全部占用时 `ready` 为 false，不算故障）；`not-ready` 未就绪（刚启动、没有可用节点等）；`unreachable` 无法连接 |
+| `sessions` | `{ used, total }`：Selenium Grid（含 `selenium/standalone-*` 镜像）由节点的会话槽位得到，`total` 只计状态为 UP 的节点、每个节点不超过其 `maxSessions`；chromedriver 不提供会话数，为 null |
+| `error` | 无法连接时的原因：连接被拒绝、找不到主机、3 秒内没有响应、返回的不是 Selenium 状态、HTTP 状态码等 |
+
+| 页面行为 | 说明 |
+| --- | --- |
+| 刷新 | 打开总览时查询，之后每 30 秒（页面在后台时跳过）、运行开始或结束 3 秒后各刷新一次，也可点“刷新” |
+| 无法连接 | 卡片变红并提示“阅读和扫码登录都无法开始”，给出处理办法：确认 Selenium 容器在运行（`docker compose up -d selenium`）、检查设置中的 Selenium 地址 |
+| 不属于面板的会话 | 已用会话数多于面板自己的运行时提示：可能是其他程序在用，或没有正常关闭的会话（Selenium 会在会话空闲超时后回收） |
+| 并发数超过会话数 | 设置中的“同时运行的账号数”（不超过使用该地址的账号数）大于该 Selenium 的会话数时提示：多出的运行会在 Selenium 中等待，超时后失败；应调低设置或调大 `SE_NODE_MAX_SESSIONS` |
+| 多个地址 | 每个地址一行，标出是否为全局默认与使用它的账号；整体状态取最差的一个 |
+
+阅读子进程连接浏览器前也会查询一次，在运行日志中记录 `Selenium 状态（<地址>）：就绪，已用 0/1 个会话：Selenium Grid ready.`；连不上时运行失败，错误为 `无法连接 Selenium（<地址>）：连接被拒绝（ECONNREFUSED），请确认 Selenium 正在运行、地址正确`。日志中的地址同样去掉用户名与密码。
+
+noVNC 默认关闭：只有在设置中填写“noVNC 地址”后，总览与进行中运行的实时页面才显示“查看浏览器画面（noVNC）”链接（新窗口打开，`rel="noopener noreferrer"`）。`selenium/standalone-*` 镜像在容器内 7900 端口提供 noVNC，`docker-compose.yml` 中有注释掉的端口映射与 VNC 环境变量示例。地址后可加 noVNC 参数，如 `http://192.168.1.10:7900/?autoconnect=1&resize=scale&view_only=1`。
+
+| 安全 | 说明 |
+| --- | --- |
+| 画面即已登录的浏览器 | 能打开 noVNC 并知道 VNC 密码的人可以看到并操作已登录微信读书的浏览器 |
+| 不经反向代理暴露 | 不建议经反向代理或公网暴露 7900 端口；只映射到本机（`127.0.0.1:7900:7900`）或可信局域网的地址 |
+| 修改默认密码 | Selenium 镜像默认 VNC 密码为 `secret`，开启前用 `SE_VNC_PASSWORD` 修改 |
+| 只读 | `SE_VNC_VIEW_ONLY=1` 让 VNC 只能看、不能操作；同一 Selenium 同时运行多个会话时，画面中多个浏览器窗口重叠显示 |
+| 地址中的密码 | noVNC 支持在地址中带 `password=` 参数，但设置中的地址会显示在页面上，不建议写入 |
 
 ### 数据与配置
 

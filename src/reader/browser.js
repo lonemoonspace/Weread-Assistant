@@ -1,47 +1,29 @@
 const { Builder, Browser } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
-const { fetchJson, isHttpUrl } = require("../shared/http");
+const {
+  CONNECTION_ERRORS,
+  checkSelenium,
+  describeSeleniumStatus,
+  displaySeleniumUrl,
+  normalizeSeleniumUrl,
+} = require("../shared/selenium");
 
-function normalizeSeleniumUrl(url) {
-  if (!url.startsWith("http://") && !url.startsWith("https://")) {
-    return "http://" + url;
+// 把 Selenium 的状态与会话数写入运行日志，连接浏览器前与出错时各查询一次
+async function logSeleniumStatus(seleniumUrl) {
+  const status = await checkSelenium(seleniumUrl);
+  const text = `Selenium 状态（${displaySeleniumUrl(normalizeSeleniumUrl(seleniumUrl))}）：${describeSeleniumStatus(status)}`;
+  if (status.state === "ready") {
+    console.info(text);
+  } else {
+    console.warn(text);
   }
-  return url;
-}
-
-async function checkSeleniumHealth(remoteUrl) {
-  try {
-    if (!remoteUrl || !isHttpUrl(remoteUrl)) {
-      console.warn("跳过健康检查：SELENIUM_URL 未设置或非法。");
-      return null;
-    }
-    // 优先 /status，兼容 /wd/hub/status
-    const base = remoteUrl.endsWith("/") ? remoteUrl.slice(0, -1) : remoteUrl;
-    const endpoints = ["/status", "/wd/hub/status"];
-    for (const ep of endpoints) {
-      try {
-        const { statusCode, body } = await fetchJson(`${base}${ep}`, 3000);
-        if (statusCode >= 200 && statusCode < 300) {
-          const ready = body?.ready ?? body?.value?.ready;
-          console.info(`Selenium 健康检查 ${ep} 响应: ready=${ready}`);
-          return { endpoint: ep, ready, raw: body };
-        }
-      } catch (_) {
-        // 继续尝试下一个端点
-      }
-    }
-    console.warn("Selenium 健康检查失败：所有端点无有效响应。");
-    return null;
-  } catch (e) {
-    console.warn("Selenium 健康检查异常：", e.message || e);
-    return null;
-  }
+  return status;
 }
 
 async function collectDiagnostics(config, reason) {
   try {
     console.warn("开始收集诊断信息，原因：", reason?.toString()?.slice(0, 180) || "未知");
-    await checkSeleniumHealth(config.seleniumUrl);
+    await logSeleniumStatus(config.seleniumUrl);
   } catch (_) {
     // 忽略诊断过程错误
   }
@@ -63,16 +45,26 @@ async function createDriver(config) {
   options.addArguments("--disable-notifications");
   options.addArguments("--disable-popup-blocking");
 
-  // 远端启动前做一次健康检查
-  await checkSeleniumHealth(config.seleniumUrl);
+  // 连接前查询一次 Selenium 状态；地址中可能带有用户名与密码，日志中只显示去掉它们的地址
+  await logSeleniumStatus(config.seleniumUrl);
   const remoteBrowserUrl = normalizeSeleniumUrl(config.seleniumUrl);
-  console.info("SELENIUM_URL: ", remoteBrowserUrl);
-  const driver = await new Builder()
-    .usingServer(remoteBrowserUrl)
-    .forBrowser(Browser.CHROME)
-    .withCapabilities(capabilities)
-    .setChromeOptions(options)
-    .build();
+  const shownUrl = displaySeleniumUrl(remoteBrowserUrl);
+  console.info("SELENIUM_URL: ", shownUrl);
+  let driver;
+  try {
+    driver = await new Builder()
+      .usingServer(remoteBrowserUrl)
+      .forBrowser(Browser.CHROME)
+      .withCapabilities(capabilities)
+      .setChromeOptions(options)
+      .build();
+  } catch (e) {
+    const code = e.code || String(e.message || "").split(" ")[0];
+    if (CONNECTION_ERRORS[code]) {
+      throw new Error(`无法连接 Selenium（${shownUrl}）：${CONNECTION_ERRORS[code]}（${code}），请确认 Selenium 正在运行、地址正确`);
+    }
+    throw e;
+  }
 
   // 全局超时配置，避免单次命令长时间挂起。
   // 隐式等待设为 0：元素不存在时立即返回，需要等待的地方使用显式等待
@@ -96,7 +88,6 @@ async function createDriver(config) {
 }
 
 module.exports = {
-  checkSeleniumHealth,
   collectDiagnostics,
   createDriver,
 };

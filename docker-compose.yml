@@ -33,6 +33,14 @@ services:
       - SE_ENABLE_TRACING=false
       - SE_BIND_HOST=false
       - SE_JAVA_DISABLE_HOSTNAME_VERIFICATION=false
+      # 开启下面的 noVNC 端口时务必修改 VNC 密码（默认为 secret），并建议只读（只能看，不能操作浏览器）
+      # - SE_VNC_PASSWORD=change-me
+      # - SE_VNC_VIEW_ONLY=1
+    # 查看浏览器实时画面（noVNC）：取消注释后在面板设置中填写 noVNC 地址，例如 http://127.0.0.1:7900/。
+    # 画面就是已登录微信读书的浏览器：只在本机或可信的局域网访问（需要局域网访问时把 127.0.0.1 换成主机的局域网 IP），
+    # 不要经反向代理或公网暴露 7900 端口
+    # ports:
+    #   - "127.0.0.1:7900:7900"
     dns:
       - 223.5.5.5
     healthcheck:
