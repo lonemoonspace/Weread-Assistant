@@ -141,6 +141,106 @@ button.small,
   gap: 0.4rem;
 }
 
+/* Selenium 状态 */
+.selenium-card {
+  margin-bottom: 0;
+  padding-top: 0.9rem;
+  padding-bottom: 0.9rem;
+  border-left: 4px solid var(--pico-muted-border-color);
+}
+
+.selenium-card.selenium-ready {
+  border-left-color: var(--wa-green-strong);
+}
+
+.selenium-card.selenium-busy {
+  border-left-color: #2176d6;
+}
+
+.selenium-card.selenium-not-ready {
+  border-left-color: #cc8400;
+}
+
+.selenium-card.selenium-unreachable {
+  border-left-color: var(--wa-red-strong);
+}
+
+.selenium-head,
+.selenium-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+}
+
+.selenium-head {
+  margin-bottom: 0.5rem;
+}
+
+.selenium-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+}
+
+.selenium-line {
+  margin-bottom: 0.4rem;
+}
+
+.selenium-line code {
+  word-break: break-all;
+}
+
+.selenium-server p {
+  margin-bottom: 0.4rem;
+}
+
+.selenium-state-ready {
+  background: var(--wa-green);
+}
+
+.selenium-state-busy {
+  background: var(--wa-blue);
+}
+
+.selenium-state-not-ready {
+  background: var(--wa-amber);
+}
+
+.selenium-state-unreachable {
+  background: var(--wa-red);
+}
+
+.selenium-alert,
+.callout {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: var(--pico-border-radius);
+}
+
+.selenium-alert p:last-child {
+  margin-bottom: 0;
+}
+
+.alert-error {
+  background: var(--wa-red);
+}
+
+.alert-warn,
+.callout-warn {
+  background: var(--wa-amber);
+}
+
+.callout {
+  font-size: 0.9em;
+}
+
+.vnc-link {
+  white-space: nowrap;
+}
+
 /* 扫码 */
 .scan-card article {
   border-left: 4px solid var(--wa-amber);

@@ -1,12 +1,13 @@
 import { computed, nextTick, ref, watch } from "../../vendor/vue.esm-browser.prod.js";
 import { apiUrl } from "../api.js";
 import { QrLogin, RunButtons, StatusBadge } from "../components/common.js";
+import { VncLink } from "../components/selenium-status.js";
 import { MODE_LABELS, TRIGGER_LABELS, formatShort } from "../format.js";
 import { state, timezone } from "../store.js";
 
 // 实时：当前运行的状态、进度、二维码、最新截图与日志；没有运行时显示本页打开后结束的那次
 export const LiveTab = {
-  components: { QrLogin, RunButtons, StatusBadge },
+  components: { QrLogin, RunButtons, StatusBadge, VncLink },
   props: { account: Object },
   setup(props) {
     const run = computed(() => state.runs[props.account.id] || state.finished[props.account.id]);
@@ -50,6 +51,7 @@ export const LiveTab = {
       <p class="live-status">
         <status-badge :status="run.status" />
         <span class="muted">{{ TRIGGER_LABELS[run.trigger] }} · {{ MODE_LABELS[run.mode] }} · {{ formatShort(run.queuedAt, tz) }}</span>
+        <vnc-link v-if="!run.endedAt && run.status !== 'queued'" />
       </p>
       <p v-if="run.book && !run.endedAt" class="reading">正在读《{{ run.book }}》第 {{ run.minutes }}/{{ run.plannedMinutes }} 分钟</p>
       <p v-else-if="run.book" class="reading">读《{{ run.book }}》{{ run.minutes }} 分钟</p>

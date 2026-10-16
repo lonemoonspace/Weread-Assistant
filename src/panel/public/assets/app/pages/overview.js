@@ -1,5 +1,6 @@
 import { computed } from "../../vendor/vue.esm-browser.prod.js";
 import { QrLogin, RunButtons, StatusBadge } from "../components/common.js";
+import { SeleniumStatus } from "../components/selenium-status.js";
 import { MODE_LABELS, STATUS_LABELS, TRIGGER_LABELS, formatShort } from "../format.js";
 import { state, timezone } from "../store.js";
 
@@ -49,7 +50,7 @@ const AccountCard = {
 };
 
 export const OverviewPage = {
-  components: { AccountCard, QrLogin, StatusBadge },
+  components: { AccountCard, QrLogin, SeleniumStatus, StatusBadge },
   setup() {
     const waiting = computed(() =>
       Object.values(state.runs).filter((run) => run.status === "waiting-login")
@@ -75,6 +76,10 @@ export const OverviewPage = {
     return { waiting, queue, accounts, nameOf, MODE_LABELS, TRIGGER_LABELS, state };
   },
   template: `
+    <section>
+      <selenium-status />
+    </section>
+
     <section v-for="run in waiting" :key="'qr-' + run.id" class="scan-card">
       <article>
         <header><strong>{{ nameOf(run.accountId) }}</strong> 需要扫码登录</header>

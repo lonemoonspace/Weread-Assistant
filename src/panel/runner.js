@@ -4,6 +4,7 @@ const readline = require("readline");
 const { fork } = require("child_process");
 const { CONFIG_SCHEMA } = require("../config/schema");
 const { formatLocalTimestamp } = require("../shared/log");
+const { normalizeSeleniumUrl } = require("../shared/selenium");
 const { findAccount } = require("./accounts");
 const { SECRET_MASK, accountDataDir, resolveAccountConfig } = require("./config");
 const { PanelError, badRequest } = require("./errors");
@@ -114,8 +115,7 @@ function fillMinuteMarks(run, count) {
 }
 
 async function deleteSeleniumSession(seleniumUrl, sessionId) {
-  const base = /^https?:\/\//.test(seleniumUrl) ? seleniumUrl : `http://${seleniumUrl}`;
-  const url = `${base.replace(/\/+$/, "")}/session/${encodeURIComponent(sessionId)}`;
+  const url = `${normalizeSeleniumUrl(seleniumUrl)}/session/${encodeURIComponent(sessionId)}`;
   const res = await fetch(url, { method: "DELETE", signal: AbortSignal.timeout(SESSION_DELETE_TIMEOUT_MS) });
   return res.status;
 }
@@ -498,6 +498,11 @@ function createRunner({
 
     isActive(accountId) {
       return active.has(accountId);
+    },
+
+    // 已启动子进程的运行所用的 Selenium 地址（每个运行占用一个会话），供 Selenium 状态区分会话是否属于面板
+    seleniumUrls() {
+      return [...running].map((run) => run.seleniumUrl);
     },
 
     // 排队中与进行中的运行，按加入队列的顺序

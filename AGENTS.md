@@ -36,3 +36,4 @@
 - 面板页面不得使用内联脚本或内联样式（CSP 只允许同源资源）；修改类接口需校验 `X-WA-Request` 请求头。
 - 面板前端免构建：页面代码是 `src/panel/public/assets/app/` 下的 ES 模块，模板写在组件的 `template` 字符串中；不要使用 DOM 模板、`v-html` 或 `:style` 字符串，样式写在 `assets/panel.css`。第三方文件放在 `assets/vendor/`，升级时同步更新其中的 README（版本与 SHA-256）。改动页面时执行 `SELENIUM_URL=... npm run test:ui` 并查看截图。
 - 部署 Selenium 时保证 `--shm-size 2gb` 以避免 Chrome crash；远程运行后及时清理 `login.png` 并注意 cookies 等同于登录态。
+- noVNC 画面就是已登录的浏览器：不要在文档或配置示例中建议经反向代理或公网暴露 7900 端口；开启时修改 Selenium 默认 VNC 密码，建议只读模式。

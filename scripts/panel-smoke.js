@@ -21,6 +21,7 @@ const { describeSchedule, nextRuns, normalizeSchedules, schedulePatterns } = req
   path.resolve(__dirname, "..", "src", "panel", "schedules")
 );
 const { challengeProgress, cleanupRuns, dateInZone } = require(path.resolve(__dirname, "..", "src", "panel", "history"));
+const { startMockSelenium } = require("./fixtures/mock-selenium");
 const { minutesFrom, writeRun } = require("./fixtures/run-records");
 
 const CSRF = { "X-WA-Request": "1" };
@@ -94,25 +95,6 @@ function runFiles(panel, accountId, runId) {
       return fs.readFileSync(file, "utf8");
     },
   };
-}
-
-// 记录收到的请求，模拟 Selenium 删除会话的接口
-function startSeleniumMock() {
-  const requests = [];
-  const server = http.createServer((req, res) => {
-    requests.push(`${req.method} ${req.url}`);
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end('{"value":null}');
-  });
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      resolve({
-        url: `http://127.0.0.1:${server.address().port}`,
-        requests,
-        close: () => new Promise((done) => server.close(done)),
-      });
-    });
-  });
 }
 
 // 连接实时推送接口，持续解析收到的事件
@@ -838,7 +820,7 @@ async function main() {
     });
 
     await scenario("停止：子进程收到 SIGTERM 后退出记为已停止；不响应时超时强制结束并删除 Selenium 会话", async () => {
-      const selenium = await startSeleniumMock();
+      const selenium = await startMockSelenium();
       try {
         const panel = await startAuthed();
         await panel.call("PATCH", "api/settings", {
@@ -1017,6 +999,150 @@ async function main() {
 
       // 会话已失效时直接返回 401，不建立连接
       assert.strictEqual((await panel.request("api/events", { cookie: other })).status, 401);
+    });
+
+    await scenario("Selenium 状态：需要登录；按全局默认与账号覆盖分组并列出使用的账号；解析 Grid 与 chromedriver 的会话数；区分面板自己的会话；地址中不显示用户名与密码", async () => {
+      const grid = await startMockSelenium();
+      const driver = await startMockSelenium({ mode: "driver" });
+      try {
+        const panel = await startAuthed();
+        assert.strictEqual((await panel.request("api/selenium/status")).status, 401);
+        await panel.call("PATCH", "api/settings", { settings: { maxConcurrentRuns: 3 }, defaults: { seleniumUrl: `${grid.url}/` } });
+        for (const id of ["slow-1", "ok-1", "ok-2"]) {
+          await panel.call("POST", "api/accounts", { id, name: `账号${id}` });
+        }
+        // 没有协议、带用户名与密码的地址
+        await panel.call("PATCH", "api/accounts/ok-2", { overrides: { seleniumUrl: `robot:pass-9527@127.0.0.1:${driver.port}` } });
+
+        let res = await panel.call("GET", "api/selenium/status");
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(res.json.maxConcurrentRuns, 3);
+        assert.ok(!Number.isNaN(Date.parse(res.json.checkedAt)));
+        assert.doesNotMatch(JSON.stringify(res.json), /robot|pass-9527/, "接口不应返回地址中的用户名与密码");
+        const [defaultServer, driverServer] = res.json.servers;
+        assert.strictEqual(res.json.servers.length, 2);
+        assert.deepStrictEqual(defaultServer, {
+          url: grid.url,
+          isDefault: true,
+          accounts: [
+            { id: "slow-1", name: "账号slow-1" },
+            { id: "ok-1", name: "账号ok-1" },
+          ],
+          panelRuns: 0,
+          state: "ready",
+          ready: true,
+          message: "Selenium Grid ready.",
+          sessions: { used: 0, total: 1 },
+          nodes: 1,
+          error: "",
+        });
+        assert.deepStrictEqual(
+          driverServer,
+          {
+            url: driver.url,
+            isDefault: false,
+            accounts: [{ id: "ok-2", name: "账号ok-2" }],
+            panelRuns: 0,
+            state: "ready",
+            ready: true,
+            message: "ChromeDriver ready for new sessions.",
+            sessions: null,
+            nodes: null,
+            error: "",
+          }
+        );
+        assert.strictEqual(driver.state.authorization, `Basic ${Buffer.from("robot:pass-9527").toString("base64")}`, "查询时应带上地址中的用户名与密码");
+
+        // 面板的运行占用会话：panelRuns 计入；会话全部占用时为 busy 而不是未就绪
+        const reading = nextRun(panel, (run) => run.accountId === "slow-1" && run.status === "reading");
+        await panel.call("POST", "api/accounts/slow-1/runs");
+        await reading;
+        grid.state.used = 1;
+        res = await panel.call("GET", "api/selenium/status");
+        assert.deepStrictEqual(
+          [res.json.servers[0].state, res.json.servers[0].ready, res.json.servers[0].sessions, res.json.servers[0].panelRuns],
+          ["busy", false, { used: 1, total: 1 }, 1]
+        );
+        assert.strictEqual(res.json.servers[1].panelRuns, 0);
+        const stopped = nextRun(panel, ended("slow-1"));
+        await panel.call("POST", "api/accounts/slow-1/stop");
+        await stopped;
+        res = await panel.call("GET", "api/selenium/status");
+        assert.deepStrictEqual([res.json.servers[0].state, res.json.servers[0].panelRuns], ["busy", 0], "运行结束后会话不再算作面板的");
+
+        // 多个会话槽位
+        Object.assign(grid.state, { maxSessions: 3, used: 1 });
+        res = await panel.call("GET", "api/selenium/status");
+        assert.deepStrictEqual([res.json.servers[0].state, res.json.servers[0].sessions], ["ready", { used: 1, total: 3 }]);
+        // 节点不可用时不计入总会话数，状态为未就绪
+        grid.state.availability = "DOWN";
+        res = await panel.call("GET", "api/selenium/status");
+        assert.deepStrictEqual(
+          [res.json.servers[0].state, res.json.servers[0].sessions, res.json.servers[0].message],
+          ["not-ready", { used: 1, total: 0 }, "Selenium Grid not ready."]
+        );
+        grid.state.availability = "UP";
+
+        // 所有账号都覆盖了地址时，全局默认地址仍然列出
+        const otherUrl = `http://localhost:${grid.port}`;
+        await panel.call("PATCH", "api/accounts/slow-1", { overrides: { seleniumUrl: otherUrl } });
+        await panel.call("PATCH", "api/accounts/ok-1", { overrides: { seleniumUrl: otherUrl } });
+        res = await panel.call("GET", "api/selenium/status");
+        assert.deepStrictEqual(
+          res.json.servers.map((server) => [server.url, server.isDefault, server.accounts.map((account) => account.id)]),
+          [
+            [grid.url, true, []],
+            [otherUrl, false, ["slow-1", "ok-1"]],
+            [driver.url, false, ["ok-2"]],
+          ]
+        );
+      } finally {
+        await grid.stop();
+        await driver.stop();
+      }
+    });
+
+    await scenario("Selenium 状态：停止、不是 Selenium、超时都返回 unreachable 与原因；旧版地址回退到 /wd/hub/status", async () => {
+      const selenium = await startMockSelenium();
+      try {
+        const panel = await startAuthed({ seleniumTimeoutMs: 300 });
+        await panel.call("PATCH", "api/settings", { defaults: { seleniumUrl: selenium.url } });
+        const check = async () => (await panel.call("GET", "api/selenium/status")).json.servers[0];
+
+        await selenium.stop();
+        let server = await check();
+        assert.deepStrictEqual([server.state, server.ready, server.sessions], ["unreachable", false, null]);
+        assert.match(server.error, /连接被拒绝（ECONNREFUSED）/);
+
+        await selenium.start();
+        selenium.state.mode = "html";
+        server = await check();
+        assert.strictEqual(server.state, "unreachable");
+        assert.match(server.error, /返回的不是 Selenium 状态/);
+
+        selenium.state.mode = "hang";
+        selenium.requests.length = 0;
+        const startedAt = Date.now();
+        server = await check();
+        assert.strictEqual(server.state, "unreachable");
+        assert.match(server.error, /0\.3 秒内没有响应/);
+        assert.ok(Date.now() - startedAt < 3000, "超时后应及时返回");
+        assert.deepStrictEqual(selenium.requests, ["GET /status"], "超时后不再尝试下一个地址");
+
+        selenium.state.mode = "legacy";
+        selenium.requests.length = 0;
+        server = await check();
+        assert.deepStrictEqual([server.state, server.sessions], ["ready", { used: 0, total: 1 }]);
+        assert.deepStrictEqual(selenium.requests, ["GET /status", "GET /wd/hub/status"]);
+
+        // 同时到达的查询共用一次请求
+        Object.assign(selenium.state, { mode: "grid", delayMs: 200 });
+        selenium.requests.length = 0;
+        await Promise.all([check(), check(), check()]);
+        assert.deepStrictEqual(selenium.requests, ["GET /status"]);
+      } finally {
+        await selenium.stop();
+      }
     });
 
     await scenario("测试通知：按账号或全局默认配置向已配置的渠道发送，不受事件开关影响", async () => {

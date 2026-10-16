@@ -124,6 +124,9 @@ export const SettingsPage = {
             <small v-if="field.description" class="muted">{{ field.description }}</small>
           </label>
         </div>
+        <aside v-if="panel.vncUrl" class="callout callout-warn" role="note">
+          noVNC 画面就是已登录微信读书的浏览器，能打开该地址并知道 VNC 密码的人都可以看到并操作它。不建议经反向代理或公网暴露 7900 端口；需要时请修改 Selenium 默认的 VNC 密码（<code>SE_VNC_PASSWORD</code>，默认为 secret），并使用只读模式（<code>SE_VNC_VIEW_ONLY=1</code>）。
+        </aside>
         <div class="form-actions">
           <button type="submit" :aria-busy="savingPanel" :disabled="savingPanel">保存</button>
           <button type="button" class="secondary" @click="resetPanel">撤销修改</button>
