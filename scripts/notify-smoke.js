@@ -51,7 +51,7 @@ async function withQuietConsole(fn) {
   console.warn = capture;
   console.error = capture;
   try {
-    return await fn();
+    return await fn(logs);
   } catch (error) {
     error.capturedLogs = logs;
     throw error;
@@ -73,13 +73,13 @@ async function main() {
 
   const scenario = async (name, fn) => {
     mock.requests.length = 0;
-    await withQuietConsole(() => fn());
+    await withQuietConsole((logs) => fn(logs));
     results.push(name);
     console.log(`✅ ${name}`);
   };
 
   try {
-    await scenario("Bark 负载保持原有字段", async () => {
+    await scenario("Bark 负载保持原有字段；日志中不出现 Bark Key", async (logs) => {
       config = resolveConfig({
         barkKey: "bark-key-123",
         barkServer: mock.baseUrl,
@@ -97,6 +97,8 @@ async function main() {
       const request = mock.requests[0];
       assert.strictEqual(request.method, "POST");
       assert.strictEqual(request.url, "/bark-key-123");
+      assert.ok(logs.some((line) => line.includes(`发送Bark推送: ${mock.baseUrl}`)));
+      assert.ok(!logs.some((line) => line.includes("bark-key-123")), "日志中不应出现 Bark Key");
       assert.deepStrictEqual(parseBody(request), {
         title: "微信读书挑战",
         body: "登录成功",

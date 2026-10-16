@@ -9,7 +9,7 @@
 | 未知命令 | 执行 `node src/cli.js bogus` | 报错 `Unknown command: bogus`，退出码 1 |
 | `run` 拒绝额外参数 | 执行 `node src/cli.js run --weread-duration 30` | 报错 `Unexpected arguments for run`，退出码 1 |
 | 连接 Selenium | 面板全局配置中的 Selenium 地址指向已启动的 Selenium（或 chromedriver），执行 `node src/cli.js run --account me` | 日志依次出现 `Selenium 健康检查 /status 响应: ready=true`、`SELENIUM_URL:`、`Browser launched successfully.`、`Successfully opened the url: https://weread.qq.com/` |
-| 未登录时展示二维码 | 数据目录中没有 `cookies.json` | 保存 `login.png` 与 `login-qr.png`，日志输出 `登录链接: https://weread.qq.com/web/confirm?uid=...`，进入 `Waiting for login...`；二维码约 1 分钟过期，日志出现 `Refreshing QR code...` 并自动刷新，直到扫码成功或超过等待扫码时长 |
+| 未登录时展示二维码 | 数据目录中没有 `cookies.json` | 保存 `login.png` 与 `login-qr.png`；日志输出 `已解析登录链接…`，终端另外显示二维码与 `登录链接: https://weread.qq.com/web/confirm?uid=...`（只输出到终端，`output.log` 中没有登录链接）；进入 `Waiting for login...`；二维码约 1 分钟过期，日志出现 `Refreshing QR code...` 并自动刷新，直到扫码成功或超过等待扫码时长 |
 | 按账号运行 | 面板中已有账号 `me`，执行 `node src/cli.js run --account me` | 日志首行为 `账号: me 数据目录: <面板数据目录>/accounts/me`，按面板中的配置运行，产物写入该目录 |
 | 账号不存在 | 执行 `node src/cli.js run --account nobody` | 报错 `账号不存在：nobody`，退出码 1 |
 | 账号已停用 | 账号 `off` 在面板中已停用，执行 `node src/cli.js run --account off` | 报错 `账号已停用：off，请先在面板中启用`，退出码 1，不连接浏览器 |

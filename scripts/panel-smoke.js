@@ -728,6 +728,12 @@ async function main() {
         }
         assert.match(log, /barkKey 已下发: true/, "密钥经 IPC 下发");
         assert.ok(!log.includes("secret-bark-key"));
+        // 子进程打印的密钥值与登录链接中的 uid 在写入日志前替换为掩码
+        assert.ok(
+          log.includes(`模拟泄露: https://api.day.app/${SECRET_MASK} https://weread.qq.com/web/confirm?uid=${SECRET_MASK}&from=stub`),
+          "日志中的密钥与登录链接应替换为掩码"
+        );
+        assert.ok(!log.includes("ok-1-uid"));
 
         const viewed = await panel.call("GET", `api/accounts/ok-1/runs/${run.id}/log`);
         assert.strictEqual(viewed.status, 200);
@@ -792,9 +798,10 @@ async function main() {
       assert.deepStrictEqual((await panel.call("GET", "api/runs")).json.runs, []);
     });
 
-    await scenario("失败：上报错误、等待扫码超时、未上报结果就退出都记为失败", async () => {
+    await scenario("失败：上报错误、等待扫码超时、未上报结果就退出都记为失败；错误信息中的密钥替换为掩码", async () => {
       const panel = await startAuthed();
-      await panel.call("PATCH", "api/settings", { settings: { maxConcurrentRuns: 3 } });
+      // 桩子进程上报的错误信息中带有 Bark Key
+      await panel.call("PATCH", "api/settings", { settings: { maxConcurrentRuns: 3 }, defaults: { barkKey: "fail-secret-key" } });
       const ids = ["fail-1", "timeout-1", "crash-1"];
       const finished = Promise.all(ids.map((id) => nextRun(panel, ended(id))));
       for (const id of ids) {
@@ -802,7 +809,8 @@ async function main() {
         assert.strictEqual((await panel.call("POST", `api/accounts/${id}/runs`)).status, 202);
       }
       const [fail, timeout, crash] = await finished;
-      assert.deepStrictEqual([fail.status, fail.error], ["failed", "模拟的页面错误"]);
+      assert.deepStrictEqual([fail.status, fail.error], ["failed", `模拟的页面错误 ${SECRET_MASK}`]);
+      assert.strictEqual(runFiles(panel, "fail-1", fail.id).meta().error, `模拟的页面错误 ${SECRET_MASK}`);
       assert.deepStrictEqual([timeout.status, timeout.error], ["failed", "等待扫码超时"]);
       assert.deepStrictEqual([crash.status, crash.error], ["failed", "阅读子进程异常退出（退出码 3）"]);
       assert.strictEqual(runFiles(panel, "crash-1", crash.id).meta().exitCode, 3);
@@ -926,6 +934,8 @@ async function main() {
       await until(() => stream.events.some((event) => event.event === "log" && event.data.line.includes("Reading minute: 2")));
       const logEvent = stream.events.find((event) => event.event === "log");
       assert.strictEqual(logEvent.data.accountId, "ok-1");
+      const leak = stream.events.find((event) => event.event === "log" && event.data.line.includes("模拟泄露"));
+      assert.ok(leak && !leak.data.line.includes("ok-1-uid") && leak.data.line.includes(`uid=${SECRET_MASK}`), "推送的日志同样替换掩码");
       await until(() => stream.events.some((event) => event.comment), { message: "没有收到心跳" });
 
       // 进行中的运行带最近的日志，供中途连接时显示

@@ -113,7 +113,7 @@ docker compose logs app | grep 面板初始密码
 
 | 文件 | 内容 |
 | --- | --- |
-| `output.log` | 子进程的标准输出与标准错误，加上面板写入的 `[PANEL]` 行（加入队列、启动、停止请求、强制结束、退出码、运行结束） |
+| `output.log` | 子进程的标准输出与标准错误，加上面板写入的 `[PANEL]` 行（加入队列、启动、停止请求、强制结束、退出码、运行结束）。写入与实时推送前，把本次运行配置中的密钥值（Bark Key、ntfy 主题、Token 与密码、SMTP 密码，4 个字符以上）以及微信读书登录链接中的 uid 替换为 `••••••`；子进程上报的错误信息同样处理 |
 | `meta.json` | `id`、`accountId`、`accountName`、`mode`、`trigger`（`manual` 或 `schedule`）、`scheduleId`、`status`、`queuedAt`、`startedAt`、`endedAt`、`book`、`readingStartedAt`、`minutes`、`plannedMinutes`、`screenshot`、`error`、`exitCode`、`exitSignal`；状态变化与每分钟进度都会更新；不保存登录链接 |
 
 运行历史的查询、按天统计与按保留策略清理在第 7 步加入；截图目前仍保存在账号数据目录中，第 7 步起在运行结束后移入运行目录。

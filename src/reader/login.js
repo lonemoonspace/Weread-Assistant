@@ -77,7 +77,8 @@ async function findQRCodeElement(driver) {
   }
 }
 
-// 从页面二维码图片中解码登录链接，在终端显示为二维码并推送；返回登录链接，解析失败时返回 null
+// 从页面二维码图片中解码登录链接并推送，命令行运行时在终端显示；返回登录链接，解析失败时返回 null。
+// 登录链接在有效期内可用于完成这次登录，不写入日志：由面板运行时经 login-required 事件交给面板显示
 async function extractAndDisplayQRCode(driver, ctx) {
   try {
     const qrImg = await driver.findElement(By.xpath(XPATH.qrImage));
@@ -91,9 +92,10 @@ async function extractAndDisplayQRCode(driver, ctx) {
     const code = jsQR(new Uint8ClampedArray(png.data), png.width, png.height);
 
     if (code && code.data) {
-      console.info("登录链接:", code.data);
-      // 由面板运行时二维码显示在面板页面上，不在日志中打印
+      console.info("已解析登录链接，二维码约 1 分钟后失效，失效后会自动刷新");
       if (ctx.terminalQr) {
+        // console.log 只输出到终端，不写入 output.log
+        console.log(`登录链接: ${code.data}`);
         const qrcode = require("qrcode-terminal");
         qrcode.generate(code.data, { small: true });
       }

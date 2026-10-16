@@ -3,7 +3,7 @@
 | 场景 | 前置条件 / 输入 | 预期结果 |
 | --- | --- | --- |
 | smoke 自查 | 在仓库根目录执行 `node scripts/notify-smoke.js` | 11 个场景全部通过并退出码 0，全程不访问外网、不需要真实密钥 |
-| Bark 负载保持 | 配置 `barkKey` 与指向 mock 服务的 `barkServer`，调用 `sendBark` | 请求路径为 `/<barkKey>`，负载包含 `title`/`body`/`sound`/`group`/`level` 及可选 `subtitle`/`url`/`image` |
+| Bark 负载保持 | 配置 `barkKey` 与指向 mock 服务的 `barkServer`，调用 `sendBark` | 请求路径为 `/<barkKey>`，负载包含 `title`/`body`/`sound`/`group`/`level` 及可选 `subtitle`/`url`/`image`；日志记录 `发送Bark推送: <服务器地址>`，不出现 Bark Key |
 | ntfy 负载映射 | 配置 `ntfyTopic` 与指向 mock 服务的 `ntfyServer`，调用 `sendNtfy` 并传入 `level=critical`、`sound=alarm`、`url`、`image`、`actions` | 请求为 JSON POST 到服务器根路径，负载包含 `topic`/`message`/`priority=5`/`tags=[rotating_light]`/`click`/`attach`/`actions` |
 | ntfy 认证 | 分别只配置 `ntfyToken`，以及只配置 `ntfyUsername` + `ntfyPassword` | 请求头分别为 `Authorization: Bearer <token>` 与 `Authorization: Basic <base64>` |
 | ntfy 覆盖项 | 配置 `ntfyPriority` 为 `5`、`ntfyTags` 为 `book,heavy_check_mark` 后发送 | 负载使用 `priority=5` 与配置的标签列表，不再使用默认映射 |

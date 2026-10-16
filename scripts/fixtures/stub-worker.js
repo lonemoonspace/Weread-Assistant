@@ -44,6 +44,8 @@ process.once("message", async ({ mode, config }) => {
   log(`mode=${mode} account=${config.accountName} dataDir=${config.dataDir}`);
   log(`环境变量: ${JSON.stringify(Object.keys(process.env).sort())}`);
   log(`barkKey 已下发: ${Boolean(config.barkKey)}`);
+  // 模拟子进程不小心打印了密钥与登录链接，面板写入日志前应替换为掩码
+  log(`模拟泄露: https://api.day.app/${config.barkKey} https://weread.qq.com/web/confirm?uid=${id}-uid&from=stub`);
   send("started", { version: "stub" });
   await sleep(50);
   if (kind === "crash") {
@@ -68,7 +70,7 @@ process.once("message", async ({ mode, config }) => {
   }
 
   if (kind === "fail") {
-    send("error", { message: "模拟的页面错误" });
+    send("error", { message: config.barkKey ? `模拟的页面错误 ${config.barkKey}` : "模拟的页面错误" });
     await exit(0);
     return;
   }

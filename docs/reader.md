@@ -46,7 +46,7 @@ flowchart TD
 
 ### 阅读子进程与事件
 
-面板为每次运行 fork 一个 `src/reader/worker.js`：面板发送 `{ type: "start", mode, config }`，子进程调用 `runOnce`，并把运行中的事件以 `{ event, data }` 发回面板。日志写到标准输出，由面板保存为运行目录中的 `output.log`；此时不在日志中打印二维码，二维码由面板页面显示。
+面板为每次运行 fork 一个 `src/reader/worker.js`：面板发送 `{ type: "start", mode, config }`，子进程调用 `runOnce`，并把运行中的事件以 `{ event, data }` 发回面板。日志写到标准输出，由面板保存为运行目录中的 `output.log`。
 
 | 事件 | 时机 | `data` |
 | --- | --- | --- |
@@ -96,4 +96,6 @@ flowchart TD
 | 首页校验 | 首页标题不是“微信读书”时报错 |
 | 书名 | 从阅读页标题“书名 - 作者 - 微信读书”中解析，取不到时为空 |
 | 日志 | `util.format` 格式化；`console.debug` 只在开启调试日志（`debug`）时输出 |
+| 登录链接 | 在有效期内可用于完成这次登录，不写入日志，日志中只记录“已解析登录链接”。由面板运行时经 `login-required` 事件交给面板显示；命令行运行（`run --account`）时在终端显示登录链接与二维码，只输出到终端，不写入 `output.log` |
+| 密钥 | 日志中不打印 Bark Key 等密钥；面板保存运行日志前还会把密钥值与登录链接中的 uid 替换为掩码，见 `docs/panel.md`“运行队列” |
 | 停止 | 面板中停止或进程收到 SIGTERM / SIGINT 时关闭浏览器后结束，见“阅读子进程与事件” |
