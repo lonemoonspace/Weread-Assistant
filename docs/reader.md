@@ -46,7 +46,7 @@ flowchart TD
 
 ### 阅读子进程与事件
 
-面板为每次运行 fork 一个 `src/reader/worker.js`：面板发送 `{ type: "start", mode, config }`，子进程调用 `runOnce`，并把运行中的事件以 `{ event, data }` 发回面板。日志写到标准输出，由面板保存为运行目录中的 `output.log`。
+面板为每次运行 fork 一个 `src/reader/worker.js`：面板发送 `{ type: "start", mode, config, screenshotDir }`，子进程调用 `runOnce`，并把运行中的事件以 `{ event, data }` 发回面板。日志写到标准输出，由面板保存为运行目录中的 `output.log`；阅读截图写入 `screenshotDir`（运行目录），cookies 与登录二维码仍在账号数据目录。
 
 | 事件 | 时机 | `data` |
 | --- | --- | --- |
@@ -73,7 +73,7 @@ flowchart TD
 | 3 | 出现“点击重试” | 点击 |
 | 4 | 其他 | 按住方向键下 50–500 毫秒 |
 
-每分钟截图一次（阅读期间每分钟截图，`screenshot`）。截图小于 100KB 视为白屏并刷新页面：阅读页正文由 canvas 绘制，无法通过 DOM 文本判断是否白屏。
+每分钟截图一次（阅读期间每分钟截图，`screenshot`），文件名为 `screenshot-<分钟>.png`：由面板运行时写入运行目录，命令行运行时写入账号数据目录。截图小于 100KB 视为白屏并刷新页面：阅读页正文由 canvas 绘制，无法通过 DOM 文本判断是否白屏。
 
 ### 翻动节奏
 

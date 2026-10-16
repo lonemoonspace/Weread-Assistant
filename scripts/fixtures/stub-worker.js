@@ -1,6 +1,6 @@
 // panel-smoke 使用的桩阅读子进程：协议与 src/reader/worker.js 相同，不连接浏览器。
 // 按账号 ID（即 config.profileName）的前缀决定行为：
-//   ok-*        正常阅读 2 分钟后上报 done
+//   ok-*        正常阅读 2 分钟（写入两张截图）后上报 done
 //   login-*     仅登录：上报登录链接，随后登录成功
 //   fail-*      上报 error
 //   timeout-*   上报 login-timeout
@@ -8,6 +8,9 @@
 //   slow-*      打开书后一直阅读，收到 SIGTERM 后退出
 //   stubborn-*  忽略 SIGTERM，只能被强制结束
 //   hang-*      建立会话后不再有任何动作，收到 SIGTERM 后退出
+const fs = require("fs");
+const path = require("path");
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let lastSend = Promise.resolve();
@@ -26,7 +29,7 @@ async function exit(code) {
   process.exit(code);
 }
 
-process.once("message", async ({ mode, config }) => {
+process.once("message", async ({ mode, config, screenshotDir }) => {
   const id = config.profileName;
   const kind = id.split("-")[0];
   const sessionId = `stub-session-${id}`;
@@ -85,6 +88,8 @@ process.once("message", async ({ mode, config }) => {
     for (const minute of [1, 2]) {
       await sleep(50);
       log(`Reading minute: ${minute}`);
+      // 与真实子进程一样把截图写入面板指定的运行目录
+      fs.writeFileSync(path.join(screenshotDir, `screenshot-${minute}.png`), `stub screenshot ${minute}`);
       send("reading-minute", { minute, total: 2, screenshot: `screenshot-${minute}.png` });
     }
     send("done", { minutes: 2 });

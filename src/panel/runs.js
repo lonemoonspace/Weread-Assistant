@@ -11,11 +11,12 @@ const { ACCOUNT_ID_PATTERN } = require("./accounts");
 const ACTIVE_STATUSES = ["queued", "starting", "waiting-login", "reading"];
 const FINAL_STATUSES = ["success", "failed", "stopped", "interrupted"];
 
-// 运行 ID：UTC 时间加随机后缀，按字典序即按时间排序，例如 20261015T063000Z-3f9a
-const RUN_ID_PATTERN = /^\d{8}T\d{6}Z-[0-9a-f]{4}$/;
+// 运行 ID：精确到毫秒的 UTC 时间加随机后缀，按字典序即按时间排序，例如 20261015T063000123Z-3f9a。
+// 第 7 步之前的 ID 只精确到秒（20261015T063000Z-3f9a），仍然接受
+const RUN_ID_PATTERN = /^\d{8}T\d{6}(\d{3})?Z-[0-9a-f]{4}$/;
 
 function newRunId(date = new Date()) {
-  const stamp = date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const stamp = date.toISOString().replace(/[-:.]/g, "");
   return `${stamp}-${crypto.randomBytes(2).toString("hex")}`;
 }
 

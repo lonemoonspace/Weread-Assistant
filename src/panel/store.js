@@ -16,6 +16,7 @@ function normalizeData(raw, seedDefaults) {
       ? raw.accounts.map((account) => ({
           ...account,
           schedules: Array.isArray(account.schedules) ? account.schedules : [],
+          challenge: account.challenge && typeof account.challenge === "object" ? account.challenge : null,
         }))
       : [],
   };

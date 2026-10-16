@@ -98,10 +98,19 @@ function publicRun(run, { withLog = false } = {}) {
   return view;
 }
 
-// 写入 meta.json 的运行记录：不含登录链接（一次性且很快过期）
+// 写入 meta.json 的运行记录：不含登录链接（一次性且很快过期）。
+// minuteMarks 为每一分钟阅读完成的时间，按天统计时用它把跨天的运行拆到各自的日期
 function runMeta(run) {
   const { loginUrl, stopRequested, ...meta } = publicRun(run);
-  return { ...meta, exitCode: run.exitCode, exitSignal: run.exitSignal };
+  return { ...meta, minuteMarks: run.minuteMarks, exitCode: run.exitCode, exitSignal: run.exitSignal };
+}
+
+// 补齐到 count 个分钟记录，时间记为现在（进度事件跳过了某些分钟，或最后一分钟没来得及上报）
+function fillMinuteMarks(run, count) {
+  const now = new Date().toISOString();
+  while (run.minuteMarks.length < count) {
+    run.minuteMarks.push(now);
+  }
 }
 
 async function deleteSeleniumSession(seleniumUrl, sessionId) {
@@ -126,6 +135,7 @@ function createRunner({
   exitAfterResultMs = EXIT_AFTER_RESULT_MS,
   runTimeoutMs,
   startOptions = {},
+  onFinish = () => {},
 }) {
   const panelDataDir = path.resolve(dataDir);
   const queue = [];
@@ -194,6 +204,11 @@ function createRunner({
     running.delete(run);
     active.delete(run.accountId);
     run.resolveClosed();
+    try {
+      onFinish(publicRun(run));
+    } catch (e) {
+      console.error("处理运行结束失败:", e);
+    }
     pump();
   }
 
@@ -255,12 +270,14 @@ function createRunner({
         break;
       case "reading-minute":
         run.minutes = toCount(data.minute);
+        fillMinuteMarks(run, run.minutes);
         run.plannedMinutes = toCount(data.total) || run.plannedMinutes;
         run.screenshot = path.basename(String(data.screenshot || ""));
         break;
       case "done":
         // 以较大者为准：最后一分钟的进度可能没来得及上报
         run.minutes = Math.max(run.minutes, toCount(data.minutes));
+        fillMinuteMarks(run, run.minutes);
         setResult(run, "success");
         break;
       case "login-timeout":
@@ -366,7 +383,8 @@ function createRunner({
     child.once("close", (code, signal) => {
       onClose(run, code, signal).catch((e) => console.error("处理子进程退出失败:", e));
     });
-    child.send({ type: "start", mode: run.mode, config, ...startOptions });
+    // 阅读截图直接写入运行目录
+    child.send({ type: "start", mode: run.mode, config, screenshotDir: run.dir, ...startOptions });
 
     const limitMs =
       runTimeoutMs || (config.loginTimeout + (run.mode === "read" ? config.duration : 0)) * 60000 + RUN_TIMEOUT_MARGIN_MS;
@@ -428,6 +446,7 @@ function createRunner({
         book: "",
         readingStartedAt: null,
         minutes: 0,
+        minuteMarks: [],
         plannedMinutes: 0,
         screenshot: "",
         loginUrl: "",

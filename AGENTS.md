@@ -6,7 +6,7 @@
 - 新增运行配置项时只改 `src/config/schema.js`，面板表单与校验都由它生成，不新增对应的环境变量；整数项用 `min` / `max` 限定范围，枚举项用 `options` 列出可选值，解析时会据此校验。
 - 页面定位器与关键文案集中在 `src/reader/selectors.js`；浏览器隐式等待为 0，需要等元素出现时使用 `src/reader/dom.js` 中的显式等待。
 - 面板中的每次运行由 `src/panel/runner.js` fork 阅读子进程 `src/reader/worker.js` 执行：配置经 IPC 下发，不放进环境变量；子进程经 IPC 上报事件，新增事件时同步更新 `docs/reader.md` 与 `docs/panel.md`。阅读流程中较长的等待要传入 `ctx.signal`，保证停止时能立即结束。
-- 运行产物（cookies.json、login.png、截图、output.log、运行记录）写入数据目录（默认 `data/`），该目录已在 `.gitignore` 与 `.dockerignore` 中排除。
+- 运行产物写入数据目录（默认 `data/`）：账号的 cookies.json、login.png 在 `accounts/<id>/`，每次运行的 meta.json、output.log、阅读截图在 `runs/<id>/<运行 ID>/`。该目录已在 `.gitignore` 与 `.dockerignore` 中排除。按天统计以 meta.json 中的 `minuteMarks` 为准，改动运行记录格式时保持兼容旧记录。
 
 ## 构建、测试与开发命令
 - `npm install`：安装依赖，依赖升级时记录 package-lock 差异。

@@ -1,8 +1,10 @@
 const fs = require("fs");
 const path = require("path");
 
-function getDataPaths(config) {
+// screenshotDir：阅读截图的保存目录，由面板运行时为运行目录，默认为账号数据目录
+function getDataPaths(config, { screenshotDir } = {}) {
   const dataDir = path.resolve(config.dataDir);
+  const shotsDir = screenshotDir ? path.resolve(screenshotDir) : dataDir;
   return {
     dataDir,
     cookies: path.join(dataDir, "cookies.json"),
@@ -11,7 +13,7 @@ function getDataPaths(config) {
     // 只含二维码的截图，作为邮件附件
     loginQrImage: path.join(dataDir, "login-qr.png"),
     outputLog: path.join(dataDir, "output.log"),
-    screenshot: (fileName = "screenshot.png") => path.join(dataDir, fileName),
+    screenshot: (fileName = "screenshot.png") => path.join(shotsDir, fileName),
   };
 }
 

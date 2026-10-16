@@ -229,7 +229,7 @@ async function main() {
     });
 
     // 以下两个场景以子进程方式运行，不经过 runOnce 的场景封装
-    const workerScenario = async (title, { name, site, values = () => ({}), mode = "read", timing, run }) => {
+    const workerScenario = async (title, { name, site, values = () => ({}), mode = "read", timing, run, screenshotDir }) => {
       if (ONLY && ONLY !== name) {
         return;
       }
@@ -246,7 +246,11 @@ async function main() {
         ...values(homeUrl),
       });
       const startedAt = Date.now();
-      const worker = startWorker({ mode, config, homeUrl, timing: { ...FAST_TIMING, ...timing } });
+      const shotsDir = screenshotDir ? path.join(dataDir, screenshotDir) : undefined;
+      if (shotsDir) {
+        fs.mkdirSync(shotsDir);
+      }
+      const worker = startWorker({ mode, config, homeUrl, timing: { ...FAST_TIMING, ...timing }, screenshotDir: shotsDir });
       let note;
       try {
         note = await run({ worker, events: mock.events(name), pushes: ntfy.requests, dataDir });
@@ -266,6 +270,8 @@ async function main() {
       site: { qrExpireMs: 60000, scanOnQr: 1, scanDelayMs: 6000, chapters: 3, contentHeight: 1800 },
       values: (homeUrl) => ({ selection: -1, bookUrl: `${homeUrl}reader?book=1&ch=1`, screenshot: true }),
       timing: { loginTimeoutMs: 30000, durationMs: 9000, minuteMs: 3000, pressIntervalMs: [300, 500] },
+      // 与面板一样指定运行目录，阅读截图写到这里
+      screenshotDir: "run",
       async run({ worker, dataDir }) {
         const { code, signal } = await worker.exited;
         assert.deepStrictEqual({ code, signal }, { code: 0, signal: null });
@@ -280,7 +286,9 @@ async function main() {
         assert.ok(minutes.length >= 2 && minutes.every((data, i) => data.minute === i + 1), "阅读进度应逐分钟上报");
         assert.ok(minutes.every((data) => data.total === 3));
         assert.strictEqual(minutes[0].screenshot, "screenshot-1.png");
-        assert.ok(fs.existsSync(path.join(dataDir, "screenshot-1.png")));
+        assert.ok(fs.existsSync(path.join(dataDir, "run", "screenshot-1.png")), "截图写入指定的运行目录");
+        assert.ok(!fs.existsSync(path.join(dataDir, "screenshot-1.png")));
+        assert.ok(fs.existsSync(path.join(dataDir, "cookies.json")), "cookies 仍写入账号数据目录");
         assert.ok(await sessionClosed(byName("session").sessionId), "运行结束后应关闭浏览器会话");
         const output = worker.output();
         assert.match(output, /^\[INFO\]\[[^\]]+\]: /m, "日志应带级别与时间");

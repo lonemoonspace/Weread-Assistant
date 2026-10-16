@@ -1,6 +1,6 @@
 ## Web 面板说明
 
-> 已完成：登录、会话、修改密码、反向代理支持，全局设置、默认配置与账号管理接口，运行队列（立即运行、仅登录、停止、运行日志、实时推送），以及按账号的调度规则与定时运行。运行历史与统计、完整的页面按 `docs/design.md` 的开发计划逐步加入。
+> 已完成：登录、会话、修改密码、反向代理支持，全局设置、默认配置与账号管理接口，运行队列（立即运行、仅登录、停止、运行日志、实时推送），按账号的调度规则与定时运行，以及运行历史、按天统计、打卡日历与挑战进度、按保留策略清理。完整的页面按 `docs/design.md` 的开发计划逐步加入。
 
 ### 启动
 
@@ -43,6 +43,8 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/schedules.js` | 调度规则的校验、换算为 cron 表达式、计算接下来的触发时间 | 时间按面板时区解释 |
 | `src/panel/scheduler.js` | 按调度规则定时把运行加入队列（croner） | `panel.json` 每次修改后重建定时任务；错过的时间不补跑 |
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
+| `src/panel/history.js` | 运行历史、按天统计、打卡日历与挑战进度、按保留策略清理 | 按面板时区统计；口径为本工具的运行记录，非微信读书官方数据 |
+| `src/panel/challenge.js` | 阅读挑战（月卡、年卡）的规则与设置校验 | |
 | `src/reader/worker.js` | 阅读子进程入口：经 IPC 接收配置、上报事件，收到 SIGTERM 时关闭浏览器后退出 | 只由面板启动，见 `docs/reader.md` |
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入、先写临时文件再重命名、权限 0600；启动时把已有文件的权限收紧为 0600，改不了或文件损坏时拒绝启动；补齐缺少的部分（旧文件自动升级） |
 | `src/panel/auth.js` | 密码哈希、会话、登录限速、修改密码 | 密码以 scrypt 哈希保存；会话只在内存中保存令牌哈希，面板重启后需重新登录 |
@@ -64,10 +66,10 @@ docker compose logs app | grep 面板初始密码
 | `GET api/schema` | 是 | 表单清单：配置分组、运行配置字段（类型、可选值、范围、是否密钥）、面板设置字段 |
 | `GET api/settings` | 是 | `{ settings, defaults }`：面板设置与全局默认运行配置（密钥为掩码） |
 | `PATCH api/settings` | 是 | `{ settings?, defaults? }`：只修改提交的项；任一项非法时返回 400 且整个请求不生效 |
-| `GET api/accounts` | 是 | 账号列表，含是否已有 cookies、调度规则（带接下来的触发时间）与下一次定时运行时间 `nextRunAt` |
+| `GET api/accounts` | 是 | 账号列表，含是否已有 cookies、调度规则（带接下来的触发时间）、下一次定时运行时间 `nextRunAt`、挑战设置 `challenge`、今天的阅读分钟数 `today`（`{ date, minutes, checkedIn }`）与最近一次运行 `lastRun` |
 | `POST api/accounts` | 是 | `{ id, name? }`；成功 201，ID 已存在 409，ID 或名称非法 400；同时创建账号数据目录 |
-| `GET api/accounts/:id` | 是 | `{ account, effective }`：账号与实际生效的运行配置 |
-| `PATCH api/accounts/:id` | 是 | `{ name?, enabled?, overrides? }`；ID 不可修改 |
+| `GET api/accounts/:id` | 是 | `{ account, challengeProgress, effective }`：账号、本轮挑战进度（未设置挑战时为 null）与实际生效的运行配置 |
+| `PATCH api/accounts/:id` | 是 | `{ name?, enabled?, overrides?, challenge? }`；ID 不可修改；`challenge` 为 `{ type: "month" \| "year", startDate: "YYYY-MM-DD" }` 或 null |
 | `GET api/accounts/:id/schedules` | 是 | `{ timezone, enabled, nextRunAt, schedules }`：每条规则带 `description` 与接下来 5 次触发时间 `nextRuns` |
 | `PUT api/accounts/:id/schedules` | 是 | `{ schedules: [...] }`：整体替换账号的调度规则，保存后立即生效；任一条非法时返回 400，`message` 指出第几条规则与原因，整个请求不生效 |
 | `POST api/schedules/preview` | 是 | `{ schedules: [...] }`：校验并返回每条规则接下来的触发时间，不保存，供填写表单时预览 |
@@ -75,7 +77,11 @@ docker compose logs app | grep 面板初始密码
 | `POST api/accounts/:id/runs` | 是 | `{ mode? }`，`read`（默认）或 `login`（仅登录），可以不带请求体；加入队列后返回 202 与运行状态；账号不存在 404，已停用 409 `account_disabled`，已在运行或排队 409 `run_active` |
 | `POST api/accounts/:id/stop` | 是 | 停止账号当前的运行：排队中的直接取消，进行中的结束子进程；返回 202 与运行状态；没有运行时 404 `run_not_active` |
 | `GET api/runs` | 是 | 排队中与进行中的运行，按加入队列的顺序，每个运行带最近 200 行日志 |
-| `GET api/accounts/:id/runs/:runId/log` | 是 | 运行日志（`text/plain`）；`?download=1` 时作为附件下载 |
+| `GET api/accounts/:id/runs` | 是 | 运行历史，最新的在前：`{ runs, nextBefore }`；`?limit=`（1–100，默认 20）、`?before=<nextBefore>` 翻页。每条为运行记录加 `hasLog` 与截图文件名 `screenshots` |
+| `GET api/accounts/:id/runs/:runId` | 是 | `{ run }`：运行记录、截图文件名与按天拆分的阅读分钟数 `minutesByDate` |
+| `GET api/accounts/:id/runs/:runId/screenshots/:name` | 是 | 截图（`image/png`），运行中也可读取最新的截图；文件名只接受 `screenshot-<分钟>.png` |
+| `GET api/accounts/:id/runs/:runId/log` | 是 | 运行日志（`text/plain`）；`?download=1` 时作为附件下载；超过保留天数被清理后返回 404 |
+| `GET api/accounts/:id/calendar` | 是 | 打卡日历，`?month=YYYY-MM`（默认本月）：每天的阅读分钟数与是否打卡、今天、本月合计与本轮挑战进度，见下文 |
 | `GET api/events` | 是 | 实时推送（SSE），见下文 |
 
 接口返回的错误为 `{ error, message }`，`message` 可直接展示给用户。
@@ -109,14 +115,50 @@ docker compose logs app | grep 面板初始密码
 | 面板停止 | 取消排队，结束所有子进程并等待退出（最长 15 秒），这些运行记为中断；`docker-compose.yml` 中 `stop_grace_period` 设为 30 秒，留出关闭浏览器的时间 |
 | 面板断开 | 面板进程意外退出时，子进程检测到 IPC 断开后关闭浏览器并退出 |
 
-每次运行保存在 `runs/<账号 ID>/<运行 ID>/` 下。运行 ID 由 UTC 时间与随机后缀组成，例如 `20261015T063000Z-3f9a`，按字典序即按时间排序。
+每次运行保存在 `runs/<账号 ID>/<运行 ID>/` 下。运行 ID 由精确到毫秒的 UTC 时间与随机后缀组成，例如 `20261015T063000123Z-3f9a`，按字典序即按时间排序；第 7 步之前的运行 ID 只精确到秒（`20261015T063000Z-3f9a`），同样可以读取。
 
 | 文件 | 内容 |
 | --- | --- |
 | `output.log` | 子进程的标准输出与标准错误，加上面板写入的 `[PANEL]` 行（加入队列、启动、停止请求、强制结束、退出码、运行结束）。写入与实时推送前，把本次运行配置中的密钥值（Bark Key、ntfy 主题、Token 与密码、SMTP 密码，4 个字符以上）以及微信读书登录链接中的 uid 替换为 `••••••`；子进程上报的错误信息同样处理 |
-| `meta.json` | `id`、`accountId`、`accountName`、`mode`、`trigger`（`manual` 或 `schedule`）、`scheduleId`、`status`、`queuedAt`、`startedAt`、`endedAt`、`book`、`readingStartedAt`、`minutes`、`plannedMinutes`、`screenshot`、`error`、`exitCode`、`exitSignal`；状态变化与每分钟进度都会更新；不保存登录链接 |
+| `meta.json` | `id`、`accountId`、`accountName`、`mode`、`trigger`（`manual` 或 `schedule`）、`scheduleId`、`status`、`queuedAt`、`startedAt`、`endedAt`、`book`、`readingStartedAt`、`minutes`、`plannedMinutes`、`screenshot`、`minuteMarks`（每一分钟阅读完成的时间，按天统计使用；接口中不返回）、`error`、`exitCode`、`exitSignal`；状态变化与每分钟进度都会更新；不保存登录链接 |
+| `screenshot-<分钟>.png` | 阅读截图，子进程直接写入运行目录（按保留策略清理） |
 
-运行历史的查询、按天统计与按保留策略清理在第 7 步加入；截图目前仍保存在账号数据目录中，第 7 步起在运行结束后移入运行目录。
+### 运行历史与统计
+
+| 规则 | 说明 |
+| --- | --- |
+| 当日阅读分钟 | 当天所有运行中每一分钟阅读进度的累计，失败、停止的运行已读的部分也计入；跨午夜的运行按每一分钟完成的时间拆到各自的日期 |
+| 日期 | 按面板设置中的时区划分；修改时区后，历史数据按新的时区重新归属 |
+| 有效打卡 | 当日阅读分钟 ≥ 5 |
+| 本轮挑战 | 月卡：开始日起 30 天内打卡 29 天、累计 30 小时；年卡：365 天内打卡 360 天、累计 300 小时。进度包括第几天（`dayNumber`，未开始为 0）、状态（`not-started` / `active` / `ended`）、已打卡天数、累计分钟、已漏打卡天数（不含今天）、可漏打卡天数（月卡 1 天、年卡 5 天）与是否达成 |
+| 旧记录 | 第 7 步之前的运行没有逐分钟时间，按开始阅读后每分钟一条估算 |
+| 口径 | 接口返回 `note`：“按本工具运行记录统计，非微信读书官方数据” |
+
+打卡日历（`GET api/accounts/:id/calendar`）返回：
+
+```json
+{
+  "timezone": "Asia/Shanghai",
+  "month": "2026-10",
+  "checkInMinutes": 5,
+  "today": { "date": "2026-10-16", "minutes": 68, "checkedIn": true },
+  "days": [{ "date": "2026-10-01", "minutes": 70, "checkedIn": true, "future": false }],
+  "monthMinutes": 1036,
+  "monthCheckedDays": 15,
+  "challenge": { "type": "month", "label": "月卡", "startDate": "2026-10-01", "endDate": "2026-10-30", "status": "active", "dayNumber": 16, "totalDays": 30, "checkedDays": 15, "requiredDays": 29, "totalMinutes": 1036, "requiredMinutes": 1800, "missedDays": 0, "allowedMissedDays": 1, "achieved": false },
+  "note": "按本工具运行记录统计，非微信读书官方数据"
+}
+```
+
+### 数据保留
+
+| 数据 | 保留 | 说明 |
+| --- | --- | --- |
+| 阅读截图 | 每个账号最近 `screenshotRetentionRuns` 次有截图的运行（默认 3，0 为不保留） | 仅登录等没有截图的运行不占名额 |
+| 运行日志 | `logRetentionDays` 天（默认 30），按运行结束时间计算 | 删除后日志接口返回 404，运行历史中 `hasLog` 为 false |
+| 运行记录 | 永久 | 打卡日历依赖它 |
+
+清理在面板启动时、每次运行结束后、修改这两项设置后以及每 6 小时执行一次；进行中的运行不清理。已删除账号留下的运行记录同样按此清理。
 
 ### 调度
 
@@ -158,8 +200,8 @@ data/
   panel.json              # 面板设置、全局默认配置、账号与调度规则、密码哈希（0600）
   panel.log
   panel.lock              # 面板运行期间存在，防止同一数据目录启动多个面板
-  accounts/<id>/          # 账号数据：cookies.json、login.png、login-qr.png、截图
-  runs/<id>/<runId>/      # 每次运行：meta.json、output.log
+  accounts/<id>/          # 账号数据：cookies.json、login.png、login-qr.png（命令行运行时的截图也在这里）
+  runs/<id>/<runId>/      # 每次运行：meta.json、output.log、screenshot-*.png
 ```
 
 `panel.json` 的结构：
@@ -183,7 +225,8 @@ data/
       "enabled": true,
       "createdAt": "2026-10-15T00:00:00.000Z",
       "overrides": { "selection": -1 },
-      "schedules": [{ "id": "a1b2c3", "type": "daily", "times": ["06:00"], "enabled": true }]
+      "schedules": [{ "id": "a1b2c3", "type": "daily", "times": ["06:00"], "enabled": true }],
+      "challenge": { "type": "month", "startDate": "2026-10-01" }
     }
   ]
 }
