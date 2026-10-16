@@ -27,6 +27,7 @@ const SELENIUM_URL = process.env.SELENIUM_URL || "http://localhost:4444";
 const BROWSER_HOST = process.env.PANEL_HOST_FOR_BROWSER || "127.0.0.1";
 const STUB_WORKER = path.resolve(__dirname, "fixtures", "stub-worker.js");
 const SHOTS = process.env.UI_SMOKE_SCREENSHOTS || fs.mkdtempSync(path.join(os.tmpdir(), "ui-smoke-"));
+fs.mkdirSync(SHOTS, { recursive: true });
 const TIMEZONE = "Asia/Shanghai";
 const NEW_PASSWORD = "new-password-123";
 
