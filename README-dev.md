@@ -27,7 +27,7 @@ node src/cli.js help
 
 # 测试
 npm run test:notify
-npm run test:panel     # 面板鉴权与接口，不需要浏览器
+npm run test:panel     # 面板鉴权、接口与运行队列（桩子进程），不需要浏览器
 npm run test:config    # 配置解析与校验
 SELENIUM_URL=http://localhost:4444 npm run test:reader   # 用本地模拟页面跑阅读流程，需要 Selenium
 npm run test:runtime   # 需要 Docker
@@ -49,9 +49,9 @@ node src/cli.js run --account <id>
 | --- | --- |
 | `src/cli.js` | 命令行入口 |
 | `src/config/` | 配置项清单（`schema.js`）与配置解析（`resolve.js`） |
-| `src/reader/` | 自动阅读流程：连接浏览器、登录、选书、阅读循环、单次运行编排；页面定位器集中在 `selectors.js`，见 `docs/reader.md` |
+| `src/reader/` | 自动阅读流程：连接浏览器、登录、选书、阅读循环、单次运行编排，以及由面板启动的阅读子进程 `worker.js`；页面定位器集中在 `selectors.js`，见 `docs/reader.md` |
 | `src/notify/` | Bark、ntfy、邮件通知 |
-| `src/panel/` | Web 面板：服务端、鉴权、`panel.json` 存储与页面，见 `docs/panel.md` |
+| `src/panel/` | Web 面板：服务端、鉴权、`panel.json` 存储、运行队列与页面，见 `docs/panel.md` |
 | `src/shared/` | 日志、HTTP、版本号等公共工具 |
 | `scripts/` | smoke 测试与镜像构建脚本 |
 | `docs/`、`cases/` | 功能说明与验收用例；整体设计见 `docs/design.md` |

@@ -29,7 +29,8 @@ Usage:
   add --login-only to either run form      Only log in (scan the QR code if needed) and save cookies.
   node src/cli.js help                     Show this help text.
 
-run exits with 0 when the run succeeds, 1 when login times out or an error occurs.
+run exits with 0 when the run succeeds, 1 when login times out, an error occurs or it is stopped
+(SIGTERM / Ctrl+C close the browser before exiting).
 
 Panel environment variables:
   PANEL_PORT               Listening port (default: ${DEFAULT_PANEL_PORT})
@@ -133,7 +134,15 @@ async function main(argv) {
     if (accountId) {
       console.info("账号:", accountId, "数据目录:", config.dataDir);
     }
-    const result = await runOnce(config, { mode: loginOnly ? "login" : "read" });
+    // 在容器中作为 1 号进程运行时没有默认的信号处理，需要自己响应 docker stop 与 Ctrl+C：关闭浏览器后退出
+    const controller = new AbortController();
+    const stop = (signal) => {
+      console.warn(`收到 ${signal}，正在停止...`);
+      controller.abort();
+    };
+    process.once("SIGTERM", () => stop("SIGTERM"));
+    process.once("SIGINT", () => stop("SIGINT"));
+    const result = await runOnce(config, { mode: loginOnly ? "login" : "read", signal: controller.signal });
     console.info("Run finished:", result.status);
     await closeLogFile();
     process.exit(result.status === "success" ? 0 : 1);

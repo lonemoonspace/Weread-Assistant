@@ -5,6 +5,8 @@ services:
     image: lonemoonspace/weread-assistant:latest
     build: .
     restart: unless-stopped
+    # 停止时面板先结束进行中的阅读（关闭浏览器，最长 15 秒）
+    stop_grace_period: 30s
     ports:
       - "127.0.0.1:26868:26868"
     environment:

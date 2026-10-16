@@ -1,3 +1,4 @@
+const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const express = require("express");
@@ -13,6 +14,8 @@ const {
 } = require("./config");
 const { PanelError, badRequest } = require("./errors");
 const { acquirePanelLock } = require("./lock");
+const { createRunner } = require("./runner");
+const { markInterruptedRuns, runDir } = require("./runs");
 const { applySettingsPatch } = require("./settings");
 const { createStore } = require("./store");
 
@@ -21,6 +24,8 @@ const SESSION_COOKIE = "wa_session";
 // 配合 SameSite=Strict 的会话 cookie 防止跨站请求伪造
 const CSRF_HEADER = "X-WA-Request";
 const PUBLIC_DIR = path.join(__dirname, "public");
+// 实时推送的心跳间隔，同时定期检查会话是否仍然有效
+const SSE_HEARTBEAT_MS = 15000;
 
 const SECURITY_HEADERS = {
   "Content-Security-Policy": [
@@ -80,7 +85,7 @@ function requireObject(body) {
   return body;
 }
 
-function createPanelApp(options, { auth, store }) {
+function createPanelApp(options, { auth, store, runner }) {
   const panelDataDir = path.resolve(options.dataDir);
   const settingsView = (data) => ({ settings: data.settings, defaults: maskValues(data.defaults) });
 
@@ -237,6 +242,8 @@ function createPanelApp(options, { auth, store }) {
         draft.defaults = applyConfigPatch(draft.defaults, body.defaults);
       }
     });
+    // 调大并发数后立即启动排队中的运行
+    runner.pump();
     res.json(settingsView(data));
   });
 
@@ -265,12 +272,90 @@ function createPanelApp(options, { auth, store }) {
     res.json({ account: publicAccount(account, panelDataDir) });
   });
 
-  // { deleteData?: boolean }：默认保留账号数据目录
+  // { deleteData?: boolean }：默认保留账号数据目录；账号正在运行或排队时拒绝删除
   api.delete("/accounts/:id", async (req, res) => {
     const body = req.body === undefined ? {} : requireObject(req.body);
-    await deleteAccount(store, panelDataDir, req.params.id, { deleteData: body.deleteData === true });
+    await deleteAccount(store, panelDataDir, req.params.id, {
+      deleteData: body.deleteData === true,
+      isBusy: (id) => runner.isActive(id),
+    });
     console.info("删除账号:", req.params.id, body.deleteData === true ? "（同时删除数据）" : "");
     res.status(204).end();
+  });
+
+  // 排队中与进行中的运行，带最近的日志
+  api.get("/runs", (req, res) => {
+    res.json({ runs: runner.list({ withLog: true }) });
+  });
+
+  // { mode?: "read" | "login" }：立即运行（默认阅读）或仅登录；加入队列后返回 202
+  api.post("/accounts/:id/runs", (req, res) => {
+    const body = req.body === undefined ? {} : requireObject(req.body);
+    const unknown = Object.keys(body).filter((key) => key !== "mode");
+    if (unknown.length > 0) {
+      throw badRequest(`未知的字段：${unknown.join(", ")}`);
+    }
+    const run = runner.enqueue(req.params.id, { mode: body.mode === undefined ? "read" : body.mode });
+    res.status(202).json({ run });
+  });
+
+  // 停止账号当前的运行：排队中的直接取消，进行中的先关闭浏览器再结束
+  api.post("/accounts/:id/stop", (req, res) => {
+    res.status(202).json({ run: runner.stop(req.params.id) });
+  });
+
+  // 运行日志；?download=1 时作为附件下载
+  api.get("/accounts/:id/runs/:runId/log", (req, res) => {
+    let dir;
+    try {
+      dir = runDir(panelDataDir, req.params.id, req.params.runId);
+    } catch (_) {
+      throw new PanelError(404, "run_not_found", "运行记录不存在");
+    }
+    if (!fs.existsSync(path.join(dir, "output.log"))) {
+      throw new PanelError(404, "run_not_found", "运行记录不存在");
+    }
+    res.set("Content-Type", "text/plain; charset=utf-8");
+    if (req.query.download === "1") {
+      res.set("Content-Disposition", `attachment; filename="${req.params.id}-${req.params.runId}.log"`);
+    }
+    // 以运行目录为 root：数据目录位于以点开头的目录下（如 ~/.weread）时也能读取
+    res.sendFile("output.log", { root: dir });
+  });
+
+  // 实时推送（SSE）：连接后先发送一次完整状态 snapshot，之后推送运行状态变化 run 与新的日志行 log。
+  // 定期发送心跳注释，会话失效（退出登录、修改密码、过期）后断开
+  api.get("/events", (req, res) => {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "X-Accel-Buffering": "no",
+    });
+    // 连接关闭后不再写入：在已结束的响应上写入会触发 error 事件
+    let open = true;
+    const send = (event, data) => {
+      if (open) {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      }
+    };
+    res.write("retry: 3000\n\n");
+    send("snapshot", { runs: runner.list({ withLog: true }) });
+    const unsubscribe = runner.subscribe(send);
+    const heartbeat = setInterval(() => {
+      if (!auth.isSessionValid(req.sessionToken)) {
+        cleanup();
+        res.end();
+        return;
+      }
+      res.write(": ping\n\n");
+    }, options.sseHeartbeatMs || SSE_HEARTBEAT_MS);
+    function cleanup() {
+      open = false;
+      clearInterval(heartbeat);
+      unsubscribe();
+    }
+    res.on("close", cleanup);
+    res.on("error", cleanup);
   });
 
   api.use((req, res) => {
@@ -308,13 +393,17 @@ async function startPanel(options) {
   // 先拿到数据目录的锁，再读写 panel.json
   const lock = acquirePanelLock(options.dataDir);
   let server;
+  let runner;
   try {
     const store = createStore(path.resolve(options.dataDir), {
       seedDefaults: options.seleniumUrl ? { seleniumUrl: options.seleniumUrl } : {},
     });
     const auth = createAuth({ store, envPassword: options.password, limits: options.limits });
     const generatedPassword = await auth.init();
-    const app = createPanelApp(options, { auth, store });
+    markInterruptedRuns(options.dataDir);
+    // options.runner：测试时替换阅读子进程、缩短超时
+    runner = createRunner({ dataDir: options.dataDir, store, ...options.runner });
+    const app = createPanelApp(options, { auth, store, runner });
     server = http.createServer(app);
 
     await new Promise((resolve, reject) => {
@@ -328,18 +417,25 @@ async function startPanel(options) {
       server.listen(options.port, options.host, resolve);
     });
 
+    // 停止：不再接受新连接；结束进行中的运行（期间实时推送仍可送达）；断开剩余连接后释放锁
+    let closing = null;
+    const close = async () => {
+      const serverClosed = new Promise((resolve) => server.close(resolve));
+      await runner.close();
+      server.closeAllConnections();
+      await serverClosed;
+      lock.release();
+    };
+
     return {
       server,
+      runner,
       port: server.address().port,
       generatedPassword,
-      close: () =>
-        new Promise((resolve) => {
-          server.close(() => {
-            lock.release();
-            resolve();
-          });
-          server.closeAllConnections();
-        }),
+      close: () => {
+        closing = closing || close();
+        return closing;
+      },
     };
   } catch (error) {
     lock.release();

@@ -173,6 +173,15 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
       return { refreshCookie };
     },
 
+    // 只检查会话是否仍然有效，不延长有效期；供实时推送等长连接定期检查
+    isSessionValid(token) {
+      if (!token) {
+        return false;
+      }
+      const session = sessions.get(hashToken(token));
+      return Boolean(session && session.expiresAt > now());
+    },
+
     destroySession(token) {
       if (token) {
         sessions.delete(hashToken(token));

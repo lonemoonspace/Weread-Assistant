@@ -1,6 +1,7 @@
 const fs = require("fs");
+const path = require("path");
 const { By, until, Key } = require("selenium-webdriver");
-const { findElementsWithin, randomBetween, sleep } = require("./dom");
+const { findElementsWithin, randomBetween, sleep, throwIfStopped } = require("./dom");
 const { READ_FINISHED_TITLE_TEXT, XPATH, parseBookTitle } = require("./selectors");
 const { formatDuration } = require("./timing");
 
@@ -102,16 +103,19 @@ async function jumpToStart(driver, ctx) {
   console.info("Clicked on first chapter.");
 }
 
-// 每分钟截图一次；截图过小时视为白屏并刷新页面
+// 每分钟截图一次并上报进度；截图过小时视为白屏并刷新页面
 async function onReadingMinute(driver, ctx, minute) {
-  const { config, paths } = ctx;
+  const { config, paths, timing } = ctx;
   console.info("Reading minute: ", minute);
+  const progress = { minute, total: Math.round(timing.durationMs / timing.minuteMs), screenshot: "" };
   if (!config.screenshot) {
+    ctx.report("reading-minute", progress);
     return;
   }
 
   const screenshotPath = paths.screenshot(`screenshot-${minute}.png`);
   fs.writeFileSync(screenshotPath, await driver.takeScreenshot(), "base64");
+  ctx.report("reading-minute", { ...progress, screenshot: path.basename(screenshotPath) });
   const size = fs.statSync(screenshotPath).size;
   console.debug("Screenshot size: ", size / 1024, " KB");
   if (size < BLANK_SCREENSHOT_BYTES) {
@@ -136,7 +140,8 @@ async function readLoop(driver, ctx) {
 
   let lastMinute = 0;
   while (Date.now() < endTime) {
-    await sleep(Math.min(randomBetween(minInterval, maxInterval), endTime - Date.now()));
+    throwIfStopped(ctx.signal);
+    await sleep(Math.min(randomBetween(minInterval, maxInterval), endTime - Date.now()), ctx.signal);
 
     const minute = Math.floor((Date.now() - startTime) / timing.minuteMs);
     if (minute > lastMinute) {

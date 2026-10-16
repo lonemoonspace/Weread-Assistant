@@ -28,12 +28,14 @@ function redirectConsole(method) {
   };
 }
 
-function initLogFile(filePath, { debug = false } = {}) {
-  if (logStream) {
+let consoleReady = false;
+
+// 给控制台输出加上级别与时间；debug 级别只在调试时输出
+function initConsole({ debug = false } = {}) {
+  if (consoleReady) {
     return;
   }
-
-  logStream = fs.createWriteStream(filePath, { flags: "w" });
+  consoleReady = true;
 
   ["info", "warn", "error"].forEach(redirectConsole);
   if (debug) {
@@ -41,6 +43,16 @@ function initLogFile(filePath, { debug = false } = {}) {
   } else {
     console.debug = () => {};
   }
+}
+
+// 同 initConsole，并把输出同时写入日志文件
+function initLogFile(filePath, options = {}) {
+  if (logStream) {
+    return;
+  }
+
+  logStream = fs.createWriteStream(filePath, { flags: "w" });
+  initConsole(options);
 }
 
 // 关闭日志文件并等待写入完成；退出进程前调用，否则最后几行日志可能来不及写入
@@ -59,5 +71,6 @@ function closeLogFile() {
 module.exports = {
   closeLogFile,
   formatLocalTimestamp,
+  initConsole,
   initLogFile,
 };
