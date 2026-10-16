@@ -4,7 +4,7 @@
 
 | 场景 | 前置条件 / 输入 | 预期结果 |
 | --- | --- | --- |
-| smoke 自查 | 执行 `npm run test:panel` | 39 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
+| smoke 自查 | 执行 `npm run test:panel` | 40 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
 | 首次启动生成密码 | 空数据目录、未设置 `PANEL_PASSWORD` | 生成 16 位密码；`panel.json` 只保存 scrypt 哈希且权限为 0600；再次启动不再生成，原密码可登录 |
 | 未登录访问 | 不带会话 | `healthz` 返回 `{"status":"ok"}`；`/` 302 到 `login`；登录页与静态资源可访问；`api/auth/session` 返回 401 |
 | 登录与退出 | 设置 `PANEL_PASSWORD` | 错误密码 401；正确密码 204，`Set-Cookie` 带 `HttpOnly`、`SameSite=Strict`、`Path=/`，HTTP 下不带 `Secure`；登录后可访问首页；退出后会话失效 |
@@ -25,7 +25,7 @@
 | 密钥只写不读 | 设置 Bark key、ntfy token 与账号的邮箱密码 | 所有接口只返回掩码，响应中不出现密钥原文；提交掩码或空字符串不修改；`null` 清除 |
 | 配置接口鉴权 | 未登录访问 `api/schema`、`api/settings`、`api/accounts` | 返回 401；schema 不包含数据目录、浏览器配置名、账号名称 |
 | 旧文件升级 | 只有 `auth` 的 `panel.json` | 启动后补齐 `settings`、`defaults`、`accounts`，原密码可登录 |
-| 安全响应头 | 访问页面与接口 | 带 CSP（不含 `unsafe-inline`）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`，不带 `X-Powered-By`；接口 `Cache-Control: no-store` |
+| 安全响应头 | 访问页面与接口 | 带 CSP（不含 `unsafe-inline`；只有登录后的面板主页面含 `'unsafe-eval'`，登录页、接口与静态文件不含；主页面没有内联脚本与样式；`.mjs` 以 JavaScript 类型返回）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`，不带 `X-Powered-By`；接口 `Cache-Control: no-store` |
 | 运行成功 | 设置全局 Bark key；面板进程的环境中有 `PANEL_SMOKE_SECRET`、`BARK_KEY`、`NTFY_TOKEN`、`EMAIL_PASS`、`WEREAD_DURATION`、`SOME_API_TOKEN`；账号 `ok-1` 立即运行 | 返回 202，`mode` 为 `read`、`trigger` 为 `manual`；状态依次为排队中、启动中、阅读中、成功；`minutes` 2、`book` 为书名、`screenshot` 为最新截图；子进程收到的数据目录为 `accounts/ok-1`、经 IPC 收到了 Bark key；子进程的环境变量中没有上述任何一个，只有白名单中的变量（以及 Node 为 IPC 添加的 `NODE_CHANNEL_*`），日志中不出现这些密钥的值；子进程打印的 Bark Key 与登录链接中的 uid 在日志文件与实时推送中都替换为 `••••••`；`meta.json` 状态为成功、退出码 0、不含登录链接；日志接口返回 `text/plain`，含 `[PANEL]` 行与子进程日志，不含密钥原文；`?download=1` 时为附件；运行 ID 格式非法或路径穿越时 404；未登录 401 |
 | 排队与并发 | 并发数 1；依次运行 `slow-a`、`slow-b`、`slow-c`；再次运行 `slow-a`；运行停用的账号、不存在的账号；`mode` 非法或带未知字段；缺少 `X-WA-Request` | `slow-a` 启动中，`slow-b`、`slow-c` 排队中；重复运行 409 `run_active`；停用 409 `account_disabled`；不存在 404；参数非法 400；缺少请求头 403；`api/runs` 按顺序列出 3 个运行并带日志；停止排队中的 `slow-c` 立即记为已停止，日志有“已取消排队”；并发数改为 2 后 `slow-b` 立即启动；停止后 `api/runs` 为空 |
 | 运行失败 | 并发数 3，设置全局 Bark Key；`fail-1` 上报带有 Bark Key 的错误、`timeout-1` 等待扫码超时、`crash-1` 不上报结果以退出码 3 退出 | 都记为失败，`error` 分别为错误信息（Bark Key 替换为 `••••••`，`meta.json` 中相同）、`等待扫码超时`、`阅读子进程异常退出（退出码 3）`；`meta.json` 记录退出码 3 |
@@ -44,5 +44,6 @@
 | 按天统计 | 写入运行记录：上海时间 3 月 31 日 23:51 至 4 月 1 日 00:10 的失败运行（20 分钟）、只有 `minutes` 与开始时间的旧记录（4 月 2 日 6 分钟）、停止的运行（4 月 3 日 3 分钟）、4 月 4 日恰好 5 分钟；之后把时区改为 UTC | 上海时区：3 月 31 日 9 分钟、4 月 1 日 11 分钟、2 日 6 分钟、3 日 3 分钟未打卡、4 日 5 分钟已打卡，4 月合计 25 分钟、打卡 3 天；跨天运行的 `minutesByDate` 为 `{3 月 31 日: 9, 4 月 1 日: 11}`；UTC 时区：3 月 31 日 20 分钟、4 月 1 日 0 分钟；默认月份为本月；`month` 格式非法 400；返回口径说明 |
 | 挑战进度 | 4 月 1 日至 10 日每天 30 分钟（5 日只有 3 分钟），月卡从 4 月 1 日开始；另有 6 月份 29 天每天 63 / 62 分钟的两个账号 | 4 月 10 日：第 10 天、打卡 9 天、累计 273 分钟、漏打卡 1 天、可漏 1 天、未达成；开始前为 `not-started`、第 0 天；结束后为 `ended`、第 30 天、漏打卡 21 天；每天 63 分钟时达成，62 分钟时因时长不足未达成；年卡要求 360 天、18000 分钟、可漏 5 天；挑战类型、日期（如 2 月 30 日）、字段非法时 400；设置后账号详情与日历返回进度，设为 null 后为 null |
 | 保留策略 | 写入 5 次有截图的运行（最早两次 3 天前结束）与 1 次没有截图的仅登录运行；把截图保留改为 2 次、日志保留改为 1 天；再以进行中的运行调用清理（保留 0 次）；之后保留 1 次并运行两次 | 修改设置后立即清理：只有最近 2 次有截图的运行保留截图，仅登录运行不占名额；3 天前的两份日志被删除、日志接口 404；运行记录全部保留；进行中的运行的截图不清理；运行结束后自动删除上一次的截图，记录仍在 |
+| 测试通知 | 未配置渠道时发送；账号覆盖 ntfy（指向模拟服务）并开启邮件但不填 SMTP，关闭完成与失败事件后按账号发送；全局默认配置 ntfy 后不带账号发送；账号不存在；缺少 `X-WA-Request` | 未配置时 `results` 为空；按账号发送时 ntfy 成功、邮件失败，标题为 `WeReadAssistant · 小明 · 测试通知`，不受事件开关影响；按全局发送时只有 ntfy、标题不含账号名称、主题为全局配置；账号不存在 404；缺少请求头 403 |
 | 端口被占用 | 端口已被其他进程监听 | 报错 `端口 <端口> 已被占用，请通过 PANEL_PORT 更换端口` |
 | 镜像 | 执行 `npm run test:runtime` | 容器健康检查通过；面板进程以 `node` 用户运行；`panel.json` 属于 `node` 且权限 600；`docker logs` 中有初始密码；`docker stop` 在 5 秒内完成 |

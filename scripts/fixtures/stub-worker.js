@@ -2,6 +2,7 @@
 // 按账号 ID（即 config.profileName）的前缀决定行为：
 //   ok-*        正常阅读 2 分钟（写入两张截图）后上报 done
 //   login-*     仅登录：上报登录链接，随后登录成功
+//   qr-*        上报登录链接后一直等待扫码，收到 SIGTERM 后退出
 //   fail-*      上报 error
 //   timeout-*   上报 login-timeout
 //   crash-*     不上报结果直接以退出码 3 退出
@@ -10,6 +11,7 @@
 //   hang-*      建立会话后不再有任何动作，收到 SIGTERM 后退出
 const fs = require("fs");
 const path = require("path");
+const { PNG } = require("pngjs");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -17,6 +19,18 @@ let lastSend = Promise.resolve();
 function send(event, data = {}) {
   lastSend = lastSend.then(() => new Promise((resolve) => process.send({ event, data }, () => resolve())));
   return lastSend;
+}
+
+// 一张纯色的 PNG，颜色随分钟变化
+function stubScreenshot(minute) {
+  const png = new PNG({ width: 160, height: 100 });
+  for (let i = 0; i < png.data.length; i += 4) {
+    png.data[i] = (minute * 80) % 256;
+    png.data[i + 1] = 140;
+    png.data[i + 2] = 200;
+    png.data[i + 3] = 255;
+  }
+  return PNG.sync.write(png);
 }
 
 function log(message) {
@@ -58,6 +72,12 @@ process.once("message", async ({ mode, config, screenshotDir }) => {
   }
   send("session", { sessionId });
 
+  if (kind === "qr") {
+    send("login-required", { url: `https://weread.qq.com/web/confirm?uid=${id}` });
+    setInterval(() => {}, 1000);
+    return;
+  }
+
   if (kind === "timeout" || kind === "login") {
     send("login-required", { url: `https://weread.qq.com/web/confirm?uid=${id}` });
     await sleep(150);
@@ -89,7 +109,7 @@ process.once("message", async ({ mode, config, screenshotDir }) => {
       await sleep(50);
       log(`Reading minute: ${minute}`);
       // 与真实子进程一样把截图写入面板指定的运行目录
-      fs.writeFileSync(path.join(screenshotDir, `screenshot-${minute}.png`), `stub screenshot ${minute}`);
+      fs.writeFileSync(path.join(screenshotDir, `screenshot-${minute}.png`), stubScreenshot(minute));
       send("reading-minute", { minute, total: 2, screenshot: `screenshot-${minute}.png` });
     }
     send("done", { minutes: 2 });

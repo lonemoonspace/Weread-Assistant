@@ -121,6 +121,10 @@ async function sendMail(config, subject, text, filePaths = [], options = {}) {
     host: config.emailSmtp,
     port: config.emailPort,
     secure: secure, // true for 465, false for other ports
+    // SMTP 服务器无响应时不要一直等待（面板中发送测试通知时请求会被挂住）
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 30000,
     auth: {
       user: config.emailUser,
       pass: config.emailPass,

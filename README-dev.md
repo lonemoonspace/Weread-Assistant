@@ -24,6 +24,7 @@ npm run test:notify
 npm run test:panel     # 面板鉴权、接口、运行队列（桩子进程）与调度，不需要浏览器
 npm run test:config    # 配置解析与校验
 SELENIUM_URL=http://localhost:4444 npm run test:reader   # 用本地模拟页面跑阅读流程，需要 Selenium
+SELENIUM_URL=http://localhost:4444 npm run test:ui       # 用浏览器走通面板各页面并截图（桌面与手机宽度），需要 Selenium
 npm run test:runtime   # 需要 Docker
 
 # 按面板中的账号配置在命令行运行一次（账号、配置与调度都在面板中设置），用于调试
@@ -33,7 +34,9 @@ node src/cli.js run --account <id> --login-only   # 只登录并保存 cookies
 
 没有 Docker 时，可以用与本机 Chrome 版本一致的 chromedriver 代替 Selenium：先执行 `chromedriver --port=9515`，再以 `SELENIUM_URL=http://localhost:9515` 运行。
 
-`test:reader` 会在本机启动模拟页面服务，浏览器需要能访问它：Selenium 跑在容器里时用 `--network host` 启动，或通过 `MOCK_HOST` 指定浏览器访问本机时使用的地址。
+`test:reader` 会在本机启动模拟页面服务，浏览器需要能访问它：Selenium 跑在容器里时用 `--network host` 启动，或通过 `MOCK_HOST` 指定浏览器访问本机时使用的地址。`test:ui` 同理（`PANEL_HOST_FOR_BROWSER`），截图保存位置见输出，也可用 `UI_SMOKE_SCREENSHOTS` 指定。
+
+面板前端免构建，直接修改 `src/panel/public/assets/app/` 下的文件后刷新页面即可。
 
 ### 代码结构
 
