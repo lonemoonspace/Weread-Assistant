@@ -16,6 +16,8 @@ const { PanelError, badRequest } = require("./errors");
 const { acquirePanelLock } = require("./lock");
 const { createRunner } = require("./runner");
 const { markInterruptedRuns, runDir } = require("./runs");
+const { createScheduler } = require("./scheduler");
+const { nextRunAt, normalizeSchedules, publicSchedule } = require("./schedules");
 const { applySettingsPatch } = require("./settings");
 const { createStore } = require("./store");
 
@@ -88,6 +90,21 @@ function requireObject(body) {
 function createPanelApp(options, { auth, store, runner }) {
   const panelDataDir = path.resolve(options.dataDir);
   const settingsView = (data) => ({ settings: data.settings, defaults: maskValues(data.defaults) });
+  const accountView = (account, timezone = store.get().settings.timezone) =>
+    publicAccount(account, panelDataDir, timezone);
+  const schedulesView = (account, timezone) => ({
+    timezone,
+    enabled: account.enabled,
+    nextRunAt: nextRunAt(account, timezone),
+    schedules: account.schedules.map((rule) => publicSchedule(rule, timezone)),
+  });
+  const schedulesFromBody = (body) => {
+    const unknown = Object.keys(requireObject(body)).filter((key) => key !== "schedules");
+    if (unknown.length > 0) {
+      throw badRequest(`未知的字段：${unknown.join(", ")}`);
+    }
+    return normalizeSchedules(body.schedules);
+  };
 
   const app = express();
   app.disable("x-powered-by");
@@ -248,13 +265,14 @@ function createPanelApp(options, { auth, store, runner }) {
   });
 
   api.get("/accounts", (req, res) => {
-    res.json({ accounts: store.get().accounts.map((account) => publicAccount(account, panelDataDir)) });
+    const data = store.get();
+    res.json({ accounts: data.accounts.map((account) => accountView(account, data.settings.timezone)) });
   });
 
   api.post("/accounts", async (req, res) => {
     const account = await createAccount(store, panelDataDir, requireObject(req.body));
     console.info("新建账号:", account.id);
-    res.status(201).json({ account: publicAccount(account, panelDataDir) });
+    res.status(201).json({ account: accountView(account) });
   });
 
   // 账号详情与实际生效的配置（账号覆盖 > 全局默认 > 内置默认）
@@ -262,14 +280,14 @@ function createPanelApp(options, { auth, store, runner }) {
     const data = store.get();
     const account = findAccount(data, req.params.id);
     res.json({
-      account: publicAccount(account, panelDataDir),
+      account: accountView(account),
       effective: publicEffectiveConfig(resolveAccountConfig(data, account, panelDataDir)),
     });
   });
 
   api.patch("/accounts/:id", async (req, res) => {
     const account = await updateAccount(store, req.params.id, requireObject(req.body));
-    res.json({ account: publicAccount(account, panelDataDir) });
+    res.json({ account: accountView(account) });
   });
 
   // { deleteData?: boolean }：默认保留账号数据目录；账号正在运行或排队时拒绝删除
@@ -281,6 +299,28 @@ function createPanelApp(options, { auth, store, runner }) {
     });
     console.info("删除账号:", req.params.id, body.deleteData === true ? "（同时删除数据）" : "");
     res.status(204).end();
+  });
+
+  // 账号的调度规则、每条规则接下来的触发时间与账号下一次定时运行的时间
+  api.get("/accounts/:id/schedules", (req, res) => {
+    const data = store.get();
+    res.json(schedulesView(findAccount(data, req.params.id), data.settings.timezone));
+  });
+
+  // { schedules: [...] }：整体替换账号的调度规则，保存后立即生效
+  api.put("/accounts/:id/schedules", async (req, res) => {
+    const schedules = schedulesFromBody(req.body);
+    const data = await store.update((draft) => {
+      findAccount(draft, req.params.id).schedules = schedules;
+    });
+    console.info(`调度规则已更新：账号 ${req.params.id}，${schedules.length} 条`);
+    res.json(schedulesView(findAccount(data, req.params.id), data.settings.timezone));
+  });
+
+  // { schedules: [...] }：校验规则并预览接下来的触发时间，不保存
+  api.post("/schedules/preview", (req, res) => {
+    const { timezone } = store.get().settings;
+    res.json({ timezone, schedules: schedulesFromBody(req.body).map((rule) => publicSchedule(rule, timezone)) });
   });
 
   // 排队中与进行中的运行，带最近的日志
@@ -410,6 +450,7 @@ async function startPanel(options) {
   const lock = acquirePanelLock(options.dataDir);
   let server;
   let runner;
+  let scheduler;
   try {
     const store = createStore(path.resolve(options.dataDir), {
       seedDefaults: options.seleniumUrl ? { seleniumUrl: options.seleniumUrl } : {},
@@ -420,6 +461,7 @@ async function startPanel(options) {
     // options.runner：测试时替换阅读子进程、缩短超时
     runner = createRunner({ dataDir: options.dataDir, store, ...options.runner });
     const app = createPanelApp(options, { auth, store, runner });
+    scheduler = createScheduler({ store, runner });
     server = http.createServer(app);
 
     await new Promise((resolve, reject) => {
@@ -437,6 +479,7 @@ async function startPanel(options) {
     let closing = null;
     const close = async () => {
       const serverClosed = new Promise((resolve) => server.close(resolve));
+      scheduler.close();
       await runner.close();
       server.closeAllConnections();
       await serverClosed;
@@ -446,6 +489,7 @@ async function startPanel(options) {
     return {
       server,
       runner,
+      scheduler,
       port: server.address().port,
       generatedPassword,
       close: () => {
@@ -454,6 +498,9 @@ async function startPanel(options) {
       },
     };
   } catch (error) {
+    if (scheduler) {
+      scheduler.close();
+    }
     lock.release();
     throw error;
   }

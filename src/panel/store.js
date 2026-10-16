@@ -12,7 +12,12 @@ function normalizeData(raw, seedDefaults) {
     auth: { passwordHash: "", ...(raw.auth || {}) },
     settings: { ...DEFAULT_SETTINGS, ...(raw.settings || {}) },
     defaults: raw.defaults || { ...seedDefaults },
-    accounts: Array.isArray(raw.accounts) ? raw.accounts : [],
+    accounts: Array.isArray(raw.accounts)
+      ? raw.accounts.map((account) => ({
+          ...account,
+          schedules: Array.isArray(account.schedules) ? account.schedules : [],
+        }))
+      : [],
   };
 }
 
@@ -56,6 +61,7 @@ function createStore(dataDir, { seedDefaults = {}, readOnly = false } = {}) {
   }
 
   let pending = Promise.resolve();
+  const listeners = new Set();
 
   return {
     filePath,
@@ -73,10 +79,22 @@ function createStore(dataDir, { seedDefaults = {}, readOnly = false } = {}) {
         mutator(next);
         writeFileAtomic(filePath, JSON.stringify(next, null, 2), { mode: 0o600 });
         data = next;
+        for (const listener of listeners) {
+          try {
+            listener();
+          } catch (e) {
+            console.error("处理面板数据变化失败:", e);
+          }
+        }
         return this.get();
       });
       pending = run.catch(() => {});
       return run;
+    },
+    // 每次写入成功后调用 listener；返回取消订阅的函数
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
   };
 }

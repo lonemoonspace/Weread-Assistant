@@ -10,7 +10,7 @@
 | cookies 损坏 | `cookies.json` 内容为 `{broken`；已登录 | 结果为 `success`；生成 `cookies.json.corrupt-*` 备份；新的 `cookies.json` 是合法的 JSON 数组 |
 | 阅读 | 已登录；书架 3 本书、每本 2 章；选书方式 2；阅读 30 秒，翻动间隔 0.1–0.2 秒 | 打开第 2 本书第 1 章并切换到上下滚动模式；翻到第 2 章；读完后回到第 1 章；30 秒内翻动不少于 30 次；推送「阅读完成」，不推送「登录成功」 |
 | 目录只有一项、白屏刷新 | 已登录；书只有 1 章且目录开头有“扉页”；直接打开阅读链接；开启截图，每 4 秒算一分钟 | 读完后点击目录中唯一的条目（扉页）且不报错；生成 `screenshot-1.png`；截图小于 100KB 时刷新页面 |
-| 阅读子进程：事件 | fork `src/reader/worker.js` 并经 IPC 下发配置；未登录，第 1 张二维码出现 6 秒后扫码；直接打开阅读链接；阅读 9 秒，每 3 秒算一分钟，开启截图 | 退出码 0；事件依次为 `started`、`session`、`login-required`（`url` 为二维码中的链接）、`login-ok`、`book-opened`（`title` 为书名）、逐分钟的 `reading-minute`（`total` 为 3，`screenshot` 为截图文件名）、`done`；结束后浏览器会话已关闭；标准输出每行带级别与时间，不含二维码字符画 |
+| 阅读子进程：事件 | fork `src/reader/worker.js` 并经 IPC 下发配置；未登录，第 1 张二维码出现 6 秒后扫码；直接打开阅读链接；阅读 9 秒，每 3 秒算一分钟，开启截图 | 退出码 0；事件依次为 `started`、`session`、`login-required`（`url` 为二维码中的链接）、`login-ok`、`book-opened`（`title` 为书名）、逐分钟的 `reading-minute`（`total` 为 3，`screenshot` 为截图文件名）、`done`；结束后浏览器会话已关闭；标准输出每行带级别与时间，不含二维码字符画；日志中出现 `已解析登录链接`，不出现登录链接与 `uid=` |
 | 阅读子进程：停止 | 已登录；阅读 2 分钟，翻动间隔 8–10 秒；收到第一个 `reading-minute` 1.5 秒后发送 SIGTERM | 4 秒内以退出码 0 退出（实测约 0.1 秒）；不上报 `error` 与 `done`；浏览器会话已关闭；日志出现 `收到 SIGTERM，停止运行`、`Browser closed.`、`Run finished: stopped`；不推送「运行失败」 |
-| 真实站点：仅登录 | `SELENIUM_URL=<地址> WEREAD_LOGIN_TIMEOUT=2 node src/cli.js run --login-only`，不扫码 | 日志依次出现找到二维码、登录链接、`Refreshing QR code...`（约每分钟一次）、`距上次推送登录链接不足 3 分钟，本次不推送`、`等待扫码超时（2 分钟）`；进程退出码 1 |
-| 真实站点：完整阅读 | 扫码登录后 `node src/cli.js run` | 打开书籍并切换上下滚动，日志出现书名、每分钟的 `Reading minute`，按配置的节奏翻动，结束时推送「阅读完成」 |
+| 真实站点：仅登录 | 面板中账号 `me` 的等待扫码时长设为 2 分钟，执行 `node src/cli.js run --account me --login-only`，不扫码 | 日志依次出现找到二维码、`已解析登录链接`（`output.log` 中没有登录链接本身）、`Refreshing QR code...`（约每分钟一次）、`距上次推送登录链接不足 3 分钟，本次不推送`、`等待扫码超时（2 分钟）`；进程退出码 1 |
+| 真实站点：完整阅读 | 扫码登录后执行 `node src/cli.js run --account me`，或在面板中立即运行 | 打开书籍并切换上下滚动，日志出现书名、每分钟的 `Reading minute`，按配置的节奏翻动，结束时推送「阅读完成」 |

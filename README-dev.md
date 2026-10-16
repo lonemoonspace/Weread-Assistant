@@ -9,34 +9,26 @@ npm install
 # 启动 Selenium（Chromium 在容器中运行，7900 端口可用浏览器查看画面）
 docker run -d --name selenium -p 4444:4444 -p 7900:7900 --shm-size 2g selenium/standalone-chromium:latest
 
-# 运行一次自动阅读，产物写入 ./data
+# 启动面板（首次启动时在输出中打印初始密码），浏览器打开 http://localhost:26868/
+# SELENIUM_URL 只在首次启动时写入面板的全局配置，之后在面板中修改
 SELENIUM_URL=http://localhost:4444 npm start
 
-# 调试日志
-SELENIUM_URL=http://localhost:4444 npm run debug
-
-# 启动面板（首次启动时在输出中打印初始密码），浏览器打开 http://localhost:26868/
-npm run panel
-
-# 用 Docker 启动面板与 Selenium；按环境变量运行一次阅读
+# 用 Docker 启动面板与 Selenium
 docker compose up -d
-docker compose run --rm reader
 
-# 查看帮助与全部环境变量
+# 查看帮助与面板环境变量
 node src/cli.js help
 
 # 测试
 npm run test:notify
-npm run test:panel     # 面板鉴权、接口与运行队列（桩子进程），不需要浏览器
+npm run test:panel     # 面板鉴权、接口、运行队列（桩子进程）与调度，不需要浏览器
 npm run test:config    # 配置解析与校验
 SELENIUM_URL=http://localhost:4444 npm run test:reader   # 用本地模拟页面跑阅读流程，需要 Selenium
 npm run test:runtime   # 需要 Docker
 
-# 只登录并保存 cookies
-SELENIUM_URL=http://localhost:4444 node src/cli.js run --login-only
-
-# 按面板中的账号配置运行（账号通过面板接口创建）
+# 按面板中的账号配置在命令行运行一次（账号、配置与调度都在面板中设置），用于调试
 node src/cli.js run --account <id>
+node src/cli.js run --account <id> --login-only   # 只登录并保存 cookies
 ```
 
 没有 Docker 时，可以用与本机 Chrome 版本一致的 chromedriver 代替 Selenium：先执行 `chromedriver --port=9515`，再以 `SELENIUM_URL=http://localhost:9515` 运行。

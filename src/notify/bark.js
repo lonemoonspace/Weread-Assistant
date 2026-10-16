@@ -27,7 +27,8 @@ async function sendBark(config, title, body, options = {}) {
   if (url) payload.url = url;
   if (image) payload.image = image;
 
-  console.info("发送Bark推送:", barkUrl);
+  // 推送地址中含有 Bark Key，日志中只记录服务器地址
+  console.info("发送Bark推送:", config.barkServer);
 
   const result = await postJson(barkUrl, payload);
   if (result.ok) {

@@ -1,5 +1,4 @@
-// 运行配置项清单：面板表单、配置校验与环境变量读取都以此为准。
-// key: 配置对象中的字段名；env: 临时的按环境变量运行入口所读取的变量名。
+// 运行配置项清单：面板表单与配置校验都以此为准。key 为配置对象中的字段名，label 用于表单与错误提示。
 const CONFIG_GROUPS = [
   { id: "reading", label: "阅读" },
   { id: "browser", label: "浏览器" },
@@ -13,7 +12,6 @@ const CONFIG_GROUPS = [
 const CONFIG_SCHEMA = [
   {
     key: "duration",
-    env: "WEREAD_DURATION",
     type: "integer",
     group: "reading",
     label: "阅读时长（分钟）",
@@ -23,7 +21,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "speed",
-    env: "WEREAD_SPEED",
     type: "string",
     group: "reading",
     label: "阅读速度",
@@ -37,7 +34,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "selection",
-    env: "WEREAD_SELECTION",
     type: "integer",
     group: "reading",
     label: "选书方式",
@@ -53,7 +49,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "bookUrl",
-    env: "DEFAULT_BOOK_URL",
     type: "string",
     group: "reading",
     label: "默认阅读链接",
@@ -62,7 +57,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "screenshot",
-    env: "WEREAD_SCREENSHOT",
     type: "boolean",
     group: "reading",
     label: "阅读期间每分钟截图",
@@ -70,7 +64,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "loginTimeout",
-    env: "WEREAD_LOGIN_TIMEOUT",
     type: "integer",
     group: "reading",
     label: "等待扫码时长（分钟）",
@@ -81,7 +74,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "seleniumUrl",
-    env: "SELENIUM_URL",
     type: "string",
     group: "browser",
     label: "Selenium 地址",
@@ -89,7 +81,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "profileName",
-    env: "WEREAD_USER",
     type: "string",
     group: "browser",
     label: "浏览器配置名",
@@ -97,7 +88,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "barkKey",
-    env: "BARK_KEY",
     type: "string",
     group: "bark",
     label: "Bark Key",
@@ -107,7 +97,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "barkServer",
-    env: "BARK_SERVER",
     type: "string",
     group: "bark",
     label: "Bark 服务器地址",
@@ -115,7 +104,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "ntfyTopic",
-    env: "NTFY_TOPIC",
     type: "string",
     group: "ntfy",
     label: "ntfy 主题",
@@ -125,7 +113,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "ntfyServer",
-    env: "NTFY_SERVER",
     type: "string",
     group: "ntfy",
     label: "ntfy 服务器地址",
@@ -133,7 +120,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "ntfyToken",
-    env: "NTFY_TOKEN",
     type: "string",
     group: "ntfy",
     label: "ntfy Access Token",
@@ -142,7 +128,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "ntfyUsername",
-    env: "NTFY_USERNAME",
     type: "string",
     group: "ntfy",
     label: "ntfy 用户名",
@@ -150,7 +135,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "ntfyPassword",
-    env: "NTFY_PASSWORD",
     type: "string",
     group: "ntfy",
     label: "ntfy 密码",
@@ -159,7 +143,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "ntfyPriority",
-    env: "NTFY_PRIORITY",
     type: "string",
     group: "ntfy",
     label: "ntfy 优先级覆盖",
@@ -168,7 +151,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "ntfyTags",
-    env: "NTFY_TAGS",
     type: "string",
     group: "ntfy",
     label: "ntfy 标签覆盖",
@@ -177,7 +159,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "emailEnabled",
-    env: "ENABLE_EMAIL",
     type: "boolean",
     group: "email",
     label: "启用邮件通知",
@@ -185,7 +166,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "emailSmtp",
-    env: "EMAIL_SMTP",
     type: "string",
     group: "email",
     label: "SMTP 服务器",
@@ -193,7 +173,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "emailPort",
-    env: "EMAIL_PORT",
     type: "integer",
     group: "email",
     label: "SMTP 端口",
@@ -203,7 +182,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "emailUser",
-    env: "EMAIL_USER",
     type: "string",
     group: "email",
     label: "SMTP 用户名",
@@ -211,7 +189,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "emailPass",
-    env: "EMAIL_PASS",
     type: "string",
     group: "email",
     label: "SMTP 密码",
@@ -220,7 +197,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "emailFrom",
-    env: "EMAIL_FROM",
     type: "string",
     group: "email",
     label: "发件人",
@@ -229,7 +205,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "emailTo",
-    env: "EMAIL_TO",
     type: "string",
     group: "email",
     label: "收件人",
@@ -237,7 +212,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "notifyOnStart",
-    env: "NOTIFY_ON_START",
     type: "boolean",
     group: "events",
     label: "开始运行时通知",
@@ -245,7 +219,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "notifyOnLoginRequired",
-    env: "NOTIFY_ON_LOGIN_REQUIRED",
     type: "boolean",
     group: "events",
     label: "需要扫码时通知（附登录链接）",
@@ -253,7 +226,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "notifyOnLoginSuccess",
-    env: "NOTIFY_ON_LOGIN_SUCCESS",
     type: "boolean",
     group: "events",
     label: "登录成功时通知",
@@ -261,7 +233,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "notifyOnDone",
-    env: "NOTIFY_ON_DONE",
     type: "boolean",
     group: "events",
     label: "阅读完成时通知",
@@ -269,7 +240,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "notifyOnFailure",
-    env: "NOTIFY_ON_FAILURE",
     type: "boolean",
     group: "events",
     label: "等待扫码超时或运行出错时通知",
@@ -277,7 +247,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "accountName",
-    env: "WEREAD_ACCOUNT_NAME",
     type: "string",
     group: "advanced",
     label: "账号名称",
@@ -286,7 +255,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "debug",
-    env: "DEBUG",
     type: "boolean",
     group: "advanced",
     label: "调试日志",
@@ -294,7 +262,6 @@ const CONFIG_SCHEMA = [
   },
   {
     key: "dataDir",
-    env: "WEREAD_DATA_DIR",
     type: "string",
     group: "advanced",
     label: "数据目录",

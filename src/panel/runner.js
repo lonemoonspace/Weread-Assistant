@@ -2,9 +2,10 @@ const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
 const { fork } = require("child_process");
+const { CONFIG_SCHEMA } = require("../config/schema");
 const { formatLocalTimestamp } = require("../shared/log");
 const { findAccount } = require("./accounts");
-const { accountDataDir, resolveAccountConfig } = require("./config");
+const { SECRET_MASK, accountDataDir, resolveAccountConfig } = require("./config");
 const { PanelError, badRequest } = require("./errors");
 const { newRunId, runDir, writeRunMeta } = require("./runs");
 
@@ -19,6 +20,25 @@ const SESSION_DELETE_TIMEOUT_MS = 5000;
 // 实时推送时附带的最近日志行数，供中途打开页面时显示
 const LOG_TAIL_LINES = 200;
 const MAX_LOG_LINE_LENGTH = 8000;
+
+// 写入运行日志、推送日志与错误信息之前替换为掩码：配置中的密钥值，以及微信读书扫码登录链接中的 uid
+// （有效期内可用于完成这次登录）。阅读流程本身不打印这些内容，这里是兜底
+const SECRET_KEYS = CONFIG_SCHEMA.filter((field) => field.secret).map((field) => field.key);
+const MIN_SECRET_LENGTH = 4;
+const LOGIN_URL_UID = /(weread\.qq\.com\/web\/confirm\?[^\s"'<>]*?\buid=)[^&\s"'<>]+/g;
+
+function createRedactor(config = {}) {
+  const secrets = SECRET_KEYS.map((key) => config[key])
+    .filter((value) => typeof value === "string" && value.length >= MIN_SECRET_LENGTH)
+    .sort((a, b) => b.length - a.length);
+  return (text) => {
+    let result = String(text).replace(LOGIN_URL_UID, `$1${SECRET_MASK}`);
+    for (const secret of secrets) {
+      result = result.split(secret).join(SECRET_MASK);
+    }
+    return result;
+  };
+}
 
 const RUN_MODES = ["read", "login"];
 const MODE_LABELS = { read: "阅读", login: "仅登录" };
@@ -58,6 +78,7 @@ function publicRun(run, { withLog = false } = {}) {
     accountName: run.accountName,
     mode: run.mode,
     trigger: run.trigger,
+    scheduleId: run.scheduleId,
     status: run.status,
     stopRequested: run.stopRequested,
     queuedAt: run.queuedAt,
@@ -128,7 +149,8 @@ function createRunner({
     if (run.logStream.writableEnded) {
       return;
     }
-    const text = line.length > MAX_LOG_LINE_LENGTH ? `${line.slice(0, MAX_LOG_LINE_LENGTH)}…` : line;
+    const redacted = run.redact(line);
+    const text = redacted.length > MAX_LOG_LINE_LENGTH ? `${redacted.slice(0, MAX_LOG_LINE_LENGTH)}…` : redacted;
     run.logStream.write(`${text}\n`);
     run.logTail.push(text);
     if (run.logTail.length > LOG_TAIL_LINES) {
@@ -245,7 +267,7 @@ function createRunner({
         setResult(run, "failed", "等待扫码超时");
         break;
       case "error":
-        setResult(run, "failed", String(data.message || "未知错误"));
+        setResult(run, "failed", run.redact(data.message || "未知错误"));
         break;
       default:
         return;
@@ -309,6 +331,7 @@ function createRunner({
     fs.mkdirSync(accountDataDir(panelDataDir, account.id), { recursive: true });
 
     run.accountName = account.name;
+    run.redact = createRedactor(config);
     run.seleniumUrl = config.seleniumUrl;
     run.plannedMinutes = run.mode === "read" ? config.duration : 0;
     run.status = "starting";
@@ -370,7 +393,8 @@ function createRunner({
 
   return {
     // 加入队列。账号不存在 404；已停用、已在运行或排队 409
-    enqueue(accountId, { mode = "read", trigger = "manual" } = {}) {
+    // scheduleId：定时触发时为调度规则 ID
+    enqueue(accountId, { mode = "read", trigger = "manual", scheduleId = null } = {}) {
       if (closing) {
         throw new PanelError(503, "panel_closing", "面板正在停止");
       }
@@ -395,6 +419,7 @@ function createRunner({
         accountName: account.name,
         mode,
         trigger,
+        scheduleId,
         status: "queued",
         stopRequested: false,
         queuedAt: new Date().toISOString(),
@@ -411,6 +436,8 @@ function createRunner({
         exitSignal: null,
         dir: runDir(panelDataDir, accountId, id),
         logTail: [],
+        // 开始运行、拿到配置后换成同时替换密钥值的版本
+        redact: createRedactor(),
         sessionId: "",
       };
       run.closed = new Promise((resolve) => {
@@ -421,7 +448,8 @@ function createRunner({
       run.logStream.on("error", (e) => console.error("写入运行日志失败:", run.dir, e.message));
       active.set(accountId, run);
       queue.push(run);
-      panelLog(run, `加入队列：${TRIGGER_LABELS[trigger] || trigger}触发，${MODE_LABELS[mode]}`);
+      const triggerText = `${TRIGGER_LABELS[trigger] || trigger}触发${scheduleId ? `（规则 ${scheduleId}）` : ""}`;
+      panelLog(run, `加入队列：${triggerText}，${MODE_LABELS[mode]}`);
       changed(run);
       pump();
       return publicRun(run);

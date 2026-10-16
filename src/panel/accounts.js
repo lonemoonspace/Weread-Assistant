@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { PanelError, badRequest } = require("./errors");
 const { accountDataDir, applyConfigPatch, maskValues } = require("./config");
+const { nextRunAt, publicSchedule } = require("./schedules");
 
 // 账号 ID 同时用作数据目录名与浏览器配置名：小写字母、数字与短横线，1–32 位，不以短横线开头或结尾
 const ACCOUNT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
@@ -26,13 +27,16 @@ function findAccount(data, id) {
   return account;
 }
 
-function publicAccount(account, panelDataDir) {
+// timezone 为面板设置中的时区，用于计算调度规则接下来的触发时间
+function publicAccount(account, panelDataDir, timezone) {
   return {
     id: account.id,
     name: account.name,
     enabled: account.enabled,
     createdAt: account.createdAt,
     overrides: maskValues(account.overrides),
+    schedules: account.schedules.map((rule) => publicSchedule(rule, timezone)),
+    nextRunAt: nextRunAt(account, timezone),
     hasCookies: fs.existsSync(path.join(accountDataDir(panelDataDir, account.id), "cookies.json")),
   };
 }
@@ -48,7 +52,7 @@ async function createAccount(store, panelDataDir, body = {}) {
     if (draft.accounts.some((account) => account.id === id)) {
       throw new PanelError(409, "account_exists", `账号已存在：${id}`);
     }
-    draft.accounts.push({ id, name, enabled: true, createdAt: new Date().toISOString(), overrides: {} });
+    draft.accounts.push({ id, name, enabled: true, createdAt: new Date().toISOString(), overrides: {}, schedules: [] });
   });
   // 目录可能是之前删除账号时保留下来的，其中的 cookies 会被沿用
   fs.mkdirSync(accountDataDir(panelDataDir, id), { recursive: true });

@@ -11,7 +11,7 @@ const http = require("http");
 const path = require("path");
 
 const { createNotifier, notify, sendBark, sendNtfy } = require(path.resolve(__dirname, "..", "src", "notify"));
-const { configFromEnv } = require(path.resolve(__dirname, "..", "src", "config", "resolve"));
+const { resolveConfig } = require(path.resolve(__dirname, "..", "src", "config", "resolve"));
 
 function startMockServer() {
   const requests = [];
@@ -51,7 +51,7 @@ async function withQuietConsole(fn) {
   console.warn = capture;
   console.error = capture;
   try {
-    return await fn();
+    return await fn(logs);
   } catch (error) {
     error.capturedLogs = logs;
     throw error;
@@ -73,16 +73,16 @@ async function main() {
 
   const scenario = async (name, fn) => {
     mock.requests.length = 0;
-    await withQuietConsole(() => fn());
+    await withQuietConsole((logs) => fn(logs));
     results.push(name);
     console.log(`✅ ${name}`);
   };
 
   try {
-    await scenario("Bark 负载保持原有字段", async () => {
-      config = configFromEnv({
-        BARK_KEY: "bark-key-123",
-        BARK_SERVER: mock.baseUrl,
+    await scenario("Bark 负载保持原有字段；日志中不出现 Bark Key", async (logs) => {
+      config = resolveConfig({
+        barkKey: "bark-key-123",
+        barkServer: mock.baseUrl,
       });
 
       const ok = await sendBark(config, "微信读书挑战", "登录成功", {
@@ -97,6 +97,8 @@ async function main() {
       const request = mock.requests[0];
       assert.strictEqual(request.method, "POST");
       assert.strictEqual(request.url, "/bark-key-123");
+      assert.ok(logs.some((line) => line.includes(`发送Bark推送: ${mock.baseUrl}`)));
+      assert.ok(!logs.some((line) => line.includes("bark-key-123")), "日志中不应出现 Bark Key");
       assert.deepStrictEqual(parseBody(request), {
         title: "微信读书挑战",
         body: "登录成功",
@@ -109,9 +111,9 @@ async function main() {
     });
 
     await scenario("ntfy 负载映射优先级、标签、点击与附件", async () => {
-      config = configFromEnv({
-        NTFY_TOPIC: "weread_smoke_topic",
-        NTFY_SERVER: mock.baseUrl,
+      config = resolveConfig({
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
       });
 
       const ok = await sendNtfy(config, "微信读书挑战", "发生错误：超时", {
@@ -143,19 +145,19 @@ async function main() {
     });
 
     await scenario("ntfy 支持 Access Token 与 Basic Auth", async () => {
-      config = configFromEnv({
-        NTFY_TOPIC: "weread_smoke_topic",
-        NTFY_SERVER: mock.baseUrl,
-        NTFY_TOKEN: "tk_123",
+      config = resolveConfig({
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
+        ntfyToken: "tk_123",
       });
       await sendNtfy(config, "标题", "正文");
       assert.strictEqual(mock.requests[0].headers.authorization, "Bearer tk_123");
 
-      config = configFromEnv({
-        NTFY_TOPIC: "weread_smoke_topic",
-        NTFY_SERVER: mock.baseUrl,
-        NTFY_USERNAME: "demo",
-        NTFY_PASSWORD: "secret",
+      config = resolveConfig({
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
+        ntfyUsername: "demo",
+        ntfyPassword: "secret",
       });
       await sendNtfy(config, "标题", "正文");
       const expected = `Basic ${Buffer.from("demo:secret", "utf8").toString("base64")}`;
@@ -163,11 +165,11 @@ async function main() {
     });
 
     await scenario("NTFY_PRIORITY / NTFY_TAGS 覆盖默认映射", async () => {
-      config = configFromEnv({
-        NTFY_TOPIC: "weread_smoke_topic",
-        NTFY_SERVER: mock.baseUrl,
-        NTFY_PRIORITY: "5",
-        NTFY_TAGS: "book,heavy_check_mark",
+      config = resolveConfig({
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
+        ntfyPriority: "5",
+        ntfyTags: "book,heavy_check_mark",
       });
       await sendNtfy(config, "标题", "正文", { level: "active", sound: "birdsong" });
       const payload = parseBody(mock.requests[0]);
@@ -176,17 +178,17 @@ async function main() {
 
       // 字符串别名必须归一化为数字：ntfy JSON 接口的 priority 是 int，
       // 传字符串会得到 400 {"code":40024,"error":"invalid request: request body must be valid JSON"}
-      config = configFromEnv({
-        NTFY_TOPIC: "weread_smoke_topic",
-        NTFY_SERVER: mock.baseUrl,
-        NTFY_PRIORITY: "urgent",
+      config = resolveConfig({
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
+        ntfyPriority: "urgent",
       });
       await sendNtfy(config, "标题", "正文", { level: "active", sound: "birdsong" });
       assert.strictEqual(parseBody(mock.requests[1]).priority, 5);
 
-      config = configFromEnv({
-        NTFY_TOPIC: "weread_smoke_topic",
-        NTFY_SERVER: mock.baseUrl,
+      config = resolveConfig({
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
       });
       await sendNtfy(config, "标题", "正文", { level: "active", sound: "birdsong" });
       assert.strictEqual(parseBody(mock.requests[2]).priority, 3);
@@ -195,9 +197,9 @@ async function main() {
     });
 
     await scenario("非法 ntfy 主题直接拦截且不发起请求", async () => {
-      config = configFromEnv({
-        NTFY_TOPIC: "bad topic!",
-        NTFY_SERVER: mock.baseUrl,
+      config = resolveConfig({
+        ntfyTopic: "bad topic!",
+        ntfyServer: mock.baseUrl,
       });
       const ok = await sendNtfy(config, "标题", "正文");
       assert.strictEqual(ok, false);
@@ -205,11 +207,11 @@ async function main() {
     });
 
     await scenario("notify 同时推送 Bark 与 ntfy", async () => {
-      config = configFromEnv({
-        BARK_KEY: "bark-key-123",
-        BARK_SERVER: mock.baseUrl,
-        NTFY_TOPIC: "weread_smoke_topic",
-        NTFY_SERVER: mock.baseUrl,
+      config = resolveConfig({
+        barkKey: "bark-key-123",
+        barkServer: mock.baseUrl,
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
       });
 
       const sent = await notify(config, "微信读书挑战", `阅读完成，持续时间：10分钟`, {
@@ -233,18 +235,18 @@ async function main() {
     });
 
     await scenario("未配置任何渠道时 notify 静默返回空结果", async () => {
-      config = configFromEnv({});
+      config = resolveConfig({});
       const sent = await notify(config, "标题", "正文");
       assert.deepStrictEqual(sent, []);
       assert.strictEqual(mock.requests.length, 0);
     });
 
     await scenario("渠道失败不影响其他渠道结果", async () => {
-      config = configFromEnv({
-        BARK_KEY: "bark-key-123",
-        BARK_SERVER: "http://127.0.0.1:1",
-        NTFY_TOPIC: "weread_smoke_topic",
-        NTFY_SERVER: mock.baseUrl,
+      config = resolveConfig({
+        barkKey: "bark-key-123",
+        barkServer: "http://127.0.0.1:1",
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
       });
 
       const sent = await notify(config, "标题", "正文", { level: "critical", sound: "alarm" });
@@ -255,9 +257,9 @@ async function main() {
     });
 
     await scenario("登录链接推送附带按钮且同一链接只推送一次", async () => {
-      config = configFromEnv({
-        NTFY_TOPIC: "weread_smoke_topic",
-        NTFY_SERVER: mock.baseUrl,
+      config = resolveConfig({
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
       });
       const notifier = createNotifier(config);
       const loginUrl = "https://weread.qq.com/web/confirm?uid=smoke";
@@ -281,9 +283,9 @@ async function main() {
     });
 
     await scenario("二维码刷新后按最小间隔限制登录链接推送", async () => {
-      config = configFromEnv({
-        NTFY_TOPIC: "weread_smoke_topic",
-        NTFY_SERVER: mock.baseUrl,
+      config = resolveConfig({
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
       });
       const notifier = createNotifier(config, { loginLinkIntervalMs: 60000 });
 
@@ -295,10 +297,10 @@ async function main() {
     });
 
     await scenario("通知标题带账号名，按事件开关推送", async () => {
-      config = configFromEnv({
-        NTFY_TOPIC: "weread_smoke_topic",
-        NTFY_SERVER: mock.baseUrl,
-        WEREAD_ACCOUNT_NAME: "小明",
+      config = resolveConfig({
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
+        accountName: "小明",
       });
       const notifier = createNotifier(config);
 
@@ -316,11 +318,11 @@ async function main() {
       assert.strictEqual(failure.title, "WeReadAssistant · 小明 · 运行失败");
       assert.strictEqual(failure.priority, 5);
 
-      config = configFromEnv({
-        NTFY_TOPIC: "weread_smoke_topic",
-        NTFY_SERVER: mock.baseUrl,
-        NOTIFY_ON_START: "true",
-        NOTIFY_ON_DONE: "false",
+      config = resolveConfig({
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
+        notifyOnStart: "true",
+        notifyOnDone: "false",
       });
       const custom = createNotifier(config);
       await custom.event("start", "开始自动阅读");

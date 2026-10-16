@@ -43,7 +43,7 @@ async function openBook(driver, ctx) {
 
   let selection = Number(config.selection);
   if (selection === -1) {
-    console.info("WEREAD_SELECTION=-1，直接打开 DEFAULT_BOOK_URL:", config.bookUrl);
+    console.info("选书方式为直接打开默认阅读链接:", config.bookUrl);
     await driver.get(config.bookUrl);
   } else {
     if (selection === 0) {

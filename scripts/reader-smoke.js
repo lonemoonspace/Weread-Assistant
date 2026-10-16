@@ -286,6 +286,10 @@ async function main() {
         assert.match(output, /^\[INFO\]\[[^\]]+\]: /m, "日志应带级别与时间");
         assert.match(output, /Run finished: success/);
         assert.ok(!/[▄▀█]/.test(output), "由面板运行时不在日志中打印二维码");
+        // 登录链接只经事件交给面板，不写入日志
+        assert.match(output, /已解析登录链接/);
+        assert.ok(!output.includes(mock.loginUrlFor("worker", 1)), "日志中不应出现登录链接");
+        assert.ok(!output.includes("uid="), "日志中不应出现登录链接中的 uid");
       },
     });
 
