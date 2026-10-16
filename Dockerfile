@@ -1,4 +1,4 @@
-FROM node:24-alpine
+FROM node:25-alpine
 
 LABEL org.opencontainers.image.title="WeReadAssistant" \
       org.opencontainers.image.description="非官方的微信读书自动阅读助手，带 Web 管理面板（与腾讯无关）" \
