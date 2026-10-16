@@ -387,6 +387,23 @@ async function desktop(env, h, driver, results) {
   await h.waitText(".live-status", "已停止");
   step("实时推送断开后提示并自动重连，重连后继续收到运行状态");
 
+  // 断线期间结束的运行：重连后的完整状态中已没有它，实时页面应取回结果与日志，而不是显示“当前没有运行”。
+  // 用本次打开页面后没有运行过的账号，避免看到的是之前结束的运行
+  await call("POST", "api/accounts", { id: "slow-2", name: "断线测试" });
+  await h.go("#/accounts/slow-2/live");
+  await driver.navigate().refresh();
+  await h.waitFor(".run-buttons button");
+  await h.clickButton("立即运行");
+  await h.waitText(".live-status", "阅读中");
+  panel.server.closeAllConnections();
+  await h.waitText(".connection", "实时连接已断开");
+  // 刚断开的连接可能仍在接口客户端的连接池中，失败时重试一次
+  await call("POST", "api/accounts/slow-2/stop").catch(() => call("POST", "api/accounts/slow-2/stop"));
+  await driver.wait(async () => (await driver.findElements(By.css(".connection"))).length === 0, 15000, "应自动重新连接");
+  await h.waitText(".live-status", "已停止");
+  await h.waitText("pre.log", "运行结束：已停止");
+  step("断线期间结束的运行：重连后实时页面显示它的结果与完整日志");
+
   const errors = (await h.consoleErrors()).filter((line) => !/api\/events .*net::ERR/.test(line));
   assert.deepStrictEqual(errors, [], `浏览器控制台不应有错误或警告：\n${errors.join("\n")}`);
   step("浏览器控制台没有错误与警告（包括 CSP 拦截）");

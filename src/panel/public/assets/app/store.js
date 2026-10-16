@@ -1,5 +1,5 @@
 import { reactive } from "../vendor/vue.esm-browser.prod.js";
-import { api } from "./api.js";
+import { api, apiText } from "./api.js";
 
 // 全局状态：会话、表单清单、设置、账号，以及经实时推送维护的运行状态
 export const state = reactive({
@@ -101,6 +101,24 @@ function appendLog({ runId, accountId, line }) {
   }
 }
 
+// 断线期间结束的运行没有收到结束事件，重连后的完整状态中也没有它：从接口取回最终记录与日志
+async function recoverFinished(accountId, run) {
+  try {
+    const { run: record } = await api(`accounts/${accountId}/runs/${run.id}`);
+    let log = run.log;
+    if (record.hasLog) {
+      log = (await apiText(`accounts/${accountId}/runs/${run.id}/log`)).split("\n").filter(Boolean).slice(-LOG_LINES);
+    }
+    const current = state.finished[accountId];
+    // 期间如果又有运行结束，保留较新的那次
+    if (!current || current.id <= run.id) {
+      state.finished[accountId] = { ...record, loginUrl: "", log };
+    }
+  } catch (_) {
+    // 运行记录读取失败时不显示；历史页面仍可查看
+  }
+}
+
 let source = null;
 let retryTimer = null;
 
@@ -121,7 +139,13 @@ export function connectEvents() {
     for (const run of runs) {
       next[run.accountId] = { ...run, log: run.log || [] };
     }
+    const previous = state.runs;
     state.runs = next;
+    for (const [accountId, run] of Object.entries(previous)) {
+      if (!next[accountId] || next[accountId].id !== run.id) {
+        recoverFinished(accountId, run);
+      }
+    }
     state.connection = "connected";
     requestAccountsRefresh(true);
   });
