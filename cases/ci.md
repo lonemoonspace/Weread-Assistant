@@ -16,4 +16,4 @@ CI 见 `.github/workflows/ci.yml`，镜像发布见 `.github/workflows/release.y
 | 发布版本 | `package.json` 版本为 `0.1.0`，`CHANGELOG.md` 有 `## 0.1.0`，推送 tag `v0.1.0` | 推送 `0.1.0` 与 `latest`（同一个镜像）；创建 GitHub Release `v0.1.0`，标题 `WeReadAssistant 0.1.0`，说明为 `CHANGELOG.md` 中 0.1.0 一节 |
 | tag 与版本不一致 | `package.json` 版本为 `0.1.0` 时推送 `v0.2.0` | 失败并提示应为 `v0.1.0`，不构建、不推送 |
 | 其他分支手动运行 | 在非 `main` 分支上手动运行“发布镜像” | 失败并提示只从 main 发布 dev 或从版本 tag 发布 |
-| Dependabot | 每月 | npm、GitHub Actions、Dockerfile 基础镜像的更新各合并为一个 Pull Request（npm 只合并次要版本与补丁） |
+| Dependabot | 每月 | npm、GitHub Actions、Dockerfile 基础镜像的更新各合并为一个 Pull Request（npm 只合并次要版本与补丁）；不提 Node.js 镜像的主版本升级（如 `node:24-alpine` → `node:25-alpine`） |

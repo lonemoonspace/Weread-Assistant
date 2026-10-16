@@ -19,3 +19,8 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    # 镜像固定使用 Node.js 的 LTS 主版本（node:24-alpine），不提主版本升级：奇数版本不是 LTS，
+    # 换到下一个 LTS 时手动修改 Dockerfile。24 的补丁版本随 24-alpine 标签在每次构建时获得
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

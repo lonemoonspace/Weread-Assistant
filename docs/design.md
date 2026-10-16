@@ -332,7 +332,7 @@ services:
 | 项目 | 说明 |
 | --- | --- |
 | 依赖安装 | `npm ci --omit=dev`，按 lockfile 安装 |
-| 基础镜像 | `node:24-alpine`，固定 Node 主版本，不用浮动的 `lts` 标签 |
+| 基础镜像 | `node:24-alpine`，固定 Node 主版本（LTS），不用浮动的 `lts` 标签；Dependabot 不提主版本升级，换到下一个 LTS 时手动修改 |
 | 启动命令 | `node src/cli.js panel` |
 | 健康检查 | 镜像内 `HEALTHCHECK` 运行 `src/panel/healthcheck.js` 请求面板健康接口；以 `run` 命令运行的容器需关闭健康检查 |
 | 运行用户 | 入口脚本 `docker-entrypoint.sh` 以 root 修正数据目录属主后，通过 `su-exec` 以 `node` 用户运行 |
