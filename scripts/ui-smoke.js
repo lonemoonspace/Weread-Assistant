@@ -27,6 +27,7 @@ const SELENIUM_URL = process.env.SELENIUM_URL || "http://localhost:4444";
 const BROWSER_HOST = process.env.PANEL_HOST_FOR_BROWSER || "127.0.0.1";
 const STUB_WORKER = path.resolve(__dirname, "fixtures", "stub-worker.js");
 const SHOTS = process.env.UI_SMOKE_SCREENSHOTS || fs.mkdtempSync(path.join(os.tmpdir(), "ui-smoke-"));
+fs.mkdirSync(SHOTS, { recursive: true });
 const TIMEZONE = "Asia/Shanghai";
 const NEW_PASSWORD = "new-password-123";
 
@@ -496,19 +497,23 @@ async function mobile(env, h, driver, results) {
 async function main() {
   const env = await startSeededPanel();
   const results = [];
-  const drivers = [];
+  let driver = null;
   try {
+    // 桌面与手机依次进行，同一时间只占用一个浏览器会话（Selenium 默认只有 1 个会话）
     for (const [run, options, prefix] of [
       [desktop, {}, "d"],
       [mobile, { mobile: true }, ""],
     ]) {
-      const driver = await createDriver(options);
-      drivers.push(driver);
+      driver = await createDriver(options);
       await run(env, helpers(driver, prefix), driver, results);
+      await driver.quit();
+      driver = null;
     }
     console.log(`\n页面 smoke 全部通过（${results.length} 项）。截图：${SHOTS}`);
   } finally {
-    await Promise.all(drivers.map((driver) => driver.quit().catch(() => {})));
+    if (driver) {
+      await driver.quit().catch(() => {});
+    }
     await env.panel.close();
     await env.selenium.stop();
     fs.rmSync(env.dataDir, { recursive: true, force: true });

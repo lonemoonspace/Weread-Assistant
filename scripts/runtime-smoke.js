@@ -21,6 +21,8 @@ Commands:
 
 Environment:
   RUNTIME_SMOKE_IMAGE  Use an existing image instead of building one (it is not removed afterwards).
+  RUNTIME_SMOKE_ARCH   Expected image architecture, e.g. arm64; the image and the Node.js process
+                       inside the container must both report it (an arm64 image runs under QEMU on amd64).
 `.trim());
 }
 
@@ -115,8 +117,14 @@ function runPanelSmoke(imageTag) {
     console.log(`Smoke passed: panel is healthy, runs as node, owns its data and stops in ${stopMs}ms.`);
   } finally {
     spawnSync('docker', ['rm', '-f', container], { stdio: 'pipe' });
-    // 容器内创建的文件属于 node 用户，用容器清理
-    spawnSync('docker', ['run', '--rm', '--entrypoint', 'rm', '-v', `${dataDir}:/data`, imageTag, '-rf', '/data/panel.json', '/data/panel.log'], { stdio: 'pipe' });
+    // 入口脚本把数据目录及其中的文件改为容器内 node 用户所有；以非 root 用户运行时（如 CI）
+    // 当前用户无权删除，先在容器中（root）改回当前用户所有再删除
+    if (typeof process.getuid === 'function') {
+      spawnSync('docker', [
+        'run', '--rm', '--entrypoint', 'chown', '-v', `${dataDir}:/data`, imageTag,
+        '-R', `${process.getuid()}:${process.getgid()}`, '/data',
+      ], { stdio: 'pipe' });
+    }
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 }
@@ -128,6 +136,19 @@ function runDockerSmoke() {
   try {
     if (!prebuilt) {
       runCommand('docker', ['build', '-t', imageTag, '.']);
+    }
+    const expectedArch = process.env.RUNTIME_SMOKE_ARCH;
+    if (expectedArch) {
+      const imageArch = runCommand('docker', ['image', 'inspect', '-f', '{{.Architecture}}', imageTag], { quiet: true });
+      // 只取标准输出：在 QEMU 中运行其他架构的镜像时，docker 会在标准错误中打印平台不一致的警告
+      const run = spawnSync('docker', ['run', '--rm', imageTag, 'node', '-p', 'process.arch'], { encoding: 'utf8', stdio: 'pipe' });
+      const processArch = (run.stdout || '').trim();
+      // Docker 与 Node.js 对 x86-64 的叫法不同
+      const nodeArch = { amd64: 'x64' }[expectedArch] || expectedArch;
+      if (imageArch !== expectedArch || processArch !== nodeArch) {
+        throw new Error(`Expected ${expectedArch}, but the image is ${imageArch} and Node.js reports ${processArch}`);
+      }
+      console.log(`Smoke passed: image and Node.js process are ${expectedArch}.`);
     }
     const helpOutput = runCommand('docker', ['run', '--rm', imageTag, 'node', 'src/cli.js', 'help']);
     assertHelpOutput(helpOutput, 'docker run <image> node src/cli.js help');

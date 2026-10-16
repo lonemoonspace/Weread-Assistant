@@ -22,12 +22,14 @@
 - 日志通过 `console.info|warn|error` 输出，由 `src/shared/log.js` 统一加前缀并写入日志文件。
 
 ## 测试指南
-- 提交前至少执行 `npm run test:notify`、`npm run test:panel` 与 `npm run test:config`；改动阅读流程或阅读子进程时执行 `SELENIUM_URL=... npm run test:reader`（本地模拟页面）；改动镜像时执行 `npm run test:runtime`。
+- 提交前至少执行 `npm run check`、`npm run test:notify`、`npm run test:panel` 与 `npm run test:config`；改动阅读流程或阅读子进程时执行 `SELENIUM_URL=... npm run test:reader`（本地模拟页面）；改动镜像时执行 `npm run test:runtime`。
 - 改动阅读流程或定位器时，再连接 Selenium 对真实站点运行一次，确认登录、翻页链路；验收用例见 `cases/`。
 
 ## 提交与 Pull Request 指南
 - Git 历史遵循 Conventional Commits，格式为 `type(scope?): subject`，例如 `feat(panel): add login page`、`fix(reader): ...`。
 - Pull Request 描述需包含：背景、变更要点、运行命令、环境变量配置、截图或 `output.log` 片段；若关联 issue 请在描述结尾附 `Closes #id`。
+- 发布版本：修改 `package.json` 的 `version`（同步 lockfile）并在 `CHANGELOG.md` 中加一节，合并到 `main` 后推送 `v<版本号>` tag，由 GitHub Actions 构建、检查并推送 arm64 镜像；不要从本机手动推送正式版本。
+- GitHub Actions 中的第三方 Action 按提交 SHA 固定并在注释中写明版本；改动工作流后用 actionlint 检查。
 
 ## 配置与安全提示
 - 本项目是非官方项目，不得以微信读书或腾讯官方名义描述或包装。

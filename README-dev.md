@@ -21,6 +21,7 @@ docker compose up -d
 node src/cli.js help
 
 # 测试
+npm run check          # 自查：语法（面板页面按 ES 模块）、第三方文件校验值、页面约定
 npm run test:notify
 npm run test:panel     # 面板鉴权、接口、运行队列（桩子进程）与调度，不需要浏览器
 npm run test:config    # 配置解析与校验
@@ -38,6 +39,8 @@ node src/cli.js run --account <id> --login-only   # 只登录并保存 cookies
 `test:reader` 会在本机启动模拟页面服务，浏览器需要能访问它：Selenium 跑在容器里时用 `--network host` 启动，或通过 `MOCK_HOST` 指定浏览器访问本机时使用的地址。`test:ui` 同理（`PANEL_HOST_FOR_BROWSER`），截图保存位置见输出，也可用 `UI_SMOKE_SCREENSHOTS` 指定。
 
 面板前端免构建，直接修改 `src/panel/public/assets/app/` 下的文件后刷新页面即可。
+
+Pull Request 上的 CI 运行以上全部检查（阅读流程与页面 smoke 使用主机网络的 Selenium 容器，镜像在 QEMU 中按 arm64 构建并运行）；合并到 `main` 后发布 `dev` 镜像，推送版本 tag 时发布正式版本，见 `docs/docker-image-publish.md`“自动发布”与 `cases/ci.md`。
 
 ### 代码结构
 

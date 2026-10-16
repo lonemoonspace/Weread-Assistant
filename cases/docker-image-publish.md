@@ -11,3 +11,4 @@
 | 平台串去空白与去重 | 执行 `node scripts/docker-image.js build --platform "linux/arm64, linux/arm64"` | 转发给 buildx 的 `--platform` 为 `linux/arm64` |
 | 缺少参数值 | 执行 `node scripts/docker-image.js build --tag` | 直接报错 `Missing value for --tag`，不执行 Docker 命令 |
 | 不支持的参数 | 执行 `node scripts/docker-image.js build --unknown value` | 直接报错 `Unknown option: --unknown`，不执行 Docker 命令 |
+| 镜像标签 | 执行 `node scripts/docker-image.js push --tag 0.1.0`（可用输出参数的假 `docker` 观察命令）；构建后 `docker image inspect -f '{{json .Config.Labels}}'` | 构建命令带 `--label org.opencontainers.image.version=0.1.0` 与 `--label org.opencontainers.image.revision=<当前提交>`；镜像带 `Dockerfile` 中的名称、说明、源码地址与许可标签 |

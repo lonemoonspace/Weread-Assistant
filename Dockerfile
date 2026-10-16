@@ -1,5 +1,10 @@
 FROM node:24-alpine
 
+LABEL org.opencontainers.image.title="WeReadAssistant" \
+      org.opencontainers.image.description="非官方的微信读书自动阅读助手，带 Web 管理面板（与腾讯无关）" \
+      org.opencontainers.image.source="https://github.com/lonemoonspace/Weread-Assistant" \
+      org.opencontainers.image.licenses="MIT"
+
 # su-exec：入口脚本修正数据目录属主后，以 node 用户运行
 RUN apk add --no-cache su-exec
 

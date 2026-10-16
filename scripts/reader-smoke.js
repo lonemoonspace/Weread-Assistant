@@ -127,6 +127,8 @@ async function main() {
       ntfyTopic: "reader_smoke",
       ntfyServer: ntfy.baseUrl,
       screenshot: false,
+      // 书架中找不到书时打开的默认阅读链接也指向模拟页面，任何场景都不访问微信读书
+      bookUrl: `${homeUrl}reader?book=1&ch=1`,
       ...extraValues,
     });
     if (prepare) {
@@ -243,6 +245,7 @@ async function main() {
         ntfyServer: ntfy.baseUrl,
         screenshot: false,
         accountName: "子进程",
+        bookUrl: `${homeUrl}reader?book=1&ch=1`,
         ...values(homeUrl),
       });
       const startedAt = Date.now();
@@ -304,7 +307,7 @@ async function main() {
 
     await workerScenario("阅读子进程：收到 SIGTERM 后关闭浏览器并退出，不上报失败、不发送失败通知", {
       name: "worker-stop",
-      site: { loggedIn: true, chapters: 3, contentHeight: 1800 },
+      site: { loggedIn: true, books: 2, chapters: 3, contentHeight: 1800 },
       timing: { durationMs: 120000, minuteMs: 2000, pressIntervalMs: [8000, 10000] },
       async run({ worker, pushes }) {
         await until(() => worker.reported.some((event) => event.event === "reading-minute"), 30000, "没有开始阅读");
