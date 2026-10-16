@@ -21,7 +21,7 @@ const { describeSchedule, nextRuns, normalizeSchedules, schedulePatterns } = req
   path.resolve(__dirname, "..", "src", "panel", "schedules")
 );
 const { challengeProgress, cleanupRuns, dateInZone } = require(path.resolve(__dirname, "..", "src", "panel", "history"));
-const { newRunId } = require(path.resolve(__dirname, "..", "src", "panel", "runs"));
+const { minutesFrom, writeRun } = require("./fixtures/run-records");
 
 const CSRF = { "X-WA-Request": "1" };
 const STUB_WORKER = path.resolve(__dirname, "fixtures", "stub-worker.js");
@@ -94,38 +94,6 @@ function runFiles(panel, accountId, runId) {
       return fs.readFileSync(file, "utf8");
     },
   };
-}
-
-// 直接写入一条运行记录（用于构造跨天、旧格式等数据）；marks 为每分钟阅读完成的时间
-function writeRun(dataDir, accountId, { queuedAt, marks, files = {}, ...meta }) {
-  const id = newRunId(new Date(queuedAt));
-  const dir = path.join(dataDir, "runs", accountId, id);
-  fs.mkdirSync(dir, { recursive: true });
-  const record = {
-    id,
-    accountId,
-    mode: "read",
-    trigger: "manual",
-    status: "success",
-    queuedAt,
-    startedAt: queuedAt,
-    endedAt: queuedAt,
-    minutes: marks ? marks.length : 0,
-    ...meta,
-  };
-  if (marks) {
-    record.minuteMarks = marks;
-  }
-  fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify(record));
-  for (const [name, content] of Object.entries(files)) {
-    fs.writeFileSync(path.join(dir, name), content);
-  }
-  return id;
-}
-
-// 从 start 起每分钟一条，共 count 条
-function minutesFrom(start, count) {
-  return Array.from({ length: count }, (_, i) => new Date(Date.parse(start) + (i + 1) * 60000).toISOString());
 }
 
 // 记录收到的请求，模拟 Selenium 删除会话的接口
@@ -201,12 +169,13 @@ function client(port, basePath = "/") {
     }
     const url = urlPath.startsWith("/") ? urlPath : `${basePath}${urlPath}`;
     const res = await fetch(`http://127.0.0.1:${port}${url}`, init);
-    const text = await res.text();
+    const bytes = Buffer.from(await res.arrayBuffer());
+    const text = bytes.toString("utf8");
     let json = null;
     try {
       json = JSON.parse(text);
     } catch (_) {}
-    return { status: res.status, headers: res.headers, text, json };
+    return { status: res.status, headers: res.headers, text, json, bytes };
   };
 }
 
@@ -456,13 +425,31 @@ async function main() {
       assert.strictEqual((await login(panel, losingPassword)).status, 401);
     });
 
-    await scenario("页面与接口带安全响应头，接口禁止缓存", async () => {
-      const panel = await start();
+    await scenario("页面与接口带安全响应头，接口禁止缓存；只有主页面允许 'unsafe-eval'", async () => {
+      const panel = await start({ password: "correct-horse" });
       const page = await panel.request("login");
       const csp = page.headers.get("content-security-policy");
       assert.match(csp, /default-src 'self'/);
       assert.match(csp, /frame-ancestors 'none'/);
       assert.doesNotMatch(csp, /unsafe-inline/);
+      assert.doesNotMatch(csp, /unsafe-eval/, "登录页不需要 'unsafe-eval'");
+      // 主页面使用 Vue 免构建版在浏览器内编译模板
+      const cookie = sessionCookie(await login(panel, "correct-horse"));
+      const index = await panel.request("", { cookie });
+      assert.strictEqual(index.status, 200);
+      const indexCsp = index.headers.get("content-security-policy");
+      assert.match(indexCsp, /script-src 'self' 'unsafe-eval'(;|$)/);
+      assert.doesNotMatch(indexCsp, /unsafe-inline/);
+      assert.ok(!/<script(?![^>]*\bsrc=)/i.test(index.text), "主页面不应有内联脚本");
+      assert.ok(!/<style|\sstyle=/i.test(index.text), "主页面不应有内联样式");
+      for (const asset of ["assets/app/main.js", "assets/vendor/vue.esm-browser.prod.js", "assets/vendor/pico.min.css", "assets/vendor/qrcode.mjs"]) {
+        const res = await panel.request(asset);
+        assert.strictEqual(res.status, 200, asset);
+        assert.doesNotMatch(res.headers.get("content-security-policy"), /unsafe-eval/, asset);
+      }
+      assert.match((await panel.request("assets/app/main.js")).headers.get("content-type"), /javascript/);
+      assert.match((await panel.request("assets/vendor/qrcode.mjs")).headers.get("content-type"), /javascript/, ".mjs 需要以 JavaScript 类型返回");
+      assert.doesNotMatch((await panel.request("api/auth/session", { cookie })).headers.get("content-security-policy"), /unsafe-eval/);
       assert.strictEqual(page.headers.get("x-frame-options"), "DENY");
       assert.strictEqual(page.headers.get("referrer-policy"), "no-referrer");
       assert.strictEqual(page.headers.get("x-content-type-options"), "nosniff");
@@ -1032,6 +1019,47 @@ async function main() {
       assert.strictEqual((await panel.request("api/events", { cookie: other })).status, 401);
     });
 
+    await scenario("测试通知：按账号或全局默认配置向已配置的渠道发送，不受事件开关影响", async () => {
+      const requests = [];
+      const ntfy = http.createServer((req, res) => {
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          requests.push(JSON.parse(body));
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end("{}");
+        });
+      });
+      await new Promise((resolve) => ntfy.listen(0, "127.0.0.1", resolve));
+      try {
+        const panel = await startAuthed();
+        await panel.call("POST", "api/accounts", { id: "me", name: "小明" });
+        assert.deepStrictEqual((await panel.call("POST", "api/notifications/test")).json, { results: [] }, "没有配置渠道");
+
+        const server = `http://127.0.0.1:${ntfy.address().port}`;
+        await panel.call("PATCH", "api/accounts/me", {
+          overrides: { ntfyTopic: "smoke_topic", ntfyServer: server, notifyOnDone: false, notifyOnFailure: false, emailEnabled: true },
+        });
+        const result = await panel.call("POST", "api/notifications/test", { accountId: "me" });
+        assert.deepStrictEqual(result.json.results, [{ channel: "ntfy", ok: true }, { channel: "email", ok: false }], "邮件缺少 SMTP 配置时为失败");
+        assert.strictEqual(requests.length, 1);
+        assert.strictEqual(requests[0].title, "WeReadAssistant · 小明 · 测试通知");
+        assert.match(requests[0].message, /测试通知/);
+
+        await panel.call("PATCH", "api/settings", { defaults: { ntfyTopic: "global_topic", ntfyServer: server } });
+        assert.deepStrictEqual((await panel.call("POST", "api/notifications/test")).json.results, [{ channel: "ntfy", ok: true }]);
+        assert.strictEqual(requests[1].title, "WeReadAssistant · 测试通知", "全局默认配置没有账号名称");
+        assert.strictEqual(requests[1].topic, "global_topic");
+
+        assert.strictEqual((await panel.call("POST", "api/notifications/test", { accountId: "nobody" })).status, 404);
+        assert.strictEqual((await panel.request("api/notifications/test", { method: "POST", cookie: panel.cookie })).status, 403);
+      } finally {
+        await new Promise((resolve) => ntfy.close(resolve));
+      }
+    });
+
     await scenario("删除账号：运行或排队时拒绝；同时删除数据时一并删除运行记录", async () => {
       const panel = await startAuthed();
       await panel.call("POST", "api/accounts", { id: "slow-1" });
@@ -1280,7 +1308,8 @@ async function main() {
       const shot = await panel.call("GET", `api/accounts/ok-1/runs/${third}/screenshots/screenshot-2.png`);
       assert.strictEqual(shot.status, 200);
       assert.strictEqual(shot.headers.get("content-type"), "image/png");
-      assert.strictEqual(shot.text, "stub screenshot 2");
+      assert.strictEqual(shot.bytes.length, fs.statSync(path.join(panel.options.dataDir, "runs", "ok-1", third, "screenshot-2.png")).size);
+      assert.deepStrictEqual([...shot.bytes.subarray(1, 4)], [0x50, 0x4e, 0x47], "PNG 文件头");
       for (const name of ["screenshot-9.png", "meta.json", "output.log", encodeURIComponent("../../panel.json"), "screenshot-1.jpg"]) {
         assert.strictEqual((await panel.call("GET", `api/accounts/ok-1/runs/${third}/screenshots/${name}`)).status, 404, name);
       }

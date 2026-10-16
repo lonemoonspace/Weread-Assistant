@@ -2,6 +2,8 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const express = require("express");
+const { resolveConfig } = require("../config/resolve");
+const { sendTestNotification } = require("../notify");
 const { VERSION } = require("../shared/version");
 const { createAccount, deleteAccount, findAccount, publicAccount, updateAccount } = require("./accounts");
 const { MIN_PASSWORD_LENGTH, SESSION_TTL_MS, createAuth } = require("./auth");
@@ -41,18 +43,28 @@ const SSE_HEARTBEAT_MS = 15000;
 // 除每次运行结束与修改保留设置时之外，定期按保留策略清理运行数据
 const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
+const CSP_DIRECTIVES = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "img-src 'self' data: blob:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+];
+
+// 只允许同源资源，不允许内联脚本与样式。面板主页面使用 Vue 免构建版，在浏览器内编译模板需要 'unsafe-eval'，
+// 只对该页面放开；模板都写在仓库内的脚本文件中，不把服务端内容当作模板
+function contentSecurityPolicy({ allowEval = false } = {}) {
+  return CSP_DIRECTIVES.map((directive) =>
+    allowEval && directive.startsWith("script-src ") ? `${directive} 'unsafe-eval'` : directive
+  ).join("; ");
+}
+
 const SECURITY_HEADERS = {
-  "Content-Security-Policy": [
-    "default-src 'self'",
-    "script-src 'self'",
-    "style-src 'self'",
-    "img-src 'self' data: blob:",
-    "connect-src 'self'",
-    "object-src 'none'",
-    "frame-ancestors 'none'",
-    "base-uri 'self'",
-    "form-action 'self'",
-  ].join("; "),
+  "Content-Security-Policy": contentSecurityPolicy(),
   "X-Frame-Options": "DENY",
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
@@ -181,6 +193,7 @@ function createPanelApp(options, { auth, store, runner }) {
       res.redirect(302, "login");
       return;
     }
+    res.set("Content-Security-Policy", contentSecurityPolicy({ allowEval: true }));
     res.sendFile(path.join(PUBLIC_DIR, "index.html"));
   });
 
@@ -362,6 +375,24 @@ function createPanelApp(options, { auth, store, runner }) {
     const data = store.get();
     const account = findAccount(data, req.params.id);
     res.json(calendar(panelDataDir, account, { timezone: data.settings.timezone, month: req.query.month }));
+  });
+
+  // { accountId? }：按账号的实际配置（不提供时按全局默认配置）向已配置的渠道各发送一条测试通知
+  api.post("/notifications/test", async (req, res) => {
+    const body = req.body === undefined ? {} : requireObject(req.body);
+    const data = store.get();
+    let config;
+    try {
+      config = body.accountId
+        ? resolveAccountConfig(data, findAccount(data, String(body.accountId)), panelDataDir)
+        : resolveConfig(data.defaults);
+    } catch (e) {
+      if (e instanceof PanelError) {
+        throw e;
+      }
+      throw badRequest(`配置无效：${e.message}`);
+    }
+    res.json({ results: await sendTestNotification(config) });
   });
 
   // 排队中与进行中的运行，带最近的日志

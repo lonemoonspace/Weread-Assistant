@@ -1,107 +1,515 @@
+/* 面板样式：在 Pico.css 的基础上补充。不使用内联样式（CSP 只允许同源样式表） */
+
 :root {
-  --bg: #f5f6f8;
-  --card: #ffffff;
-  --text: #1f2328;
-  --muted: #656d76;
-  --border: #d0d7de;
-  --accent: #2d6cdf;
-  --danger: #cf222e;
-  color-scheme: light dark;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d1117;
-    --card: #161b22;
-    --text: #e6edf3;
-    --muted: #8d96a0;
-    --border: #30363d;
-    --accent: #4c8dff;
-    --danger: #ff7b72;
-  }
-}
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  padding: 24px 16px;
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-}
-
-.card {
-  max-width: 480px;
-  margin: 0 auto;
-  padding: 24px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-h1 {
-  margin: 0 0 16px;
-  font-size: 22px;
-}
-
-h2 {
-  margin: 24px 0 8px;
-  font-size: 17px;
-}
-
-label {
-  display: block;
-  margin: 12px 0 4px;
-}
-
-input {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-}
-
-button {
-  margin-top: 16px;
-  padding: 8px 16px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--accent);
-  color: #fff;
-  font: inherit;
-  cursor: pointer;
-}
-
-button.secondary {
-  margin-top: 0;
-  background: transparent;
-  color: var(--accent);
-  border: 1px solid var(--border);
-}
-
-button:disabled {
-  opacity: 0.6;
+  --pico-font-size: 93.75%;
+  --wa-tint: rgba(127, 127, 127, 0.14);
+  --wa-blue: rgba(33, 118, 214, 0.2);
+  --wa-amber: rgba(204, 132, 0, 0.24);
+  --wa-green: rgba(46, 140, 70, 0.24);
+  --wa-red: rgba(214, 55, 55, 0.2);
+  --wa-green-strong: #2e8c46;
+  --wa-red-strong: #d63737;
 }
 
 .muted {
-  color: var(--muted);
+  color: var(--pico-muted-color);
 }
 
-.message {
-  min-height: 1.6em;
-  margin: 12px 0 0;
-  color: var(--danger);
+.error-text {
+  color: var(--wa-red-strong);
+}
+
+.ok-text {
+  color: var(--wa-green-strong);
+}
+
+small {
+  display: inline-block;
+}
+
+/* 页头、页脚 */
+.app-header {
+  padding-bottom: 0;
+}
+
+.app-header .brand {
+  font-weight: 700;
+}
+
+.connection {
+  margin: 0;
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--pico-border-radius);
+  background: var(--wa-amber);
+  font-size: 0.875em;
+}
+
+.app-footer {
+  padding-top: 1rem;
+  font-size: 0.8em;
+}
+
+/* 状态标签 */
+.badge {
+  display: inline-block;
+  padding: 0.05em 0.6em;
+  border-radius: 999px;
+  background: var(--wa-tint);
+  font-size: 0.78em;
+  font-weight: 600;
+  line-height: 1.6;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.status-queued,
+.status-starting,
+.status-reading {
+  background: var(--wa-blue);
+}
+
+.status-waiting-login {
+  background: var(--wa-amber);
+}
+
+.status-success {
+  background: var(--wa-green);
+}
+
+.status-failed {
+  background: var(--wa-red);
+}
+
+/* 按钮 */
+button.small,
+[role="button"].small {
+  width: auto;
+  margin-bottom: 0;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.85em;
+}
+
+.run-buttons,
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.run-buttons button,
+.form-actions button {
+  width: auto;
+  margin-bottom: 0;
+}
+
+/* 总览 */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.account-card {
+  margin: 0;
+}
+
+.account-card header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.account-card p {
+  margin-bottom: 0.5rem;
+}
+
+.account-card.disabled {
+  opacity: 0.7;
+}
+
+.account-name {
+  font-size: 1.1em;
+  font-weight: 700;
+}
+
+.card-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* 扫码 */
+.scan-card article {
+  border-left: 4px solid var(--wa-amber);
+}
+
+.qr-login {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.qr {
+  width: 220px;
+  height: 220px;
+  padding: 6px;
+  border-radius: 8px;
+  background: #fff;
+  image-rendering: pixelated;
+}
+
+.qr-help {
+  flex: 1 1 240px;
+}
+
+.qr-help button {
+  width: auto;
+}
+
+.login-link {
+  margin-top: 0.5rem;
+  font-size: 0.8em;
+}
+
+/* 账号页面 */
+.account-head {
+  margin-bottom: 1rem;
+}
+
+.account-head h2 {
+  margin-bottom: 0.25rem;
+}
+
+.account-head h2 .badge {
+  font-size: 0.8rem;
+}
+
+.tabs {
+  display: flex;
+  justify-content: flex-start;
+  gap: 0.25rem;
+  margin-bottom: 1.25rem;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.tabs a {
+  padding: 0.5rem 0.9rem;
+  border-bottom: 2px solid transparent;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tabs a[aria-current="page"] {
+  border-bottom-color: var(--pico-primary);
+  font-weight: 600;
+}
+
+.live-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.reading {
+  margin-bottom: 0.25rem;
+  font-weight: 600;
+}
+
+.live-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  align-items: start;
+  gap: 1rem;
+}
+
+.screenshot {
+  margin: 0;
+}
+
+.screenshot img {
+  width: 100%;
+  max-height: 440px;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  object-fit: contain;
+}
+
+.log-panel h3 {
+  margin-bottom: 0.5rem;
+  font-size: 1rem;
+}
+
+.log {
+  max-height: 440px;
+  margin: 0;
+  padding: 0.75rem;
+  overflow: auto;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 历史 */
+.table-scroll {
+  overflow-x: auto;
+}
+
+table.history td {
+  vertical-align: top;
+}
+
+.actions {
+  white-space: nowrap;
+}
+
+.actions button {
+  margin: 0 0.25rem 0.25rem 0;
+}
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.5rem;
+}
+
+.gallery img {
+  width: 100%;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 4px;
+}
+
+/* 打卡日历 */
+.month-nav {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.calendar {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 1rem;
+}
+
+.weekday {
+  color: var(--pico-muted-color);
+  font-size: 0.8em;
+  text-align: center;
+}
+
+.day {
+  display: flex;
+  flex-direction: column;
+  min-height: 3.6rem;
+  padding: 4px 6px;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 6px;
+  font-size: 0.85em;
+}
+
+.day.blank {
+  border: none;
+}
+
+.day.partial {
+  background: var(--wa-amber);
+}
+
+.day.checked {
+  background: var(--wa-green);
+}
+
+.day.missed {
+  background: var(--wa-red);
+}
+
+.day.today {
+  outline: 2px solid var(--pico-primary);
+}
+
+.day.future {
+  opacity: 0.45;
+}
+
+.day-number {
+  font-weight: 600;
+}
+
+.day-minutes {
+  margin-top: auto;
+  font-size: 0.85em;
+}
+
+.challenge header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.challenge-main {
+  margin-bottom: 0.5rem;
+}
+
+/* 表单 */
+.config-form details {
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.field {
+  margin-bottom: 1rem;
+}
+
+.field-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.override-toggle {
+  font-size: 0.85em;
+}
+
+.inherited {
+  margin: 0 0 0.25rem;
+}
+
+.secret {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.secret input {
+  flex: 1;
+}
+
+.secret button {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.switch-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.schedule-rule {
+  padding: 1rem;
+}
+
+.rule-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.rule-footer label {
+  margin-bottom: 0;
+}
+
+.settings-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.danger-zone {
+  padding-top: 1rem;
+  border-top: 1px solid var(--pico-muted-border-color);
+}
+
+.danger-zone button {
+  width: auto;
+}
+
+.narrow {
+  max-width: 520px;
+}
+
+.test-notification {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.test-notification button {
+  width: auto;
+  margin-bottom: 0;
+}
+
+.results {
+  margin-top: 0.5rem;
+}
+
+/* 底部提示 */
+.notice {
+  position: fixed;
+  z-index: 10;
+  bottom: 1.25rem;
+  left: 50%;
+  max-width: calc(100% - 2rem);
+  padding: 0.6rem 1rem;
+  transform: translateX(-50%);
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  background: var(--pico-card-background-color);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.notice-success {
+  border-left: 4px solid var(--wa-green-strong);
+}
+
+.notice-error {
+  border-left: 4px solid var(--wa-red-strong);
+}
+
+/* 登录页 */
+.login-page {
+  max-width: 440px;
+  padding-top: 10vh;
+}
+
+.login-page h1 {
+  font-size: 1.6rem;
+}
+
+/* 手机 */
+@media (max-width: 768px) {
+  .live-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 576px) {
+  .app-header nav ul:last-child li {
+    padding-right: 0.35rem;
+    padding-left: 0.35rem;
+  }
+
+  h2 {
+    font-size: 1.3rem;
+  }
+
+  .qr {
+    width: 200px;
+    height: 200px;
+  }
+
+  .day {
+    min-height: 3rem;
+    padding: 2px 4px;
+  }
 }

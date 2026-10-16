@@ -121,9 +121,34 @@ function createNotifier(config, { loginLinkIntervalMs = 0 } = {}) {
   };
 }
 
+// 向已配置的每个渠道发送一条测试通知，不受事件开关影响；返回 [{ channel, ok }]，没有配置任何渠道时为空数组
+async function sendTestNotification(config) {
+  const title = notificationTitle(config);
+  const body = "这是一条测试通知，收到说明通知配置正确。";
+  const tasks = [];
+  if (isBarkEnabled(config)) {
+    tasks.push(["bark", sendBark(config, title, body, { subtitle: "测试通知", level: "active", sound: "birdsong" })]);
+  }
+  if (isNtfyEnabled(config)) {
+    tasks.push(["ntfy", sendNtfy(config, title, body, { subtitle: "测试通知", level: "active", sound: "birdsong" })]);
+  }
+  if (config.emailEnabled) {
+    tasks.push([
+      "email",
+      canSendEmail(config) ? sendMail(config, `${title} · 测试通知`, body, [], { heading: title }) : Promise.resolve(false),
+    ]);
+  }
+  const settled = await Promise.allSettled(tasks.map(([, task]) => task));
+  return tasks.map(([channel], index) => ({
+    channel,
+    ok: settled[index].status === "fulfilled" && settled[index].value === true,
+  }));
+}
+
 module.exports = {
   NOTIFY_EVENTS,
   createNotifier,
+  sendTestNotification,
   getEnabledNotificationChannels,
   notify,
   sendBark,

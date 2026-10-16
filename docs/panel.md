@@ -1,6 +1,6 @@
 ## Web 面板说明
 
-> 已完成：登录、会话、修改密码、反向代理支持，全局设置、默认配置与账号管理接口，运行队列（立即运行、仅登录、停止、运行日志、实时推送），按账号的调度规则与定时运行，以及运行历史、按天统计、打卡日历与挑战进度、按保留策略清理。完整的页面按 `docs/design.md` 的开发计划逐步加入。
+> 已完成：登录、会话、修改密码、反向代理支持，全局设置、默认配置与账号管理接口，运行队列（立即运行、仅登录、停止、运行日志、实时推送），按账号的调度规则与定时运行，运行历史、按天统计、打卡日历与挑战进度、按保留策略清理，以及完整的页面。Selenium 状态与 noVNC 链接在第 9 步加入。
 
 ### 启动
 
@@ -50,7 +50,7 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/auth.js` | 密码哈希、会话、登录限速、修改密码 | 密码以 scrypt 哈希保存；会话只在内存中保存令牌哈希，面板重启后需重新登录 |
 | `src/panel/server.js` | Express 应用、页面与接口 | 统一安全响应头；修改类请求校验自定义请求头 |
 | `src/panel/healthcheck.js` | 镜像 `HEALTHCHECK` 使用 | 请求 `<子路径>healthz` |
-| `src/panel/public/` | 登录页与占位页面 | 不使用内联脚本与样式 |
+| `src/panel/public/` | 登录页与面板页面（`index.html` + `assets/app/`），见下文“页面” | 不使用内联脚本与样式；第三方文件在 `assets/vendor/`，版本与校验值见其中的 README |
 
 ### 接口
 
@@ -76,6 +76,7 @@ docker compose logs app | grep 面板初始密码
 | `DELETE api/accounts/:id` | 是 | `{ deleteData? }`，可以不带请求体；默认只从面板移除，`deleteData: true` 时同时删除账号数据目录与运行记录；账号正在运行或排队时返回 409 `account_busy` |
 | `POST api/accounts/:id/runs` | 是 | `{ mode? }`，`read`（默认）或 `login`（仅登录），可以不带请求体；加入队列后返回 202 与运行状态；账号不存在 404，已停用 409 `account_disabled`，已在运行或排队 409 `run_active` |
 | `POST api/accounts/:id/stop` | 是 | 停止账号当前的运行：排队中的直接取消，进行中的结束子进程；返回 202 与运行状态；没有运行时 404 `run_not_active` |
+| `POST api/notifications/test` | 是 | `{ accountId? }`：按账号的实际配置（不提供时按全局默认配置）向已配置的 Bark、ntfy、邮件各发送一条测试通知，不受事件开关影响；返回 `{ results: [{ channel, ok }] }`，没有配置任何渠道时为空数组 |
 | `GET api/runs` | 是 | 排队中与进行中的运行，按加入队列的顺序，每个运行带最近 200 行日志 |
 | `GET api/accounts/:id/runs` | 是 | 运行历史，最新的在前：`{ runs, nextBefore }`；`?limit=`（1–100，默认 20）、`?before=<nextBefore>` 翻页。每条为运行记录加 `hasLog` 与截图文件名 `screenshots` |
 | `GET api/accounts/:id/runs/:runId` | 是 | `{ run }`：运行记录、截图文件名与按天拆分的阅读分钟数 `minutesByDate` |
@@ -85,6 +86,31 @@ docker compose logs app | grep 面板初始密码
 | `GET api/events` | 是 | 实时推送（SSE），见下文 |
 
 接口返回的错误为 `{ error, message }`，`message` 可直接展示给用户。
+
+### 页面
+
+面板页面免构建：Vue 3（包含模板编译器的 ES 模块版本）、Pico.css 与 qrcode-generator 放在 `assets/vendor/`，页面代码是 `assets/app/` 下的 ES 模块，地址使用 hash 路由（`#/accounts/me/live`），部署在子路径下时相对路径始终正确。
+
+| 页面 | 地址 | 内容 |
+| --- | --- | --- |
+| 登录 | `login` | 面板密码登录 |
+| 总览 | `#/` | 需要扫码的账号置顶并直接显示二维码；运行队列；每个账号一张卡片：运行状态或上次运行结果、今天的阅读分钟与是否打卡、下次运行时间、立即运行 / 仅登录 / 停止 |
+| 账号 · 实时 | `#/accounts/<id>/live` | 状态、“正在读《书名》第 23/68 分钟”与进度条、二维码与“复制登录链接”、最新截图、实时日志 |
+| 账号 · 历史 | `#/accounts/<id>/history` | 运行列表（开始时间、时长、触发方式、结果、阅读分钟），展开查看日志与截图，下载日志，加载更多 |
+| 账号 · 打卡日历 | `#/accounts/<id>/calendar` | 按月显示每天的阅读分钟与打卡状态（已打卡、不足 5 分钟、今天未打卡高亮），本月合计；挑战进度与设置 |
+| 账号 · 调度 | `#/accounts/<id>/schedules` | 编辑多条规则（每天固定时间 / 每 N 小时 / cron），单独启停，预览接下来的运行时间，保存后立即生效 |
+| 账号 · 配置 | `#/accounts/<id>/config` | 名称与启用状态；运行配置的每一项可“继承全局”或“单独设置”；发送测试通知；删除账号（可选同时删除数据） |
+| 新建账号 | `#/accounts/new` | 账号 ID 与名称，创建后进入账号页面并提示扫码 |
+| 设置 | `#/settings` | 面板设置（时区、并发数、保留策略、noVNC 地址）；全局默认配置与测试通知；修改面板密码 |
+
+| 规则 | 说明 |
+| --- | --- |
+| 时间显示 | 按面板设置中的时区显示，与调度、统计一致 |
+| 实时推送 | 连接 `api/events`，断开时页面顶部提示，浏览器自动重连并以重连后的完整状态为准；断线期间结束的运行（重连后的完整状态中已没有它）从接口取回最终记录与日志，实时页面仍显示它的结果；会话失效时回到登录页 |
+| 二维码 | 由登录链接在浏览器本地生成（不经过第三方服务）；手机上可复制登录链接发到微信中打开，非 HTTPS 访问时浏览器不允许写剪贴板，改为显示链接供手动复制 |
+| 密钥 | 表单中只显示“已设置 / 未设置”，留空表示不修改，点“清除”删除 |
+| 手机 | 390px 宽度下各页面没有横向滚动；表格在自身区域内横向滚动 |
+| CSP | 面板主页面在浏览器内编译模板，需要 `'unsafe-eval'`，只对该页面放开（登录页、接口与静态文件不放开）。模板只写在 `assets/app/` 的脚本中，不使用 DOM 模板，不用 `v-html` 渲染内容 |
 
 ### 运行队列
 
@@ -251,7 +277,7 @@ data/
 | 会话 | 32 字节随机令牌；cookie `wa_session` 为 `HttpOnly`、`SameSite=Strict`，HTTPS 时加 `Secure`，`Path` 为面板子路径；7 天滑动过期，cookie 最多每小时重新下发一次 |
 | 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；所有 IP 在 15 分钟内累计失败 100 次后暂停全部登录 15 分钟 |
 | 跨站请求伪造 | 修改类请求必须带 `X-WA-Request: 1` 请求头且为 JSON，配合 `SameSite=Strict` |
-| 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`；接口响应 `Cache-Control: no-store` |
+| 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`；接口响应 `Cache-Control: no-store` |
 | 文件 | `panel.json` 权限 0600，已有文件在启动时收紧；初始密码不写入日志文件 |
 | 容器 | 以 `node` 用户运行；入口脚本先把数据目录中不属于 `node` 的文件改过来再降权 |
 
