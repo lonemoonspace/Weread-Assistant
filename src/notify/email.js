@@ -1,14 +1,11 @@
 const fs = require("fs");
 const path = require("path");
+const { CONFIG_SCHEMA } = require("../config/schema");
 const { VERSION } = require("../shared/version");
 
-// 发送邮件所需的配置项，缺失时按环境变量名提示
-const REQUIRED_EMAIL_FIELDS = [
-  ["emailSmtp", "EMAIL_SMTP"],
-  ["emailUser", "EMAIL_USER"],
-  ["emailPass", "EMAIL_PASS"],
-  ["emailTo", "EMAIL_TO"],
-];
+// 发送邮件所需的配置项，缺失时按配置项名称提示
+const REQUIRED_EMAIL_FIELDS = ["emailSmtp", "emailUser", "emailPass", "emailTo"];
+const FIELD_LABELS = Object.fromEntries(CONFIG_SCHEMA.map((field) => [field.key, field.label]));
 
 function escapeHtml(str = "") {
   return String(str)
@@ -104,11 +101,9 @@ function canSendEmail(config) {
   if (!config.emailEnabled) {
     return false;
   }
-  const missed = REQUIRED_EMAIL_FIELDS
-    .filter(([key]) => !config[key])
-    .map(([, envName]) => envName);
+  const missed = REQUIRED_EMAIL_FIELDS.filter((key) => !config[key]).map((key) => FIELD_LABELS[key]);
   if (missed.length) {
-    console.warn("邮件通知未发送：缺少配置", missed.join(", "));
+    console.warn("邮件通知未发送：缺少配置", missed.join("、"));
     return false;
   }
   return true;

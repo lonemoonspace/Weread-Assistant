@@ -31,7 +31,7 @@ function getEnabledNotificationChannels(config) {
 async function notify(config, title, body, options = {}) {
   const channels = getEnabledNotificationChannels(config);
   if (!channels.length) {
-    console.info("未启用任何推送通知渠道（配置 BARK_KEY 或 NTFY_TOPIC 后生效）");
+    console.info("未启用任何推送通知渠道（在面板中配置 Bark Key 或 ntfy 主题后生效）");
     return [];
   }
 

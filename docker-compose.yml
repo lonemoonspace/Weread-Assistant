@@ -23,28 +23,6 @@ services:
     dns:
       - 223.5.5.5
 
-  # 面板能调度阅读之前，按环境变量运行一次阅读：docker compose run --rm reader
-  # 不随 docker compose up 启动；面板支持调度后删除
-  reader:
-    image: lonemoonspace/weread-assistant:latest
-    profiles: ["reader"]
-    command: ["node", "src/cli.js", "run"]
-    healthcheck:
-      disable: true
-    environment:
-      - TZ=Asia/Shanghai
-      - SELENIUM_URL=http://selenium:4444
-      - WEREAD_DURATION=68
-      - WEREAD_SELECTION=-1
-      - DEFAULT_BOOK_URL=https://weread.qq.com/web/reader/8f432ca052ba378f4cd737b
-    volumes:
-      - ./data:/app/data
-    depends_on:
-      selenium:
-        condition: service_healthy
-    dns:
-      - 223.5.5.5
-
   selenium:
     image: selenium/standalone-chromium:latest
     pull_policy: if_not_present

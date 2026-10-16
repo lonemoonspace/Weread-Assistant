@@ -3,17 +3,17 @@
 ## 项目结构与模块组织
 - 整体设计与开发计划见 `docs/design.md`，改动前先确认属于计划中的哪一步。
 - `src/cli.js` 是唯一入口；`src/config/` 定义配置项清单与解析，`src/reader/` 是自动阅读流程（浏览器、登录、选书、阅读循环），`src/notify/` 是 Bark / ntfy / 邮件通知，`src/panel/` 是 Web 面板（服务端、鉴权、存储、运行队列与页面），`src/shared/` 放日志、HTTP 等公共工具。
-- 新增配置项时只改 `src/config/schema.js`，帮助输出与后续面板表单都由它生成；整数项用 `min` / `max` 限定范围，枚举项用 `options` 列出可选值，解析时会据此校验。
+- 新增运行配置项时只改 `src/config/schema.js`，面板表单与校验都由它生成，不新增对应的环境变量；整数项用 `min` / `max` 限定范围，枚举项用 `options` 列出可选值，解析时会据此校验。
 - 页面定位器与关键文案集中在 `src/reader/selectors.js`；浏览器隐式等待为 0，需要等元素出现时使用 `src/reader/dom.js` 中的显式等待。
 - 面板中的每次运行由 `src/panel/runner.js` fork 阅读子进程 `src/reader/worker.js` 执行：配置经 IPC 下发，不放进环境变量；子进程经 IPC 上报事件，新增事件时同步更新 `docs/reader.md` 与 `docs/panel.md`。阅读流程中较长的等待要传入 `ctx.signal`，保证停止时能立即结束。
 - 运行产物（cookies.json、login.png、截图、output.log、运行记录）写入数据目录（默认 `data/`），该目录已在 `.gitignore` 与 `.dockerignore` 中排除。
 
 ## 构建、测试与开发命令
 - `npm install`：安装依赖，依赖升级时记录 package-lock 差异。
-- `SELENIUM_URL=http://localhost:4444 npm start`：连接本地 Selenium 运行一次；`npm run debug` 打开调试日志。浏览器只在 Selenium 中运行，不支持在本机启动浏览器。
-- `npm run panel`：本地启动面板（默认端口 26868，首次启动在输出中打印初始密码）。
-- `node src/cli.js help`：查看命令与全部环境变量。
-- `docker compose up -d`：拉起面板（`app`）与 `selenium`；`docker compose run --rm reader` 按环境变量运行一次阅读（第 6 步前的临时方式）；结束后执行 `docker compose down` 清理资源。
+- `SELENIUM_URL=http://localhost:4444 npm start`（同 `npm run panel`）：本地启动面板（默认端口 26868，首次启动在输出中打印初始密码）。阅读配置、通知与调度都在面板中设置，不支持按环境变量运行阅读。浏览器只在 Selenium 中运行，不支持在本机启动浏览器。
+- `node src/cli.js run --account <id>`：按面板中的账号配置在命令行运行一次，用于调试。
+- `node src/cli.js help`：查看命令与面板环境变量。
+- `docker compose up -d`：拉起面板（`app`）与 `selenium`；结束后执行 `docker compose down` 清理资源。
 
 ## 编码风格与命名约定
 - 统一采用 2 space 缩进；CommonJS `require` / `module.exports`；异步流程优先 async/await。

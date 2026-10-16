@@ -50,8 +50,8 @@ function checkRange(field, name, value, rawValue) {
   }
 }
 
-// 把单个配置项转换为对应类型并校验；name 用于错误提示，默认使用环境变量名
-function coerceFieldValue(field, rawValue, name = field.env || field.key) {
+// 把单个配置项转换为对应类型并校验；name 用于错误提示，默认使用配置项名称
+function coerceFieldValue(field, rawValue, name = field.label) {
   if (rawValue === undefined || rawValue === null || rawValue === "") {
     return field.default;
   }
@@ -89,17 +89,9 @@ function resolveConfig(values = {}) {
   return Object.freeze(config);
 }
 
-function configFromEnv(env = process.env) {
-  const values = {};
-  for (const field of CONFIG_SCHEMA) {
-    values[field.key] = env[field.env];
-  }
-  return resolveConfig(values);
-}
 
 module.exports = {
   coerceFieldValue,
-  configFromEnv,
   parseBooleanValue,
   parseIntegerValue,
   resolveConfig,

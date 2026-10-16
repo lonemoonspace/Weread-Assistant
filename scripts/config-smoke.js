@@ -11,7 +11,7 @@ const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
-const { configFromEnv } = require(path.resolve(__dirname, "..", "src", "config", "resolve"));
+const { resolveConfig } = require(path.resolve(__dirname, "..", "src", "config", "resolve"));
 const { panelOptionsFromEnv } = require(path.resolve(__dirname, "..", "src", "panel", "options"));
 const { createStore } = require(path.resolve(__dirname, "..", "src", "panel", "store"));
 
@@ -30,8 +30,8 @@ function runCli(args, env) {
 }
 
 const scenarios = [
-  ["未设置任何变量时使用默认值", () => {
-    const config = configFromEnv({});
+  ["未提供的配置项使用默认值", () => {
+    const config = resolveConfig({});
     assert.strictEqual(config.duration, 10);
     assert.strictEqual(config.selection, 2);
     assert.strictEqual(config.speed, "slow");
@@ -40,47 +40,47 @@ const scenarios = [
   }],
 
   ["整数必须是完整的十进制数，带后缀的值报错", () => {
-    assert.strictEqual(configFromEnv({ WEREAD_DURATION: " 68 " }).duration, 68);
-    rejects(() => configFromEnv({ WEREAD_DURATION: "10abc" }), /WEREAD_DURATION 必须是整数：10abc/);
-    rejects(() => configFromEnv({ WEREAD_SELECTION: "2xyz" }), /WEREAD_SELECTION 必须是整数/);
-    rejects(() => configFromEnv({ EMAIL_PORT: "465oops" }), /EMAIL_PORT 必须是整数/);
-    rejects(() => configFromEnv({ WEREAD_DURATION: "1.5" }), /WEREAD_DURATION 必须是整数/);
+    assert.strictEqual(resolveConfig({ duration: " 68 " }).duration, 68);
+    rejects(() => resolveConfig({ duration: "10abc" }), /阅读时长（分钟） 必须是整数：10abc/);
+    rejects(() => resolveConfig({ selection: "2xyz" }), /选书方式 必须是整数/);
+    rejects(() => resolveConfig({ emailPort: "465oops" }), /SMTP 端口 必须是整数/);
+    rejects(() => resolveConfig({ duration: "1.5" }), /阅读时长（分钟） 必须是整数/);
   }],
 
   ["阅读时长与等待扫码时长必须在 1–1440 分钟之间", () => {
-    rejects(() => configFromEnv({ WEREAD_DURATION: "0" }), /WEREAD_DURATION 必须在 1–1440 之间：0/);
-    rejects(() => configFromEnv({ WEREAD_DURATION: "-5" }), /WEREAD_DURATION 必须在 1–1440 之间/);
-    rejects(() => configFromEnv({ WEREAD_DURATION: "1441" }), /WEREAD_DURATION 必须在 1–1440 之间/);
-    rejects(() => configFromEnv({ WEREAD_LOGIN_TIMEOUT: "0" }), /WEREAD_LOGIN_TIMEOUT 必须在 1–1440 之间/);
-    assert.strictEqual(configFromEnv({ WEREAD_DURATION: "1" }).duration, 1);
-    assert.strictEqual(configFromEnv({ WEREAD_DURATION: "1440" }).duration, 1440);
+    rejects(() => resolveConfig({ duration: "0" }), /阅读时长（分钟） 必须在 1–1440 之间：0/);
+    rejects(() => resolveConfig({ duration: "-5" }), /阅读时长（分钟） 必须在 1–1440 之间/);
+    rejects(() => resolveConfig({ duration: "1441" }), /阅读时长（分钟） 必须在 1–1440 之间/);
+    rejects(() => resolveConfig({ loginTimeout: "0" }), /等待扫码时长（分钟） 必须在 1–1440 之间/);
+    assert.strictEqual(resolveConfig({ duration: "1" }).duration, 1);
+    assert.strictEqual(resolveConfig({ duration: "1440" }).duration, 1440);
   }],
 
   ["超出安全整数范围的值报错，不会变成 Infinity", () => {
-    rejects(() => configFromEnv({ WEREAD_DURATION: "9".repeat(400) }), /WEREAD_DURATION 超出允许的范围/);
-    rejects(() => configFromEnv({ EMAIL_PORT: "9007199254740993" }), /EMAIL_PORT 超出允许的范围/);
+    rejects(() => resolveConfig({ duration: "9".repeat(400) }), /阅读时长（分钟） 超出允许的范围/);
+    rejects(() => resolveConfig({ emailPort: "9007199254740993" }), /SMTP 端口 超出允许的范围/);
     rejects(() => panelOptionsFromEnv({ PANEL_PORT: "9".repeat(30) }), /PANEL_PORT 超出允许的范围/);
   }],
 
   ["SMTP 端口必须在 1–65535 之间", () => {
-    rejects(() => configFromEnv({ EMAIL_PORT: "70000" }), /EMAIL_PORT 必须在 1–65535 之间/);
-    assert.strictEqual(configFromEnv({ EMAIL_PORT: "587" }).emailPort, 587);
+    rejects(() => resolveConfig({ emailPort: "70000" }), /SMTP 端口 必须在 1–65535 之间/);
+    assert.strictEqual(resolveConfig({ emailPort: "587" }).emailPort, 587);
   }],
 
   ["选书方式与阅读速度只接受列出的取值", () => {
     for (const value of ["-1", "0", "1", "4"]) {
-      assert.strictEqual(configFromEnv({ WEREAD_SELECTION: value }).selection, Number(value));
+      assert.strictEqual(resolveConfig({ selection: value }).selection, Number(value));
     }
-    rejects(() => configFromEnv({ WEREAD_SELECTION: "-2" }), /WEREAD_SELECTION 只能是 -1、0、1、2、3、4：-2/);
-    rejects(() => configFromEnv({ WEREAD_SELECTION: "5" }), /WEREAD_SELECTION 只能是/);
-    assert.strictEqual(configFromEnv({ WEREAD_SPEED: "fast" }).speed, "fast");
-    rejects(() => configFromEnv({ WEREAD_SPEED: "turbo" }), /WEREAD_SPEED 只能是 slow、normal、fast：turbo/);
+    rejects(() => resolveConfig({ selection: "-2" }), /选书方式 只能是 -1、0、1、2、3、4：-2/);
+    rejects(() => resolveConfig({ selection: "5" }), /选书方式 只能是/);
+    assert.strictEqual(resolveConfig({ speed: "fast" }).speed, "fast");
+    rejects(() => resolveConfig({ speed: "turbo" }), /阅读速度 只能是 slow、normal、fast：turbo/);
   }],
 
   ["布尔值拼写错误时报错", () => {
-    assert.strictEqual(configFromEnv({ ENABLE_EMAIL: "yes" }).emailEnabled, true);
-    assert.strictEqual(configFromEnv({ WEREAD_SCREENSHOT: "off" }).screenshot, false);
-    rejects(() => configFromEnv({ ENABLE_EMAIL: "ture" }), /ENABLE_EMAIL 只能是 true 或 false：ture/);
+    assert.strictEqual(resolveConfig({ emailEnabled: "yes" }).emailEnabled, true);
+    assert.strictEqual(resolveConfig({ screenshot: "off" }).screenshot, false);
+    rejects(() => resolveConfig({ emailEnabled: "ture" }), /启用邮件通知 只能是 true 或 false：ture/);
   }],
 
   ["面板端口必须是 1–65535 的整数", () => {
@@ -100,12 +100,15 @@ const scenarios = [
     rejects(() => panelOptionsFromEnv({ PANEL_BASE_PATH: "/a b/" }), /PANEL_BASE_PATH 含有不支持的字符/);
   }],
 
-  ["CLI：非法配置与多余参数直接报错退出", () => {
+  ["CLI：未指定账号、非法配置与多余参数直接报错退出", () => {
     const run = runCli;
 
-    const badDuration = run(["run"], { WEREAD_DURATION: "0" });
-    assert.strictEqual(badDuration.status, 1);
-    assert.match(badDuration.stderr, /WEREAD_DURATION 必须在 1–1440 之间/);
+    // 按环境变量运行的方式已删除，run 必须指定面板中的账号
+    for (const args of [["run"], ["run", "--login-only"]]) {
+      const noAccount = run(args, { WEREAD_DURATION: "30" });
+      assert.strictEqual(noAccount.status, 1);
+      assert.match(noAccount.stderr, /run 需要指定账号：node src\/cli\.js run --account <id>/);
+    }
 
     const badPort = run(["panel"], { PANEL_PORT: "0" });
     assert.strictEqual(badPort.status, 1);

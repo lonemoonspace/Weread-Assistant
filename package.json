@@ -10,8 +10,7 @@
     "url": "git+https://github.com/lonemoonspace/Weread-Assistant.git"
   },
   "scripts": {
-    "start": "node src/cli.js run",
-    "debug": "DEBUG=true node src/cli.js run",
+    "start": "node src/cli.js panel",
     "panel": "node src/cli.js panel",
     "test:notify": "node scripts/notify-smoke.js",
     "test:reader": "node scripts/reader-smoke.js",
@@ -25,6 +24,7 @@
     "docker:image:push:dev": "node scripts/docker-image.js push --tag dev"
   },
   "dependencies": {
+    "croner": "10.0.1",
     "express": "^5.2.1",
     "jsqr": "^1.4.0",
     "nodemailer": "^6.9.16",

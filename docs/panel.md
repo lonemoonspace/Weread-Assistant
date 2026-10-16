@@ -1,6 +1,6 @@
 ## Web 面板说明
 
-> 已完成：登录、会话、修改密码、反向代理支持，全局设置、默认配置与账号管理接口，以及运行队列（立即运行、仅登录、停止、运行日志、实时推送）。调度、运行历史与统计、完整的页面按 `docs/design.md` 的开发计划逐步加入。
+> 已完成：登录、会话、修改密码、反向代理支持，全局设置、默认配置与账号管理接口，运行队列（立即运行、仅登录、停止、运行日志、实时推送），以及按账号的调度规则与定时运行。运行历史与统计、完整的页面按 `docs/design.md` 的开发计划逐步加入。
 
 ### 启动
 
@@ -16,7 +16,7 @@ PANEL_PORT=30000 node src/cli.js panel
 docker compose logs app | grep 面板初始密码
 ```
 
-面板能调度阅读之前（第 6 步），`docker-compose.yml` 中另有一个按环境变量运行一次阅读的 `reader` 服务，不随 `docker compose up` 启动，需要时执行 `docker compose run --rm reader`。
+阅读配置、通知与调度都在面板中设置，不再支持按环境变量运行阅读。
 
 ### 配置
 
@@ -40,6 +40,8 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/config.js` | 运行配置的表单清单、全局默认与账号覆盖的修改、合并与密钥掩码 | 面板管理的配置项不出现在接口中 |
 | `src/panel/accounts.js` | 账号增删改查 | 账号 ID 创建后不可修改；删除时默认保留数据目录；运行或排队中的账号不能删除 |
 | `src/panel/runner.js` | 运行队列：fork 阅读子进程、下发配置、处理事件、停止、保存日志 | 同一账号同时只有一个运行；并发数取面板设置，修改后立即生效 |
+| `src/panel/schedules.js` | 调度规则的校验、换算为 cron 表达式、计算接下来的触发时间 | 时间按面板时区解释 |
+| `src/panel/scheduler.js` | 按调度规则定时把运行加入队列（croner） | `panel.json` 每次修改后重建定时任务；错过的时间不补跑 |
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
 | `src/reader/worker.js` | 阅读子进程入口：经 IPC 接收配置、上报事件，收到 SIGTERM 时关闭浏览器后退出 | 只由面板启动，见 `docs/reader.md` |
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入、先写临时文件再重命名、权限 0600；启动时把已有文件的权限收紧为 0600，改不了或文件损坏时拒绝启动；补齐缺少的部分（旧文件自动升级） |
@@ -62,10 +64,13 @@ docker compose logs app | grep 面板初始密码
 | `GET api/schema` | 是 | 表单清单：配置分组、运行配置字段（类型、可选值、范围、是否密钥）、面板设置字段 |
 | `GET api/settings` | 是 | `{ settings, defaults }`：面板设置与全局默认运行配置（密钥为掩码） |
 | `PATCH api/settings` | 是 | `{ settings?, defaults? }`：只修改提交的项；任一项非法时返回 400 且整个请求不生效 |
-| `GET api/accounts` | 是 | 账号列表，含是否已有 cookies |
+| `GET api/accounts` | 是 | 账号列表，含是否已有 cookies、调度规则（带接下来的触发时间）与下一次定时运行时间 `nextRunAt` |
 | `POST api/accounts` | 是 | `{ id, name? }`；成功 201，ID 已存在 409，ID 或名称非法 400；同时创建账号数据目录 |
 | `GET api/accounts/:id` | 是 | `{ account, effective }`：账号与实际生效的运行配置 |
 | `PATCH api/accounts/:id` | 是 | `{ name?, enabled?, overrides? }`；ID 不可修改 |
+| `GET api/accounts/:id/schedules` | 是 | `{ timezone, enabled, nextRunAt, schedules }`：每条规则带 `description` 与接下来 5 次触发时间 `nextRuns` |
+| `PUT api/accounts/:id/schedules` | 是 | `{ schedules: [...] }`：整体替换账号的调度规则，保存后立即生效；任一条非法时返回 400，`message` 指出第几条规则与原因，整个请求不生效 |
+| `POST api/schedules/preview` | 是 | `{ schedules: [...] }`：校验并返回每条规则接下来的触发时间，不保存，供填写表单时预览 |
 | `DELETE api/accounts/:id` | 是 | `{ deleteData? }`，可以不带请求体；默认只从面板移除，`deleteData: true` 时同时删除账号数据目录与运行记录；账号正在运行或排队时返回 409 `account_busy` |
 | `POST api/accounts/:id/runs` | 是 | `{ mode? }`，`read`（默认）或 `login`（仅登录），可以不带请求体；加入队列后返回 202 与运行状态；账号不存在 404，已停用 409 `account_disabled`，已在运行或排队 409 `run_active` |
 | `POST api/accounts/:id/stop` | 是 | 停止账号当前的运行：排队中的直接取消，进行中的结束子进程；返回 202 与运行状态；没有运行时 404 `run_not_active` |
@@ -77,7 +82,7 @@ docker compose logs app | grep 面板初始密码
 
 ### 运行队列
 
-每次运行（立即运行或仅登录，第 6 步起还有定时触发）都 fork 一个阅读子进程 `src/reader/worker.js`。子进程经 IPC 接收本次运行的配置（账号覆盖 > 全局默认 > 内置默认，在开始运行时合并），密钥不进入子进程的环境变量。
+每次运行（立即运行、仅登录或定时触发）都 fork 一个阅读子进程 `src/reader/worker.js`。子进程经 IPC 接收本次运行的配置（账号覆盖 > 全局默认 > 内置默认，在开始运行时合并），密钥不进入子进程的环境变量。
 
 子进程只继承以下环境变量（白名单）：`PATH`、`HOME`、`USER`、`TZ`、`TMPDIR`、`LANG`、`LANGUAGE`、`LC_*`、`NODE_OPTIONS`、`NODE_EXTRA_CA_CERTS`、`NODE_USE_ENV_PROXY`，以及 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`（含小写形式）。面板所在环境中的其他变量都不会传给子进程，包括 `PANEL_PASSWORD`，以及 `BARK_KEY`、`EMAIL_PASS` 等按环境变量运行时使用的配置。
 
@@ -109,9 +114,30 @@ docker compose logs app | grep 面板初始密码
 | 文件 | 内容 |
 | --- | --- |
 | `output.log` | 子进程的标准输出与标准错误，加上面板写入的 `[PANEL]` 行（加入队列、启动、停止请求、强制结束、退出码、运行结束） |
-| `meta.json` | `id`、`accountId`、`accountName`、`mode`、`trigger`、`status`、`queuedAt`、`startedAt`、`endedAt`、`book`、`readingStartedAt`、`minutes`、`plannedMinutes`、`screenshot`、`error`、`exitCode`、`exitSignal`；状态变化与每分钟进度都会更新；不保存登录链接 |
+| `meta.json` | `id`、`accountId`、`accountName`、`mode`、`trigger`（`manual` 或 `schedule`）、`scheduleId`、`status`、`queuedAt`、`startedAt`、`endedAt`、`book`、`readingStartedAt`、`minutes`、`plannedMinutes`、`screenshot`、`error`、`exitCode`、`exitSignal`；状态变化与每分钟进度都会更新；不保存登录链接 |
 
 运行历史的查询、按天统计与按保留策略清理在第 7 步加入；截图目前仍保存在账号数据目录中，第 7 步起在运行结束后移入运行目录。
+
+### 调度
+
+每个账号可以有多条调度规则，到点后以“定时”方式把阅读加入运行队列。时间按面板设置中的时区（默认 `Asia/Shanghai`）解释，夏令时由时区数据处理。
+
+| 类型 | 字段 | 示例 | 换算的 cron 表达式 |
+| --- | --- | --- | --- |
+| 每天固定时间 | `times`：1–24 个 `HH:MM`，去重并排序 | `{ "type": "daily", "times": ["06:00", "18:30"] }` | `0 6 * * *`、`30 18 * * *` |
+| 每 N 小时 | `hours`：1、2、3、4、6、8、12（24 的约数）；`minute`：0–59，默认 0 | `{ "type": "interval", "hours": 6, "minute": 30 }` | `30 */6 * * *`（00:30、06:30、12:30、18:30） |
+| cron | `expression`：5 段（分 时 日 月 周），不接受秒字段与 `@daily` 等别名，必须会触发 | `{ "type": "cron", "expression": "30 6 * * 1-5" }` | 原样使用 |
+
+每条规则还有 `id`（小写字母与数字，1–16 位；不提交或重复时自动生成 6 位 ID）与 `enabled`（默认 true）。每个账号最多 10 条规则。
+
+| 规则 | 说明 |
+| --- | --- |
+| 生效时机 | `panel.json` 每次修改后整体重建定时任务：修改规则、启用或停用账号、修改时区、删除账号都立即生效 |
+| 停用 | 停用的规则、停用账号的所有规则都不触发，接口中也没有触发时间 |
+| 重复触发 | 账号已在运行或排队时跳过本次触发，在 `panel.log` 中记录 `定时触发跳过：账号 <id>，规则 <规则 ID>（<说明>）：账号已在运行或排队：<id>` |
+| 运行记录 | 定时触发的运行 `trigger` 为 `schedule`，`scheduleId` 为规则 ID；运行日志第一行为 `加入队列：定时触发（规则 <规则 ID>），阅读` |
+| 错过的时间 | 面板停机期间错过的时间不补跑 |
+| 手工修改 | 手工写入 `panel.json` 的无效规则在启动时跳过并记录日志，不影响其他规则 |
 
 ### 实时推送
 
@@ -129,7 +155,7 @@ docker compose logs app | grep 面板初始密码
 
 ```
 data/
-  panel.json              # 面板设置、全局默认配置、账号、密码哈希（0600）
+  panel.json              # 面板设置、全局默认配置、账号与调度规则、密码哈希（0600）
   panel.log
   panel.lock              # 面板运行期间存在，防止同一数据目录启动多个面板
   accounts/<id>/          # 账号数据：cookies.json、login.png、login-qr.png、截图
@@ -151,7 +177,14 @@ data/
   },
   "defaults": { "seleniumUrl": "http://selenium:4444", "duration": 68 },
   "accounts": [
-    { "id": "me", "name": "小明", "enabled": true, "createdAt": "2026-10-15T00:00:00.000Z", "overrides": { "selection": -1 } }
+    {
+      "id": "me",
+      "name": "小明",
+      "enabled": true,
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "overrides": { "selection": -1 },
+      "schedules": [{ "id": "a1b2c3", "type": "daily", "times": ["06:00"], "enabled": true }]
+    }
   ]
 }
 ```
@@ -164,7 +197,7 @@ data/
 | 密钥只写不读 | 接口返回 `••••••`；提交掩码或空字符串表示不修改，提交 `null` 表示清除 |
 | 账号 ID | 小写字母、数字与短横线，1–32 位，不以短横线开头或结尾；创建后不可修改 |
 | 删除账号 | 默认保留数据目录与运行记录，重新添加同 ID 的账号时沿用其中的 cookies |
-| 停用账号 | `enabled: false` 的账号不会被调度，也不能手动运行（接口返回 409，`run --account` 直接报错）；已在排队的运行开始前发现账号被停用时记为已停止 |
+| 停用账号 | `enabled: false` 的账号不会被定时运行，也不能手动运行（接口返回 409，`run --account` 直接报错）；已在排队的运行开始前发现账号被停用时记为已停止 |
 | 按账号运行 | `node src/cli.js run --account <id>` 按上述合并结果运行一次，见 `docs/cli.md` |
 
 ### 安全

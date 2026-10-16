@@ -1,12 +1,14 @@
 ## 推送通知说明
 
+通知相关的配置都在面板中设置（全局默认或账号覆盖），下文用括号注明配置项的字段名，见 `src/config/schema.js`。
+
 ### 职责
 
 | 组件 | 职责 | 输入 | 输出 | 依赖 | 关键约束 |
 | --- | --- | --- | --- | --- | --- |
 | `notify(config, title, body, options)`（`src/notify/index.js`） | 统一推送入口，向所有已启用渠道并行发送 | 运行配置、标题、正文、渠道无关选项 | 每个渠道的成功/失败结果数组 | 已启用的渠道配置 | 单渠道失败不影响其他渠道，也不中断主流程 |
-| `sendBark(config, title, body, options)`（`src/notify/bark.js`） | Bark 渠道实现（iOS） | 配置中的 `barkKey`、`barkServer`（`BARK_KEY`、`BARK_SERVER`） | Bark HTTP 请求结果 | `https` / `http` | 保持原有请求路径与负载字段不变 |
-| `sendNtfy(config, title, body, options)`（`src/notify/ntfy.js`） | ntfy 渠道实现（Android 推荐） | 配置中的 `ntfy*`（`NTFY_*`） | ntfy HTTP 请求结果 | `https` / `http` | 主题非法时本地拦截，不发起请求 |
+| `sendBark(config, title, body, options)`（`src/notify/bark.js`） | Bark 渠道实现（iOS） | 配置中的 `barkKey`、`barkServer` | Bark HTTP 请求结果 | `https` / `http` | 保持原有请求路径与负载字段不变 |
+| `sendNtfy(config, title, body, options)`（`src/notify/ntfy.js`） | ntfy 渠道实现（Android 推荐） | 配置中的 `ntfy*` | ntfy HTTP 请求结果 | `https` / `http` | 主题非法时本地拦截，不发起请求 |
 | `createNotifier(config, { loginLinkIntervalMs })`（`src/notify/index.js`） | 绑定一次运行的配置，提供 `event(name, body)`、`loginLink(url, qrImagePath)`、`willEmail(name)` | 运行配置 | 通知器对象 | 上述渠道与邮件 | 按事件开关推送；登录链接只在变化时推送，且受最小推送间隔限制 |
 | `postJson(url, payload, headers)`（`src/shared/http.js`） | 渠道共用的 JSON POST 实现 | 目标地址、负载、附加请求头 | `{ ok, status, body, error }` | `https` / `http` | 带 15s 超时，超时/网络错误统一回落为失败结果 |
 
@@ -14,20 +16,21 @@
 
 | 渠道 | 适用平台 | 启用条件 | 服务端 |
 | --- | --- | --- | --- |
-| Bark | iOS | `BARK_KEY` 非空 | 默认 `https://api.day.app`，可用 `BARK_SERVER` 覆盖 |
-| ntfy | Android / iOS / 桌面 | `NTFY_TOPIC` 非空 | 默认 `https://ntfy.sh`，可用 `NTFY_SERVER` 覆盖（支持自建） |
+| Bark | iOS | Bark Key（`barkKey`）非空 | 默认 `https://api.day.app`，可在 Bark 服务器地址（`barkServer`）中更换 |
+| ntfy | Android / iOS / 桌面 | ntfy 主题（`ntfyTopic`）非空 | 默认 `https://ntfy.sh`，可在 ntfy 服务器地址（`ntfyServer`）中更换（支持自建） |
+| 邮件 | 任意 | 启用邮件通知（`emailEnabled`），且 SMTP 服务器、SMTP 用户名、SMTP 密码、收件人都已填写 | 缺少配置时记录日志并跳过 |
 
 ### 通知事件
 
-阅读流程只通过 `createNotifier(config).event(name, body)` 发送通知。标题为 `WeReadAssistant`，配置了 `WEREAD_ACCOUNT_NAME` 时为 `WeReadAssistant · <账号名>`；副标题为事件名称。推送渠道与邮件都受同一个开关控制。
+阅读流程只通过 `createNotifier(config).event(name, body)` 发送通知。标题为 `WeReadAssistant · <账号名称>`（面板中的账号名称；没有账号名称时为 `WeReadAssistant`）；副标题为事件名称。推送渠道与邮件都受同一个开关控制。
 
 | 事件 | 开关（默认） | 触发时机 | 副标题 | level / sound |
 | --- | --- | --- | --- | --- |
-| `start` | `NOTIFY_ON_START`（关） | 开始运行 | 开始运行 | `passive` / `beginning` |
-| `loginRequired` | `NOTIFY_ON_LOGIN_REQUIRED`（开） | 出现新的登录二维码 | 需要扫码 | `timeSensitive` / `birdsong` |
-| `loginSuccess` | `NOTIFY_ON_LOGIN_SUCCESS`（关） | 登录成功并打开书籍（仅登录模式下为保存 cookies 后） | 登录成功 | `active` / `birdsong` |
-| `done` | `NOTIFY_ON_DONE`（开） | 阅读完成 | 阅读完成 | `active` / `success` |
-| `failure` | `NOTIFY_ON_FAILURE`（开） | 等待扫码超时或运行出错 | 运行失败 | `critical` / `alarm` |
+| `start` | 开始运行时通知（`notifyOnStart`，关） | 开始运行 | 开始运行 | `passive` / `beginning` |
+| `loginRequired` | 需要扫码时通知（`notifyOnLoginRequired`，开） | 出现新的登录二维码 | 需要扫码 | `timeSensitive` / `birdsong` |
+| `loginSuccess` | 登录成功时通知（`notifyOnLoginSuccess`，关） | 登录成功并打开书籍（仅登录模式下为保存 cookies 后） | 登录成功 | `active` / `birdsong` |
+| `done` | 阅读完成时通知（`notifyOnDone`，开） | 阅读完成 | 阅读完成 | `active` / `success` |
+| `failure` | 等待扫码超时或运行出错时通知（`notifyOnFailure`，开） | 等待扫码超时或运行出错 | 运行失败 | `critical` / `alarm` |
 
 ### 登录链接推送
 
@@ -59,12 +62,12 @@
 
 ### 覆盖项
 
-| 环境变量 | 作用 | 取值 |
+| 配置项 | 作用 | 取值 |
 | --- | --- | --- |
-| `NTFY_PRIORITY` | 覆盖 level 到优先级的默认映射 | `1-5` 或 `min,low,default,high,urgent,max`（发送前统一归一化为 1-5 数字） |
-| `NTFY_TAGS` | 覆盖 sound 到标签的默认映射 | 逗号分隔的标签列表 |
-| `NTFY_TOKEN` | ntfy Access Token 认证 | `Authorization: Bearer <token>` |
-| `NTFY_USERNAME` + `NTFY_PASSWORD` | ntfy Basic Auth 认证 | `Authorization: Basic <base64>`，仅在未配置 Token 时生效 |
+| ntfy 优先级覆盖（`ntfyPriority`） | 覆盖 level 到优先级的默认映射 | `1-5` 或 `min,low,default,high,urgent,max`（发送前统一归一化为 1-5 数字） |
+| ntfy 标签覆盖（`ntfyTags`） | 覆盖 sound 到标签的默认映射 | 逗号分隔的标签列表 |
+| ntfy Access Token（`ntfyToken`） | ntfy Access Token 认证 | `Authorization: Bearer <token>` |
+| ntfy 用户名 + ntfy 密码（`ntfyUsername`、`ntfyPassword`） | ntfy Basic Auth 认证 | `Authorization: Basic <base64>`，仅在未配置 Token 时生效 |
 
 ### 流程
 
@@ -72,12 +75,12 @@
 flowchart TD
   A[主流程事件] --> B[notify]
   B --> C{已启用渠道}
-  C -->|BARK_KEY| D[sendBark]
-  C -->|NTFY_TOPIC| E[sendNtfy]
+  C -->|barkKey| D[sendBark]
+  C -->|ntfyTopic| E[sendNtfy]
   E --> F{主题是否合法}
   F -->|否| G[记录错误并返回 false]
-  F -->|是| H[postJson 发送到 NTFY_SERVER]
-  D --> I[postJson 发送到 BARK_SERVER/KEY]
+  F -->|是| H[postJson 发送到 ntfyServer]
+  D --> I[postJson 发送到 barkServer/barkKey]
   H --> J[汇总每个渠道结果]
   I --> J
 ```

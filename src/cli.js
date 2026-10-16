@@ -1,38 +1,26 @@
 #!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
-const { CONFIG_SCHEMA } = require("./config/schema");
-const { configFromEnv } = require("./config/resolve");
 const { DEFAULT_PANEL_PORT, panelOptionsFromEnv } = require("./panel/options");
 const { ensureDir, getDataPaths } = require("./reader/paths");
 const { closeLogFile, initLogFile } = require("./shared/log");
 const { VERSION } = require("./shared/version");
 
-function formatDefault(field) {
-  if (field.secret || field.default === "") {
-    return "";
-  }
-  return ` (default: ${field.default})`;
-}
-
 function showHelp() {
-  const envLines = CONFIG_SCHEMA.map(
-    (field) => `  ${field.env.padEnd(24)} ${field.label}${formatDefault(field)}`
-  ).join("\n");
-
   console.log(`WeReadAssistant ${VERSION}
 
 Usage:
   node src/cli.js [panel]                  Start the web panel (default command).
   node src/cli.js run --account <id>       Run one reading session for a panel account, using its saved settings.
-  node src/cli.js run                      Run one reading session, configured by environment variables.
-  add --login-only to either run form      Only log in (scan the QR code if needed) and save cookies.
+                                           Add --login-only to only log in (scan the QR code if needed) and save cookies.
   node src/cli.js help                     Show this help text.
+
+Reading settings, notifications and schedules are configured in the panel.
 
 run exits with 0 when the run succeeds, 1 when login times out, an error occurs or it is stopped
 (SIGTERM / Ctrl+C close the browser before exiting).
 
-Panel environment variables:
+Environment variables:
   PANEL_PORT               Listening port (default: ${DEFAULT_PANEL_PORT})
   PANEL_HOST               Listening address (default: 0.0.0.0)
   PANEL_PASSWORD           Panel password; generated on first start when unset
@@ -40,9 +28,7 @@ Panel environment variables:
   PANEL_TRUST_PROXY        Trust X-Forwarded-* headers: true or the number of proxy hops (default: false)
   PANEL_PUBLIC_URL         Public URL of the panel, used in notification links
   PANEL_DATA_DIR           Panel data directory (default: data)
-
-Run environment variables:
-${envLines}`);
+  SELENIUM_URL             Selenium address written to the panel's global settings on first start`);
 }
 
 async function startPanelCommand(args) {
@@ -125,15 +111,16 @@ async function main(argv) {
       return;
     }
     const { accountId, loginOnly } = parseRunArgs(rest);
-    const config = accountId ? configFromPanelAccount(accountId) : configFromEnv(process.env);
+    if (!accountId) {
+      throw new Error("run 需要指定账号：node src/cli.js run --account <id>（账号在面板中创建）");
+    }
+    const config = configFromPanelAccount(accountId);
     const paths = getDataPaths(config);
     ensureDir(paths.dataDir);
     initLogFile(paths.outputLog, { debug: config.debug });
 
     const { runOnce } = require("./reader/run");
-    if (accountId) {
-      console.info("账号:", accountId, "数据目录:", config.dataDir);
-    }
+    console.info("账号:", accountId, "数据目录:", config.dataDir);
     // 在容器中作为 1 号进程运行时没有默认的信号处理，需要自己响应 docker stop 与 Ctrl+C：关闭浏览器后退出
     const controller = new AbortController();
     const stop = (signal) => {

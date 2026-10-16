@@ -58,6 +58,7 @@ function publicRun(run, { withLog = false } = {}) {
     accountName: run.accountName,
     mode: run.mode,
     trigger: run.trigger,
+    scheduleId: run.scheduleId,
     status: run.status,
     stopRequested: run.stopRequested,
     queuedAt: run.queuedAt,
@@ -370,7 +371,8 @@ function createRunner({
 
   return {
     // 加入队列。账号不存在 404；已停用、已在运行或排队 409
-    enqueue(accountId, { mode = "read", trigger = "manual" } = {}) {
+    // scheduleId：定时触发时为调度规则 ID
+    enqueue(accountId, { mode = "read", trigger = "manual", scheduleId = null } = {}) {
       if (closing) {
         throw new PanelError(503, "panel_closing", "面板正在停止");
       }
@@ -395,6 +397,7 @@ function createRunner({
         accountName: account.name,
         mode,
         trigger,
+        scheduleId,
         status: "queued",
         stopRequested: false,
         queuedAt: new Date().toISOString(),
@@ -421,7 +424,8 @@ function createRunner({
       run.logStream.on("error", (e) => console.error("写入运行日志失败:", run.dir, e.message));
       active.set(accountId, run);
       queue.push(run);
-      panelLog(run, `加入队列：${TRIGGER_LABELS[trigger] || trigger}触发，${MODE_LABELS[mode]}`);
+      const triggerText = `${TRIGGER_LABELS[trigger] || trigger}触发${scheduleId ? `（规则 ${scheduleId}）` : ""}`;
+      panelLog(run, `加入队列：${triggerText}，${MODE_LABELS[mode]}`);
       changed(run);
       pump();
       return publicRun(run);
