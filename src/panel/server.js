@@ -13,6 +13,16 @@ const {
   resolveAccountConfig,
 } = require("./config");
 const { PanelError, badRequest } = require("./errors");
+const {
+  calendar,
+  challengeProgress,
+  cleanupRuns,
+  getRun,
+  lastRun,
+  listRuns,
+  screenshotPath,
+  todayStats,
+} = require("./history");
 const { acquirePanelLock } = require("./lock");
 const { createRunner } = require("./runner");
 const { markInterruptedRuns, runDir } = require("./runs");
@@ -28,6 +38,8 @@ const CSRF_HEADER = "X-WA-Request";
 const PUBLIC_DIR = path.join(__dirname, "public");
 // 实时推送的心跳间隔，同时定期检查会话是否仍然有效
 const SSE_HEARTBEAT_MS = 15000;
+// 除每次运行结束与修改保留设置时之外，定期按保留策略清理运行数据
+const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 const SECURITY_HEADERS = {
   "Content-Security-Policy": [
@@ -90,8 +102,12 @@ function requireObject(body) {
 function createPanelApp(options, { auth, store, runner }) {
   const panelDataDir = path.resolve(options.dataDir);
   const settingsView = (data) => ({ settings: data.settings, defaults: maskValues(data.defaults) });
-  const accountView = (account, timezone = store.get().settings.timezone) =>
-    publicAccount(account, panelDataDir, timezone);
+  // 账号信息附带今天的阅读分钟数与最近一次运行，供总览使用
+  const accountView = (account, timezone = store.get().settings.timezone) => ({
+    ...publicAccount(account, panelDataDir, timezone),
+    today: todayStats(panelDataDir, account.id, { timezone }),
+    lastRun: lastRun(panelDataDir, account.id),
+  });
   const schedulesView = (account, timezone) => ({
     timezone,
     enabled: account.enabled,
@@ -280,7 +296,8 @@ function createPanelApp(options, { auth, store, runner }) {
     const data = store.get();
     const account = findAccount(data, req.params.id);
     res.json({
-      account: accountView(account),
+      account: accountView(account, data.settings.timezone),
+      challengeProgress: challengeProgress(panelDataDir, account, { timezone: data.settings.timezone }),
       effective: publicEffectiveConfig(resolveAccountConfig(data, account, panelDataDir)),
     });
   });
@@ -321,6 +338,30 @@ function createPanelApp(options, { auth, store, runner }) {
   api.post("/schedules/preview", (req, res) => {
     const { timezone } = store.get().settings;
     res.json({ timezone, schedules: schedulesFromBody(req.body).map((rule) => publicSchedule(rule, timezone)) });
+  });
+
+  // 运行历史，最新的在前；?limit=（1–100，默认 20）&before=<上一页最后一个运行 ID>
+  api.get("/accounts/:id/runs", (req, res) => {
+    findAccount(store.get(), req.params.id);
+    res.json(listRuns(panelDataDir, req.params.id, { limit: req.query.limit || 20, before: req.query.before || "" }));
+  });
+
+  // 单次运行的记录、截图列表与按天拆分的阅读分钟数
+  api.get("/accounts/:id/runs/:runId", (req, res) => {
+    res.json({ run: getRun(panelDataDir, req.params.id, req.params.runId, store.get().settings.timezone) });
+  });
+
+  api.get("/accounts/:id/runs/:runId/screenshots/:name", (req, res) => {
+    const { dir, name } = screenshotPath(panelDataDir, req.params.id, req.params.runId, req.params.name);
+    res.set("Content-Type", "image/png");
+    res.sendFile(name, { root: dir });
+  });
+
+  // 打卡日历：?month=YYYY-MM（默认本月，按面板时区）
+  api.get("/accounts/:id/calendar", (req, res) => {
+    const data = store.get();
+    const account = findAccount(data, req.params.id);
+    res.json(calendar(panelDataDir, account, { timezone: data.settings.timezone, month: req.query.month }));
   });
 
   // 排队中与进行中的运行，带最近的日志
@@ -451,6 +492,7 @@ async function startPanel(options) {
   let server;
   let runner;
   let scheduler;
+  let cleanupTimer;
   try {
     const store = createStore(path.resolve(options.dataDir), {
       seedDefaults: options.seleniumUrl ? { seleniumUrl: options.seleniumUrl } : {},
@@ -458,8 +500,34 @@ async function startPanel(options) {
     const auth = createAuth({ store, envPassword: options.password, limits: options.limits });
     const generatedPassword = await auth.init();
     markInterruptedRuns(options.dataDir);
+    // 按保留策略清理截图与日志；进行中的运行不清理
+    const cleanup = () => {
+      try {
+        const activeRunIds = new Set(runner.list().map((run) => run.id));
+        cleanupRuns(options.dataDir, store.get().settings, { activeRunIds });
+      } catch (e) {
+        console.error("清理运行数据失败:", e);
+      }
+    };
     // options.runner：测试时替换阅读子进程、缩短超时
-    runner = createRunner({ dataDir: options.dataDir, store, ...options.runner });
+    runner = createRunner({
+      dataDir: options.dataDir,
+      store,
+      onFinish: () => setImmediate(cleanup),
+      ...options.runner,
+    });
+    cleanup();
+    cleanupTimer = setInterval(cleanup, CLEANUP_INTERVAL_MS);
+    cleanupTimer.unref();
+    const retentionOf = (settings) => `${settings.screenshotRetentionRuns}/${settings.logRetentionDays}`;
+    let retention = retentionOf(store.get().settings);
+    store.subscribe(() => {
+      const next = retentionOf(store.get().settings);
+      if (next !== retention) {
+        retention = next;
+        setImmediate(cleanup);
+      }
+    });
     const app = createPanelApp(options, { auth, store, runner });
     scheduler = createScheduler({ store, runner });
     server = http.createServer(app);
@@ -479,6 +547,7 @@ async function startPanel(options) {
     let closing = null;
     const close = async () => {
       const serverClosed = new Promise((resolve) => server.close(resolve));
+      clearInterval(cleanupTimer);
       scheduler.close();
       await runner.close();
       server.closeAllConnections();
@@ -498,6 +567,7 @@ async function startPanel(options) {
       },
     };
   } catch (error) {
+    clearInterval(cleanupTimer);
     if (scheduler) {
       scheduler.close();
     }

@@ -29,7 +29,8 @@ async function screenshotFor(eventName, driver, ctx) {
  * options.mode: "read"（默认）或 "login"（只登录并保存 cookies）
  * options.signal: AbortSignal，触发后关闭浏览器并尽快结束，返回 stopped，不发送失败通知
  * options.report(event, data): 上报运行事件（见 docs/design.md“子进程事件”），由阅读子进程转发给面板
- * options.terminalQr: 是否在日志中打印二维码，默认 true
+ * options.terminalQr: 是否在终端显示登录链接与二维码，默认 true
+ * options.screenshotDir: 阅读截图的保存目录，默认为账号数据目录
  * options.homeUrl / options.timing: 覆盖首页地址与时间参数，供测试使用
  *
  * 返回 { status: "success" | "login-timeout" | "error" | "stopped", minutes, error }
@@ -39,7 +40,7 @@ async function runOnce(config, options = {}) {
   const { signal } = options;
   const report = options.report || (() => {});
   const timing = { ...resolveTiming(config), ...options.timing };
-  const paths = getDataPaths(config);
+  const paths = getDataPaths(config, { screenshotDir: options.screenshotDir });
   const notifier = createNotifier(config, { loginLinkIntervalMs: timing.loginLinkPushIntervalMs });
   const ctx = {
     config,

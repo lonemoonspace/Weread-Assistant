@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { PanelError, badRequest } = require("./errors");
+const { normalizeChallenge } = require("./challenge");
 const { accountDataDir, applyConfigPatch, maskValues } = require("./config");
 const { nextRunAt, publicSchedule } = require("./schedules");
 
@@ -35,6 +36,7 @@ function publicAccount(account, panelDataDir, timezone) {
     enabled: account.enabled,
     createdAt: account.createdAt,
     overrides: maskValues(account.overrides),
+    challenge: account.challenge,
     schedules: account.schedules.map((rule) => publicSchedule(rule, timezone)),
     nextRunAt: nextRunAt(account, timezone),
     hasCookies: fs.existsSync(path.join(accountDataDir(panelDataDir, account.id), "cookies.json")),
@@ -52,16 +54,24 @@ async function createAccount(store, panelDataDir, body = {}) {
     if (draft.accounts.some((account) => account.id === id)) {
       throw new PanelError(409, "account_exists", `账号已存在：${id}`);
     }
-    draft.accounts.push({ id, name, enabled: true, createdAt: new Date().toISOString(), overrides: {}, schedules: [] });
+    draft.accounts.push({
+      id,
+      name,
+      enabled: true,
+      createdAt: new Date().toISOString(),
+      overrides: {},
+      schedules: [],
+      challenge: null,
+    });
   });
   // 目录可能是之前删除账号时保留下来的，其中的 cookies 会被沿用
   fs.mkdirSync(accountDataDir(panelDataDir, id), { recursive: true });
   return findAccount(data, id);
 }
 
-// 可修改名称、是否启用与配置覆盖；账号 ID 创建后不可修改
+// 可修改名称、是否启用、配置覆盖与阅读挑战；账号 ID 创建后不可修改
 async function updateAccount(store, id, body = {}) {
-  const allowed = new Set(["name", "enabled", "overrides"]);
+  const allowed = new Set(["name", "enabled", "overrides", "challenge"]);
   const unknown = Object.keys(body).filter((key) => !allowed.has(key));
   if (unknown.length > 0) {
     throw badRequest(`不能修改的字段：${unknown.join(", ")}`);
@@ -80,6 +90,9 @@ async function updateAccount(store, id, body = {}) {
     }
     if (body.overrides !== undefined) {
       account.overrides = applyConfigPatch(account.overrides, body.overrides);
+    }
+    if (body.challenge !== undefined) {
+      account.challenge = normalizeChallenge(body.challenge);
     }
   });
   return findAccount(data, id);
