@@ -11,7 +11,8 @@ const XPATH = {
   qrHint: "//*[contains(text(), '扫码') or contains(text(), '二维码')]",
   qrExpiredOverlay: "//div[contains(text(), '点击刷新二维码') and @class='wr_login_modal_qr_overlay_text']",
   qrExpiredText: "//*[contains(text(), '二维码已失效')]",
-  shelfCard: "//div[@class='wr_index_mini_shelf_card']",
+  // 书架加载完成前首页先显示 4 个不含链接的占位卡片，点击无效；公众号文章打开的是另一种阅读页，没有目录按钮
+  shelfBookLink: "//div[@class='wr_index_mini_shelf_card']/a[@href!='' and not(contains(@href, '/mp/reader'))]",
   catalogButton: '//button[@title="目录"]',
   verticalModeButton: "//button[@title='切换到上下滚动阅读'] | //button[contains(@class, 'readerControls_item') and contains(@class, 'isHorizontalReader')]",
   catalogItem: "//li[@class='readerCatalog_list_item']",
