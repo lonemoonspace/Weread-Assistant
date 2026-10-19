@@ -1,4 +1,4 @@
-const { postJson } = require("../shared/http");
+const { isHttpUrl, postJson } = require("../shared/http");
 
 function isBarkEnabled(config) {
   return Boolean(config.barkKey);
@@ -7,6 +7,10 @@ function isBarkEnabled(config) {
 async function sendBark(config, title, body, options = {}) {
   if (!config.barkKey) {
     console.info("Bark推送密钥未配置");
+    return false;
+  }
+  if (!isHttpUrl(config.barkServer)) {
+    console.error("Bark 服务器地址无效（需以 http:// 或 https:// 开头）:", config.barkServer);
     return false;
   }
 

@@ -40,7 +40,8 @@ function postJson(urlString, payload, extraHeaders = {}, timeoutMs = DEFAULT_POS
     try {
       urlObj = new URL(urlString);
     } catch (error) {
-      resolve({ ok: false, status: 0, body: "", error: `invalid url: ${urlString}` });
+      // 地址中可能带有密钥（如 Bark Key），错误信息中不回显
+      resolve({ ok: false, status: 0, body: "", error: "invalid url" });
       return;
     }
 

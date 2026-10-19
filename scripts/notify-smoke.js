@@ -196,6 +196,20 @@ async function main() {
       });
     });
 
+    await scenario("Bark 服务器地址缺少协议时直接拦截，日志中不出现 Bark Key", async (logs) => {
+      config = resolveConfig({
+        barkKey: "bark-key-123",
+        barkServer: "api.day.app",
+      });
+
+      const ok = await sendBark(config, "微信读书挑战", "登录成功");
+
+      assert.strictEqual(ok, false);
+      assert.strictEqual(mock.requests.length, 0);
+      assert.ok(logs.some((line) => line.includes("Bark 服务器地址无效")));
+      assert.ok(!logs.some((line) => line.includes("bark-key-123")), "日志中不应出现 Bark Key");
+    });
+
     await scenario("ntfy 负载映射优先级、标签、点击与附件", async () => {
       config = resolveConfig({
         ntfyTopic: "weread_smoke_topic",
