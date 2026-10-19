@@ -7,6 +7,8 @@
 //   scanOnQr       第几张二维码出现后视为扫码成功；不设置则永远不扫码
 //   scanDelayMs    该二维码出现多久后完成扫码
 //   books          书架上的书数量
+//   mpArticles     排在书前面的公众号文章数量
+//   shelfLoadMs    书架加载多久后才显示书籍卡片，之前只有不含链接的占位卡片
 //   chapters       每本书的章节数，最后一章显示“全 书 完”
 //   frontMatter    目录开头是否有一个“扉页”条目（章节号 0）
 //   contentHeight  每章正文高度（像素）
@@ -64,10 +66,23 @@ function reportScript(base) {
 function homePage(name, scenario, loggedIn) {
   const base = `/s/${name}`;
   if (loggedIn) {
-    const cards = Array.from({ length: scenario.books || 0 }, (_, i) => i + 1)
-      .map((book) => `<div class="wr_index_mini_shelf_card" onclick="location.href='${base}/reader?book=${book}&ch=1'">书 ${book}</div>`)
-      .join("");
-    return page("微信读书", `<div class="wr_index_page_top_section_header_action_link">我的书架</div><div>${cards}</div>`, "");
+    // 与真实页面一致：书籍卡片中的链接负责跳转；公众号文章打开另一种阅读页
+    const cards = [
+      ...Array.from({ length: scenario.mpArticles || 0 }, (_, i) =>
+        `<div class="wr_index_mini_shelf_card"><a href="${base}/mp/reader/${i + 1}">文章 ${i + 1}</a></div>`),
+      ...Array.from({ length: scenario.books || 0 }, (_, i) =>
+        `<div class="wr_index_mini_shelf_card"><a href="${base}/reader?book=${i + 1}&ch=1">书 ${i + 1}</a></div>`),
+    ].join("");
+    if (!scenario.shelfLoadMs) {
+      return page("微信读书", `<div class="wr_index_page_top_section_header_action_link">我的书架</div><div>${cards}</div>`, "");
+    }
+    // 书架加载完成前先显示 4 个不含链接的占位卡片
+    const skeletons = '<div class="wr_index_mini_shelf_card">加载中</div>'.repeat(4);
+    return page(
+      "微信读书",
+      `<div class="wr_index_page_top_section_header_action_link">我的书架</div><div id="shelf">${skeletons}</div>`,
+      `setTimeout(() => { document.getElementById("shelf").innerHTML = ${JSON.stringify(cards)}; }, ${scenario.shelfLoadMs});`
+    );
   }
 
   const script = `${reportScript(base)}

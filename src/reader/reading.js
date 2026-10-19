@@ -49,7 +49,8 @@ async function openBook(driver, ctx) {
     if (selection === 0) {
       selection = randomBetween(1, 4);
     }
-    const books = await findElementsWithin(driver, XPATH.shelfCard, timing.pageWaitMs);
+    // 刚登录时书架仍在加载，等到出现带链接的书籍卡片再点击
+    const books = await findElementsWithin(driver, XPATH.shelfBookLink, timing.pageWaitMs);
     if (books.length > 0 && books.length < selection) {
       await books[0].click();
       console.info("Clicked on the first book.");
@@ -62,7 +63,15 @@ async function openBook(driver, ctx) {
     }
   }
 
-  await driver.wait(until.elementLocated(By.xpath(XPATH.catalogButton)), timing.pageWaitMs);
+  try {
+    await driver.wait(until.elementLocated(By.xpath(XPATH.catalogButton)), timing.pageWaitMs);
+  } catch (error) {
+    if (error.name !== "TimeoutError") {
+      throw error;
+    }
+    const where = await driver.getCurrentUrl().catch(() => "未知");
+    throw new Error(`打开书籍后 ${formatDuration(timing.pageWaitMs)}内未出现阅读页的「目录」按钮，当前页面：${where}`);
+  }
 
   const switchButton = await findElementsWithin(driver, XPATH.verticalModeButton, timing.elementWaitMs);
   if (switchButton.length > 0) {

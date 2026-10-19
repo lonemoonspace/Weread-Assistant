@@ -195,9 +195,9 @@ async function main() {
       },
     });
 
-    await scenario("阅读：书架选书、翻到下一章、读完回到目录，翻动节奏符合配置", {
+    await scenario("阅读：等书架加载后选书（跳过公众号文章）、翻到下一章、读完回到目录，翻动节奏符合配置", {
       name: "reading",
-      site: { loggedIn: true, books: 3, chapters: 2, contentHeight: 1800 },
+      site: { loggedIn: true, books: 3, mpArticles: 1, shelfLoadMs: 1500, chapters: 2, contentHeight: 1800 },
       values: { selection: 2 },
       timing: { durationMs: 30000, pressIntervalMs: [100, 200] },
       check({ result, events, pushes }) {
