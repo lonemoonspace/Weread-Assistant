@@ -217,9 +217,9 @@ async function main() {
       },
     });
 
-    await scenario("目录只有一项时回到该项；截图过小视为白屏并刷新页面", {
+    await scenario("目录只有一项时回到该项；截图过小视为白屏并刷新页面，刷新后重新切换到上下滚动模式", {
       name: "single",
-      site: { loggedIn: true, chapters: 1, frontMatter: true, contentHeight: 600 },
+      site: { loggedIn: true, chapters: 1, frontMatter: true, contentHeight: 600, resetModeOnReload: true },
       values: (homeUrl) => ({ selection: -1, bookUrl: `${homeUrl}reader?book=1&ch=1`, screenshot: true }),
       timing: { durationMs: 13000, minuteMs: 4000, pressIntervalMs: [300, 500] },
       check({ result, events, dataDir }) {
@@ -227,6 +227,7 @@ async function main() {
         assert.ok(events.some((event) => event.type === "chapter" && event.ch === "0"), "应点击目录中唯一的条目");
         assert.ok(fs.existsSync(path.join(dataDir, "screenshot-1.png")));
         assert.ok(countEvents(events, "reload") >= 1, "白屏截图后应刷新页面");
+        assert.ok(countEvents(events, "vertical") >= countEvents(events, "reload") + 1, "刷新后应重新切换到上下滚动模式");
       },
     });
 

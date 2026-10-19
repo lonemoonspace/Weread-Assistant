@@ -10,6 +10,7 @@
 //   chapters       每本书的章节数，最后一章显示“全 书 完”
 //   frontMatter    目录开头是否有一个“扉页”条目（章节号 0）
 //   contentHeight  每章正文高度（像素）
+//   resetModeOnReload  刷新页面后回到左右翻页模式（不保留已切换的上下滚动阅读）
 const http = require("http");
 const { URL } = require("url");
 const { PNG } = require("pngjs");
@@ -122,7 +123,11 @@ function readerPage(name, scenario, book, ch) {
 
   const script = `${reportScript(base)}
     const nav = performance.getEntriesByType("navigation")[0];
-    report(nav && nav.type === "reload" ? "reload" : "chapter", { book: "${book}", ch: "${ch}" });
+    const reloaded = Boolean(nav && nav.type === "reload");
+    report(reloaded ? "reload" : "chapter", { book: "${book}", ch: "${ch}" });
+    if (reloaded && ${Boolean(scenario.resetModeOnReload)}) {
+      sessionStorage.removeItem("vertical");
+    }
     const toggle = document.getElementById("toggle");
     if (sessionStorage.getItem("vertical")) {
       toggle.remove();

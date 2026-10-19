@@ -1,12 +1,29 @@
 const fs = require("fs");
 const path = require("path");
-const { By, until, Key } = require("selenium-webdriver");
+const { By, until, Key, error: webdriverErrors } = require("selenium-webdriver");
 const { findElementsWithin, randomBetween, sleep, throwIfStopped } = require("./dom");
 const { READ_FINISHED_TITLE_TEXT, XPATH, parseBookTitle } = require("./selectors");
 const { formatDuration } = require("./timing");
 
 // 截图小于该大小视为白屏并刷新页面；正文由 canvas 绘制，无法通过 DOM 文本判断
 const BLANK_SCREENSHOT_BYTES = 100 * 1024;
+
+// 章节切换、页面局部重绘时常见的瞬时错误：连续出现不超过该次数时跳过这一轮，继续阅读
+const MAX_TRANSIENT_ERRORS = 3;
+const TRANSIENT_ERROR_TYPES = [
+  webdriverErrors.StaleElementReferenceError,
+  webdriverErrors.JavascriptError,
+  webdriverErrors.ElementClickInterceptedError,
+  webdriverErrors.ElementNotInteractableError,
+  webdriverErrors.NoSuchElementError,
+];
+
+function isTransientError(e) {
+  return (
+    TRANSIENT_ERROR_TYPES.some((type) => e instanceof type) ||
+    /execution context was destroyed/i.test(String(e && e.message))
+  );
+}
 
 // 一次往返读取阅读页状态
 const PAGE_STATE_SCRIPT = `
@@ -37,6 +54,17 @@ async function pressDownArrow(driver) {
   await driver.actions().sendKeys(Key.NULL).perform();
 }
 
+// 页面处于左右翻页模式时切换到上下滚动阅读；已是上下滚动时找不到切换按钮，返回 false
+async function switchToVerticalMode(driver, ctx) {
+  const switchButton = await findElementsWithin(driver, XPATH.verticalModeButton, ctx.timing.elementWaitMs);
+  if (switchButton.length === 0) {
+    return false;
+  }
+  await switchButton[0].click();
+  console.info("Switched to vertical scroll mode.");
+  return true;
+}
+
 // 按选书方式打开书籍并切换到上下滚动阅读模式，返回书名（取不到时为空字符串）
 async function openBook(driver, ctx) {
   const { config, timing } = ctx;
@@ -64,11 +92,7 @@ async function openBook(driver, ctx) {
 
   await driver.wait(until.elementLocated(By.xpath(XPATH.catalogButton)), timing.pageWaitMs);
 
-  const switchButton = await findElementsWithin(driver, XPATH.verticalModeButton, timing.elementWaitMs);
-  if (switchButton.length > 0) {
-    await switchButton[0].click();
-    console.info("Switched to vertical scroll mode.");
-  } else {
+  if (!(await switchToVerticalMode(driver, ctx))) {
     console.warn("未找到用于切换为上下滚动阅读的按钮（兼容新老版本定位）");
   }
 
@@ -121,7 +145,54 @@ async function onReadingMinute(driver, ctx, minute) {
   if (size < BLANK_SCREENSHOT_BYTES) {
     await driver.navigate().refresh();
     console.info("Page refreshed.");
+    // 刷新后若回到左右翻页模式，按方向键无法翻动，需要重新切换
+    await switchToVerticalMode(driver, ctx);
   }
+}
+
+// 阅读循环中的一轮：按页面状态跳回开头、点下一章 / 重试，否则按一次方向键
+async function readStep(driver, ctx) {
+  const state = await driver.executeScript(PAGE_STATE_SCRIPT, XPATH);
+
+  const jumpReasons = [];
+  if (state.title.includes(READ_FINISHED_TITLE_TEXT)) {
+    jumpReasons.push('标题包含 "已读完"');
+  }
+  if (state.unlockPrompt) {
+    console.warn("需要打开书籍");
+    jumpReasons.push("需要打开书籍");
+  }
+  if (state.bookFinished) {
+    console.warn("书籍已读完");
+    jumpReasons.push("书籍已读完");
+  }
+  if (jumpReasons.length > 0) {
+    console.warn("needToJump = true, reasons: " + jumpReasons.join(" | "));
+    await jumpToStart(driver, ctx);
+    return;
+  }
+
+  if (state.nextVisible) {
+    const [nextButton] = await driver.findElements(By.xpath(XPATH.nextButton));
+    if (nextButton) {
+      await nextButton.click();
+      console.info("Clicked on next chapter button.");
+      return;
+    }
+  }
+
+  if (state.retryShown) {
+    const [retryButton] = await driver.findElements(By.xpath(XPATH.retryButton));
+    if (retryButton) {
+      console.warn("Retry button found.");
+      await retryButton.click();
+      console.info("Clicked on retry button.");
+      return;
+    }
+  }
+
+  await pressDownArrow(driver);
+  console.debug("Pressed down arrow key.");
 }
 
 // 按配置时长持续阅读：翻动、跳章、读完回到目录；返回实际阅读分钟数
@@ -139,57 +210,27 @@ async function readLoop(driver, ctx) {
   console.info("End time: ", new Date(endTime));
 
   let lastMinute = 0;
+  let transientErrors = 0;
   while (Date.now() < endTime) {
     throwIfStopped(ctx.signal);
     await sleep(Math.min(randomBetween(minInterval, maxInterval), endTime - Date.now()), ctx.signal);
 
-    const minute = Math.floor((Date.now() - startTime) / timing.minuteMs);
-    if (minute > lastMinute) {
-      lastMinute = minute;
-      await onReadingMinute(driver, ctx, minute);
-    }
-
-    const state = await driver.executeScript(PAGE_STATE_SCRIPT, XPATH);
-
-    const jumpReasons = [];
-    if (state.title.includes(READ_FINISHED_TITLE_TEXT)) {
-      jumpReasons.push('标题包含 "已读完"');
-    }
-    if (state.unlockPrompt) {
-      console.warn("需要打开书籍");
-      jumpReasons.push("需要打开书籍");
-    }
-    if (state.bookFinished) {
-      console.warn("书籍已读完");
-      jumpReasons.push("书籍已读完");
-    }
-    if (jumpReasons.length > 0) {
-      console.warn("needToJump = true, reasons: " + jumpReasons.join(" | "));
-      await jumpToStart(driver, ctx);
-      continue;
-    }
-
-    if (state.nextVisible) {
-      const [nextButton] = await driver.findElements(By.xpath(XPATH.nextButton));
-      if (nextButton) {
-        await nextButton.click();
-        console.info("Clicked on next chapter button.");
-        continue;
+    try {
+      const minute = Math.floor((Date.now() - startTime) / timing.minuteMs);
+      if (minute > lastMinute) {
+        lastMinute = minute;
+        await onReadingMinute(driver, ctx, minute);
       }
-    }
-
-    if (state.retryShown) {
-      const [retryButton] = await driver.findElements(By.xpath(XPATH.retryButton));
-      if (retryButton) {
-        console.warn("Retry button found.");
-        await retryButton.click();
-        console.info("Clicked on retry button.");
-        continue;
+      await readStep(driver, ctx);
+      transientErrors = 0;
+    } catch (e) {
+      throwIfStopped(ctx.signal);
+      transientErrors += 1;
+      if (!isTransientError(e) || transientErrors > MAX_TRANSIENT_ERRORS) {
+        throw e;
       }
+      console.warn(`阅读页面暂时无法操作（连续第 ${transientErrors} 次），跳过这一轮:`, e.message);
     }
-
-    await pressDownArrow(driver);
-    console.debug("Pressed down arrow key.");
   }
 
   console.info("Reading completed.");
