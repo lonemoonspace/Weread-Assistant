@@ -12,7 +12,7 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 
 const { resolveConfig } = require(path.resolve(__dirname, "..", "src", "config", "resolve"));
-const { panelOptionsFromEnv } = require(path.resolve(__dirname, "..", "src", "panel", "options"));
+const { panelDataDirFromEnv, panelOptionsFromEnv, publicUrlWarning } = require(path.resolve(__dirname, "..", "src", "panel", "options"));
 const { createStore } = require(path.resolve(__dirname, "..", "src", "panel", "store"));
 
 const CLI = path.resolve(__dirname, "..", "src", "cli.js");
@@ -104,6 +104,14 @@ const scenarios = [
     rejects(() => panelOptionsFromEnv({ PANEL_PUBLIC_URL: "example.com" }), /PANEL_PUBLIC_URL 不是有效的地址/);
     rejects(() => panelOptionsFromEnv({ PANEL_PUBLIC_URL: "ftp://example.com/" }), /PANEL_PUBLIC_URL 应为/);
     rejects(() => panelOptionsFromEnv({ PANEL_PUBLIC_URL: "https://u:p@example.com/" }), /PANEL_PUBLIC_URL 应为/);
+    const warningFor = (env) => publicUrlWarning(panelOptionsFromEnv(env));
+    assert.strictEqual(warningFor({ PANEL_PUBLIC_URL: "https://example.com/weread/", PANEL_BASE_PATH: "/weread/" }), "");
+    // 反向代理去掉了前缀
+    assert.strictEqual(warningFor({ PANEL_PUBLIC_URL: "https://example.com/weread/" }), "");
+    assert.match(warningFor({ PANEL_PUBLIC_URL: "https://example.com/", PANEL_BASE_PATH: "/weread/" }), /路径不以 PANEL_BASE_PATH（\/weread\/）结尾/);
+    // 命令行按账号运行只读取数据目录
+    assert.strictEqual(panelDataDirFromEnv({ PANEL_PUBLIC_URL: "not a url", PANEL_DATA_DIR: "/srv/wa" }), "/srv/wa");
+    assert.strictEqual(panelDataDirFromEnv({}), "data");
   }],
 
   ["CLI：未指定账号、非法配置与多余参数直接报错退出", () => {

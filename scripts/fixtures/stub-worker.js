@@ -10,7 +10,7 @@
 //   slow-*      打开书后一直阅读，收到 SIGTERM 后退出
 //   stubborn-*  忽略 SIGTERM，只能被强制结束
 //   hang-*      建立会话后不再有任何动作，收到 SIGTERM 后退出
-//   skip-*      进度从第 1 分钟跳到第 5 分钟，最后上报一个超出上限的分钟数
+//   skip-*      进度从第 1 分钟跳到第 5 分钟，最后上报一个远超阅读时长的分钟数
 const fs = require("fs");
 const path = require("path");
 const { PNG } = require("pngjs");

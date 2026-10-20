@@ -109,13 +109,10 @@ function runMeta(run) {
   return { ...meta, minuteMarks: run.minuteMarks, exitCode: run.exitCode, exitSignal: run.exitSignal };
 }
 
-// 子进程上报的分钟数不超过阅读时长的上限，异常值不会让补记分钟记录的循环过长
-const MAX_MINUTES = CONFIG_SCHEMA.find((field) => field.key === "duration").max;
-
 // 补齐到 count 个分钟记录（进度事件跳过了某些分钟，或最后一分钟没来得及上报）。补记的分钟在上一条记录
 // （没有时为开始阅读的时间）与现在之间均匀分布，最后一条为现在：跨午夜时仍能大致归到各自的日期
 function fillMinuteMarks(run, count) {
-  const missing = Math.min(count, MAX_MINUTES) - run.minuteMarks.length;
+  const missing = count - run.minuteMarks.length;
   if (missing <= 0) {
     return;
   }
@@ -299,14 +296,14 @@ function createRunner({
         run.readingStartedAt = new Date().toISOString();
         break;
       case "reading-minute":
-        run.minutes = Math.min(toCount(data.minute), MAX_MINUTES);
+        run.minutes = Math.min(toCount(data.minute), run.maxMinutes);
         fillMinuteMarks(run, run.minutes);
         run.plannedMinutes = toCount(data.total) || run.plannedMinutes;
         run.screenshot = path.basename(String(data.screenshot || ""));
         break;
       case "done":
         // 以较大者为准：最后一分钟的进度可能没来得及上报
-        run.minutes = Math.min(Math.max(run.minutes, toCount(data.minutes)), MAX_MINUTES);
+        run.minutes = Math.min(Math.max(run.minutes, toCount(data.minutes)), run.maxMinutes);
         fillMinuteMarks(run, run.minutes);
         setResult(run, "success");
         break;
@@ -386,6 +383,9 @@ function createRunner({
     run.redact = createRedactor(config);
     run.seleniumUrl = config.seleniumUrl;
     run.plannedMinutes = run.mode === "read" ? config.duration : 0;
+    // 子进程上报的分钟数不超过本次的阅读时长（读完时按四舍五入计，留 1 分钟余量）：
+    // 异常值不会让分钟记录变长，也不会把大量补记的分钟挤到同一时刻
+    run.maxMinutes = run.mode === "read" ? config.duration + 1 : 0;
     run.status = "starting";
     run.startedAt = new Date().toISOString();
 
@@ -495,6 +495,7 @@ function createRunner({
         book: "",
         readingStartedAt: null,
         minutes: 0,
+        maxMinutes: 0,
         minuteMarks: [],
         plannedMinutes: 0,
         screenshot: "",

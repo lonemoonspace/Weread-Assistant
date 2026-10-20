@@ -259,9 +259,22 @@ button.small,
   padding: 6px;
   border-radius: 8px;
   background: #fff;
-  /* 二维码截图（尤其是整页截图）不是正方形时按比例缩放，不拉伸 */
-  object-fit: contain;
   image-rendering: pixelated;
+}
+
+/* 二维码截图：可能是整页截图，按原比例尽量放大显示，不塞进二维码的方框 */
+.qr-shot {
+  display: block;
+  flex: 0 1 480px;
+  max-width: 100%;
+}
+
+.qr-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  background: #fff;
 }
 
 .qr-help {

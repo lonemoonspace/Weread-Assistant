@@ -289,9 +289,10 @@ async function desktop(env, h, driver, results) {
   await call("POST", "api/accounts/qrimg-1/runs", { mode: "login" });
   await h.go("#/accounts/qrimg-1/live");
   await h.waitText(".live-status", "等待扫码");
-  const qrShot = await h.waitFor(".live .qr-login img.qr");
+  const qrShot = await h.waitFor(".live .qr-login .qr-shot img");
   assert.match(await qrShot.getAttribute("src"), /\/api\/accounts\/qrimg-1\/login-qr\?t=/);
-  await h.imagesLoaded(".live .qr-login img.qr");
+  await h.imagesLoaded(".live .qr-login .qr-shot img");
+  assert.match(await (await h.waitFor(".live .qr-login a.qr-shot")).getAttribute("href"), /\/api\/accounts\/qrimg-1\/login-qr\?t=/, "可点击查看原图");
   await h.waitText(".live .qr-login", "未能从二维码中解析出登录链接");
   assert.strictEqual((await driver.findElements(By.xpath("//div[contains(@class, 'qr-login')]//button"))).length, 0, "没有登录链接时不显示复制按钮");
   await h.shot("04b-live-scan-screenshot");

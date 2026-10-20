@@ -150,7 +150,9 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
       if (envPassword) {
         // 与在面板中修改密码的要求一致
         if (envPassword.length < MIN_PASSWORD_LENGTH) {
-          throw new Error(`PANEL_PASSWORD 至少 ${MIN_PASSWORD_LENGTH} 位`);
+          throw new Error(
+            `PANEL_PASSWORD 至少 ${MIN_PASSWORD_LENGTH} 位：把它改成 ${MIN_PASSWORD_LENGTH} 位以上后重新启动即可，账号与设置不受影响`
+          );
         }
         envPasswordHash = await hashPassword(envPassword);
         return "";

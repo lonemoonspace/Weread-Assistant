@@ -527,6 +527,7 @@ async function main() {
         assert.strictEqual((await panel.call("POST", "api/accounts", { id })).status, 400, id);
       }
       assert.strictEqual((await panel.call("POST", "api/accounts", { id: "long", name: "名".repeat(33) })).status, 400);
+      assert.strictEqual((await panel.call("POST", "api/accounts", "null")).status, 400);
       const typo = await panel.call("POST", "api/accounts", { id: "typo", nmae: "拼错" });
       assert.deepStrictEqual([typo.status, typo.json.message], [400, "不支持的字段：nmae"]);
       const defaultName = await panel.call("POST", "api/accounts", { id: "second" });
@@ -670,13 +671,28 @@ async function main() {
       assert.deepStrictEqual(backup.accounts.map((account) => account.id), ["keep-1"]);
       assert.strictEqual(fs.statSync(`${file}.bak`).mode & 0o777, 0o600);
 
-      // 模拟断电后的空文件
+      // 模拟断电后的空文件；损坏文件的副本只保留最近 3 份
+      for (const stamp of [1000000000001, 1000000000002, 1000000000003]) {
+        fs.writeFileSync(`${file}.corrupt-${stamp}`, "old");
+      }
       fs.writeFileSync(file, "");
       const restored = await startAuthed({ dataDir });
       assert.deepStrictEqual((await restored.call("GET", "api/accounts")).json.accounts.map((account) => account.id), ["keep-1"]);
-      assert.ok(fs.readdirSync(dataDir).some((name) => name.startsWith("panel.json.corrupt-")));
+      const copies = fs.readdirSync(dataDir).filter((name) => name.startsWith("panel.json.corrupt-")).sort();
+      assert.strictEqual(copies.length, 3);
+      assert.ok(!copies.includes("panel.json.corrupt-1000000000001"), "最早的副本应被删除");
+      assert.strictEqual(fs.readFileSync(path.join(dataDir, copies[2]), "utf8"), "", "最新的副本是这次损坏的文件");
       assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, "utf8")).accounts.map((account) => account.id), ["keep-1"]);
+      await restored.call("POST", "api/accounts", { id: "keep-3" });
       await restored.close();
+
+      // panel.json 不见了（例如恢复过程中崩溃）时从上一版恢复，第一次修改不会用空数据覆盖上一版
+      fs.rmSync(file);
+      const missing = await startAuthed({ dataDir });
+      assert.deepStrictEqual((await missing.call("GET", "api/accounts")).json.accounts.map((account) => account.id), ["keep-1"]);
+      await missing.call("POST", "api/accounts", { id: "keep-4" });
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(`${file}.bak`, "utf8")).accounts.map((account) => account.id), ["keep-1"]);
+      await missing.close();
 
       fs.writeFileSync(file, "{broken");
       fs.writeFileSync(`${file}.bak`, "{broken too");
@@ -976,15 +992,16 @@ async function main() {
       assert.ok(!("loginQrAt" in runFiles(panel, "qrimg-1", run.id).meta()));
     });
 
-    await scenario("进度跳过的分钟按时间均匀补记；分钟数不超过阅读时长上限", async () => {
+    await scenario("进度跳过的分钟按时间均匀补记；分钟数不超过本次阅读时长（含 1 分钟余量）", async () => {
       const panel = await startAuthed();
       await panel.call("POST", "api/accounts", { id: "skip-1" });
+      await panel.call("PATCH", "api/accounts/skip-1", { overrides: { duration: 5 } });
       const finished = nextRun(panel, ended("skip-1"));
       await panel.call("POST", "api/accounts/skip-1/runs");
       const run = await finished;
-      assert.strictEqual(run.minutes, 1440);
+      assert.strictEqual(run.minutes, 6);
       const marks = runFiles(panel, "skip-1", run.id).meta().minuteMarks.map((mark) => Date.parse(mark));
-      assert.strictEqual(marks.length, 1440);
+      assert.strictEqual(marks.length, 6);
       // 第 2–4 分钟在第 1 分钟与第 5 分钟之间，各不相同
       assert.ok(marks[0] < marks[1] && marks[1] < marks[2] && marks[2] < marks[3] && marks[3] < marks[4], "补记的分钟应递增");
       assert.ok(marks.every((mark, i) => i === 0 || mark >= marks[i - 1]));

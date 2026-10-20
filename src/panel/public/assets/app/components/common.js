@@ -50,11 +50,14 @@ export const QrLogin = {
   },
   template: `
     <div class="qr-login">
-      <img v-if="image" class="qr" :src="image" alt="微信读书登录二维码">
+      <img v-if="url" class="qr" :src="image" alt="微信读书登录二维码">
+      <a v-else-if="image" class="qr-shot" :href="image" target="_blank" rel="noopener" title="查看原图">
+        <img :src="image" alt="阅读浏览器中的微信读书登录二维码截图">
+      </a>
       <p v-else class="muted" aria-busy="true">正在获取二维码…</p>
       <div class="qr-help">
         <p v-if="url">用微信扫描二维码登录；在手机上可以复制链接，发到微信中打开。二维码约 1 分钟后失效，会自动刷新。</p>
-        <p v-else-if="image">未能从二维码中解析出登录链接，下面是阅读浏览器中二维码的截图，用微信扫描即可。二维码约 1 分钟后失效，会自动刷新。</p>
+        <p v-else-if="image">未能从二维码中解析出登录链接，这是阅读浏览器中二维码的截图，用微信扫描即可；截图看不清时点击查看原图。二维码约 1 分钟后失效，会自动刷新。</p>
         <button v-if="url" type="button" class="secondary" @click="copy">{{ copied ? "已复制" : "复制登录链接" }}</button>
         <input v-if="showLink" class="login-link" type="text" readonly :value="url" @focus="$event.target.select()">
       </div>

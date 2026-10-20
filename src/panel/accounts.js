@@ -42,7 +42,8 @@ function publicAccount(account, panelDataDir, timezone) {
   };
 }
 
-async function createAccount(store, panelDataDir, body = {}) {
+async function createAccount(store, panelDataDir, body) {
+  body = body || {};
   const unknown = Object.keys(body).filter((key) => !["id", "name"].includes(key));
   if (unknown.length > 0) {
     throw badRequest(`不支持的字段：${unknown.join(", ")}`);

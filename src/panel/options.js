@@ -55,6 +55,20 @@ function parsePort(raw) {
   return port;
 }
 
+// 面板数据目录。命令行按账号运行时只需要它，其他面板环境变量取值非法也不影响
+function panelDataDirFromEnv(env = process.env) {
+  return env.PANEL_DATA_DIR || "data";
+}
+
+// PANEL_PUBLIC_URL 与 PANEL_BASE_PATH 明显不一致时的提示：面板部署在子路径下，外网地址却不以该路径结尾，
+// 推送中的面板链接多半打不开。反向代理去掉了前缀时（PANEL_BASE_PATH 为 /）外网地址带路径是正常的，不提示
+function publicUrlWarning({ publicUrl, basePath }) {
+  if (!publicUrl || basePath === "/" || new URL(publicUrl).pathname.endsWith(basePath)) {
+    return "";
+  }
+  return `PANEL_PUBLIC_URL（${publicUrl}）的路径不以 PANEL_BASE_PATH（${basePath}）结尾，推送中的面板链接可能打不开`;
+}
+
 // 面板自身的运行参数，来自 PANEL_* 环境变量；取值非法时抛出错误
 function panelOptionsFromEnv(env = process.env) {
   return {
@@ -64,7 +78,7 @@ function panelOptionsFromEnv(env = process.env) {
     trustProxy: parseTrustProxy(env.PANEL_TRUST_PROXY),
     publicUrl: normalizePublicUrl(env.PANEL_PUBLIC_URL),
     password: env.PANEL_PASSWORD || "",
-    dataDir: env.PANEL_DATA_DIR || "data",
+    dataDir: panelDataDirFromEnv(env),
     // 首次启动时写入全局默认配置，之后以面板中的设置为准
     seleniumUrl: env.SELENIUM_URL || "",
   };
@@ -73,6 +87,8 @@ function panelOptionsFromEnv(env = process.env) {
 module.exports = {
   DEFAULT_PANEL_PORT,
   normalizeBasePath,
+  panelDataDirFromEnv,
   panelOptionsFromEnv,
   parseTrustProxy,
+  publicUrlWarning,
 };

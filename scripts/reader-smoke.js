@@ -194,7 +194,7 @@ async function main() {
       },
     });
 
-    await scenario("点击登录后没有二维码：立即失败，不等到扫码超时", {
+    await scenario("点击登录后没有二维码：刷新重试一次后失败，不等到扫码超时", {
       name: "no-qr",
       site: { noQr: true },
       mode: "login",
@@ -202,7 +202,7 @@ async function main() {
       check({ result, events }) {
         assert.strictEqual(result.status, "error");
         assert.match(result.error, /未能打开扫码登录弹窗/);
-        assert.strictEqual(countEvents(events, "login-click"), 1);
+        assert.strictEqual(countEvents(events, "login-click"), 2, "应刷新页面后再点击一次登录");
       },
     });
 

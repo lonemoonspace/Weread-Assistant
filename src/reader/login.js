@@ -149,15 +149,23 @@ async function openLoginDialog(driver, ctx) {
   return true;
 }
 
-// 打开登录弹窗；没有二维码可扫时立即失败，不再静默等到扫码超时。刷新页面后已登录（出现书架）时不算失败
+// 打开登录弹窗；找不到二维码时刷新页面重试一次（站点慢、二维码图片后加载），仍没有就失败，
+// 不再静默等到扫码超时。刷新后已登录（出现书架）时不算失败
 async function openLoginDialogOrFail(driver, ctx) {
-  if (await openLoginDialog(driver, ctx)) {
-    return;
+  for (let attempt = 1; ; attempt += 1) {
+    if (await openLoginDialog(driver, ctx)) {
+      return;
+    }
+    if ((await xpathsExist(driver, [XPATH.shelfLink]))[0]) {
+      return;
+    }
+    if (attempt >= 2) {
+      throw new Error("未能打开扫码登录弹窗（找不到登录入口或二维码）：页面结构可能已改版");
+    }
+    console.warn("未能打开扫码登录弹窗，刷新页面后重试");
+    await driver.navigate().refresh();
+    await waitForAnyXpath(driver, [XPATH.loginLink, XPATH.shelfLink], ctx.timing.pageWaitMs);
   }
-  if ((await xpathsExist(driver, [XPATH.shelfLink]))[0]) {
-    return;
-  }
-  throw new Error("未能打开扫码登录弹窗（找不到登录入口或二维码）：页面结构可能已改版");
 }
 
 // 安全点击元素函数，处理元素被拦截的情况
