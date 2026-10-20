@@ -159,10 +159,13 @@ async function main() {
         const loginPushes = pushes.filter((push) => push.title.endsWith("需要扫码"));
         assert.strictEqual(loginPushes.length, 1);
         assert.strictEqual(loginPushes[0].click, mock.loginUrlFor("login", 1));
-        assert.ok(fs.existsSync(path.join(dataDir, "login.png")));
-        assert.ok(fs.existsSync(path.join(dataDir, "login-qr.png")));
         const cookies = JSON.parse(fs.readFileSync(path.join(dataDir, "cookies.json"), "utf8"));
         assert.ok(cookies.some((cookie) => cookie.name === "wr_vid"));
+        // cookies 与二维码等同于登录状态，只允许属主访问
+        assert.strictEqual(fs.statSync(dataDir).mode & 0o777, 0o700);
+        for (const name of ["cookies.json", "login.png", "login-qr.png"]) {
+          assert.strictEqual(fs.statSync(path.join(dataDir, name)).mode & 0o777, 0o600, name);
+        }
       },
     });
 

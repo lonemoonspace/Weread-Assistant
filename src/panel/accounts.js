@@ -4,6 +4,7 @@ const { PanelError, badRequest } = require("./errors");
 const { normalizeChallenge } = require("./challenge");
 const { accountDataDir, applyConfigPatch, maskValues } = require("./config");
 const { nextRunAt, publicSchedule } = require("./schedules");
+const { ensurePrivateDir } = require("../shared/files");
 
 // 账号 ID 同时用作数据目录名与浏览器配置名：小写字母、数字与短横线，1–32 位，不以短横线开头或结尾
 const ACCOUNT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
@@ -65,7 +66,7 @@ async function createAccount(store, panelDataDir, body = {}) {
     });
   });
   // 目录可能是之前删除账号时保留下来的，其中的 cookies 会被沿用
-  fs.mkdirSync(accountDataDir(panelDataDir, id), { recursive: true });
+  ensurePrivateDir(accountDataDir(panelDataDir, id));
   return findAccount(data, id);
 }
 

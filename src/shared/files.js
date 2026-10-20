@@ -11,6 +11,18 @@ function writeFileAtomic(filePath, content, options = {}) {
   fs.renameSync(tmpPath, filePath);
 }
 
+// 创建只有属主可访问（0700）的目录，例如保存 cookies 与登录二维码的账号数据目录。
+// mkdir 的 mode 会受 umask 影响，已有的目录也不会改，所以再 chmod 一次；文件系统不支持时只给出警告
+function ensurePrivateDir(dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch (e) {
+    console.warn(`无法把 ${dir} 的权限改为 700：${e.message}`);
+  }
+}
+
 module.exports = {
+  ensurePrivateDir,
   writeFileAtomic,
 };

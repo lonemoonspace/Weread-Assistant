@@ -282,7 +282,7 @@ data/
   panel.json              # 面板设置、全局默认配置、账号与调度规则、密码哈希（0600）
   panel.log
   panel.lock              # 面板运行期间存在，防止同一数据目录启动多个面板
-  accounts/<id>/          # 账号数据：cookies.json、login.png、login-qr.png（命令行运行时的截图也在这里）
+  accounts/<id>/          # 账号数据（0700）：cookies.json、login.png、login-qr.png（0600；命令行运行时的截图也在这里）
   runs/<id>/<runId>/      # 每次运行：meta.json、output.log、screenshot-*.png
 ```
 
@@ -334,7 +334,7 @@ data/
 | 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；所有 IP 在 15 分钟内累计失败 100 次后暂停全部登录 15 分钟 |
 | 跨站请求伪造 | 修改类请求必须带 `X-WA-Request: 1` 请求头且为 JSON，配合 `SameSite=Strict` |
 | 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`；接口响应 `Cache-Control: no-store` |
-| 文件 | `panel.json` 权限 0600，已有文件在启动时收紧；初始密码不写入日志文件 |
+| 文件 | `panel.json` 权限 0600，已有文件在启动时收紧；账号数据目录 0700，`cookies.json` 与登录二维码图片 0600（等同于登录状态）；初始密码不写入日志文件 |
 | 容器 | 以 `node` 用户运行；入口脚本先把数据目录中不属于 `node` 的文件改过来再降权 |
 
 ### 反向代理

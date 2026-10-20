@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { DEFAULT_PANEL_PORT, panelOptionsFromEnv } = require("./panel/options");
 const { ensureDir, getDataPaths } = require("./reader/paths");
+const { ensurePrivateDir } = require("./shared/files");
 const { closeLogFile, initLogFile } = require("./shared/log");
 const { VERSION } = require("./shared/version");
 
@@ -116,7 +117,7 @@ async function main(argv) {
     }
     const config = configFromPanelAccount(accountId);
     const paths = getDataPaths(config);
-    ensureDir(paths.dataDir);
+    ensurePrivateDir(paths.dataDir);
     initLogFile(paths.outputLog, { debug: config.debug });
 
     const { runOnce } = require("./reader/run");

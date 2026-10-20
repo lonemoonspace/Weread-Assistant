@@ -1,8 +1,7 @@
 const fs = require("fs");
 const { By, until } = require("selenium-webdriver");
-const { writeFileAtomic } = require("../shared/files");
+const { ensurePrivateDir, writeFileAtomic } = require("../shared/files");
 const { findElementsWithin, sleep, throwIfStopped, toBy, waitForAnyXpath, xpathsExist } = require("./dom");
-const { ensureDir } = require("./paths");
 const { formatDuration } = require("./timing");
 const {
   HOME_TITLE,
@@ -14,7 +13,8 @@ const {
 
 async function saveCookies(driver, filePath) {
   const cookies = await driver.manage().getCookies();
-  writeFileAtomic(filePath, JSON.stringify(cookies, null, 2));
+  // cookies 等同于登录状态，只允许属主读写
+  writeFileAtomic(filePath, JSON.stringify(cookies, null, 2), { mode: 0o600 });
   console.info("Cookies saved successfully.");
 }
 
@@ -83,7 +83,7 @@ async function extractAndDisplayQRCode(driver, ctx) {
   try {
     const qrImg = await driver.findElement(By.xpath(XPATH.qrImage));
     const base64Png = await qrImg.takeScreenshot();
-    fs.writeFileSync(ctx.paths.loginQrImage, base64Png, "base64");
+    writeFileAtomic(ctx.paths.loginQrImage, Buffer.from(base64Png, "base64"), { mode: 0o600 });
 
     const { PNG } = require("pngjs");
     const png = PNG.sync.read(Buffer.from(base64Png, "base64"));
@@ -115,7 +115,8 @@ async function captureQRCode(driver, ctx) {
   // 避免截图时二维码还未弹出
   await sleep(1000);
   const image = await driver.takeScreenshot();
-  fs.writeFileSync(ctx.paths.loginQrCode, image, "base64");
+  // 二维码在有效期内可用于完成登录，与 cookies 一样只允许属主读写
+  writeFileAtomic(ctx.paths.loginQrCode, Buffer.from(image, "base64"), { mode: 0o600 });
   console.info("QR code saved, datetime: ", new Date());
   const url = await extractAndDisplayQRCode(driver, ctx);
   // 解析不出链接时也上报，面板据此显示“等待扫码”
@@ -252,7 +253,7 @@ async function login(driver, ctx) {
   }
   console.info("Successfully opened the url:", homeUrl);
 
-  ensureDir(paths.dataDir);
+  ensurePrivateDir(paths.dataDir);
 
   // 等首页渲染出“登录”入口或“我的书架”
   console.info("Find login links...");
