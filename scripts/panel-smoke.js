@@ -501,7 +501,8 @@ async function main() {
         { id: "me", name: "我", enabled: true }
       );
       assert.strictEqual(created.json.account.hasCookies, false);
-      assert.ok(fs.existsSync(path.join(accountsDir, "me")));
+      // 账号目录保存 cookies 与登录二维码，只允许属主访问
+      assert.strictEqual(fs.statSync(path.join(accountsDir, "me")).mode & 0o777, 0o700);
 
       assert.strictEqual((await panel.call("POST", "api/accounts", { id: "me" })).status, 409);
       for (const id of ["Bad_ID", "-x", "x-", "a".repeat(33), "../etc"]) {
@@ -856,6 +857,22 @@ async function main() {
         assert.match(log, /已请求 Selenium 删除会话 stub-session-stubborn-1/);
         // 正常退出的子进程自己关闭了浏览器，不需要删除会话
         assert.deepStrictEqual(selenium.requests, ["DELETE /session/stub-session-stubborn-1"]);
+        assert.strictEqual(selenium.state.sessionAuthorization, "");
+
+        // Selenium 地址带用户名与密码时，删除会话改用 Authorization 请求头
+        await panel.call("PATCH", "api/settings", {
+          defaults: { seleniumUrl: selenium.url.replace("://", "://robot:p%40ss@") },
+        });
+        const authReading = nextRun(panel, (run) => run.accountId === "stubborn-2" && run.status === "reading");
+        await panel.call("POST", "api/accounts", { id: "stubborn-2" });
+        await panel.call("POST", "api/accounts/stubborn-2/runs");
+        await authReading;
+        const authEnded = nextRun(panel, ended("stubborn-2"));
+        await panel.call("POST", "api/accounts/stubborn-2/stop");
+        const authRun = await authEnded;
+        assert.match(await runFiles(panel, "stubborn-2", authRun.id).log(), /已请求 Selenium 删除会话 stub-session-stubborn-2（HTTP 200）/);
+        assert.strictEqual(selenium.requests.at(-1), "DELETE /session/stub-session-stubborn-2");
+        assert.strictEqual(selenium.state.sessionAuthorization, `Basic ${Buffer.from("robot:p@ss").toString("base64")}`);
 
         const idle = await panel.call("POST", "api/accounts/slow-1/stop");
         assert.strictEqual(idle.status, 404);
@@ -889,6 +906,34 @@ async function main() {
       await panel.call("POST", "api/accounts/hang-1/runs");
       const run = await finished;
       assert.deepStrictEqual([run.status, run.error], ["failed", "运行超时，已强制结束"]);
+    });
+
+    await scenario("停止后、子进程退出前到达运行时长上限时仍记为已停止", async () => {
+      const panel = await startAuthed({ runner: { workerPath: STUB_WORKER, killTimeoutMs: 1500, runTimeoutMs: 1000 } });
+      await panel.call("POST", "api/accounts", { id: "stubborn-1" });
+      const reading = nextRun(panel, (run) => run.accountId === "stubborn-1" && run.status === "reading");
+      await panel.call("POST", "api/accounts/stubborn-1/runs");
+      await reading;
+      const finished = nextRun(panel, ended("stubborn-1"));
+      await panel.call("POST", "api/accounts/stubborn-1/stop");
+      const run = await finished;
+      assert.deepStrictEqual([run.status, run.error], ["stopped", ""]);
+      assert.strictEqual(runFiles(panel, "stubborn-1", run.id).meta().exitSignal, "SIGKILL");
+    });
+
+    await scenario("启动运行出错时记为失败并释放账号，不会一直排队", async () => {
+      const panel = await startAuthed();
+      await panel.call("POST", "api/accounts", { id: "broken-1" });
+      // 账号数据目录被同名文件占用，启动时无法创建
+      const dir = path.join(panel.options.dataDir, "accounts", "broken-1");
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.writeFileSync(dir, "not a directory");
+      const res = await panel.call("POST", "api/accounts/broken-1/runs");
+      assert.strictEqual(res.status, 202);
+      assert.strictEqual(res.json.run.status, "failed");
+      assert.match(res.json.run.error, /无法创建账号数据目录/);
+      assert.deepStrictEqual((await panel.call("GET", "api/runs")).json.runs, []);
+      assert.strictEqual((await panel.call("POST", "api/accounts/broken-1/runs")).json.run.status, "failed");
     });
 
     await scenario("面板停止时进行中与排队中的运行记为中断；启动时把遗留的进行中记录标为中断", async () => {

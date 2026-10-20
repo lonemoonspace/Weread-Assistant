@@ -4,6 +4,7 @@ const readline = require("readline");
 const { fork } = require("child_process");
 const { CONFIG_SCHEMA } = require("../config/schema");
 const { formatLocalTimestamp } = require("../shared/log");
+const { ensurePrivateDir } = require("../shared/files");
 const { normalizeSeleniumUrl } = require("../shared/selenium");
 const { findAccount } = require("./accounts");
 const { SECRET_MASK, accountDataDir, resolveAccountConfig } = require("./config");
@@ -114,9 +115,17 @@ function fillMinuteMarks(run, count) {
   }
 }
 
+// fetch 不接受带用户名与密码的地址：从地址中取出，改用 Authorization 请求头（与连接浏览器时一致）
 async function deleteSeleniumSession(seleniumUrl, sessionId) {
-  const url = `${normalizeSeleniumUrl(seleniumUrl)}/session/${encodeURIComponent(sessionId)}`;
-  const res = await fetch(url, { method: "DELETE", signal: AbortSignal.timeout(SESSION_DELETE_TIMEOUT_MS) });
+  const url = new URL(`${normalizeSeleniumUrl(seleniumUrl)}/session/${encodeURIComponent(sessionId)}`);
+  const headers = {};
+  if (url.username || url.password) {
+    const credentials = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`;
+    headers.Authorization = `Basic ${Buffer.from(credentials).toString("base64")}`;
+    url.username = "";
+    url.password = "";
+  }
+  const res = await fetch(url, { method: "DELETE", headers, signal: AbortSignal.timeout(SESSION_DELETE_TIMEOUT_MS) });
   return res.status;
 }
 
@@ -212,8 +221,10 @@ function createRunner({
     pump();
   }
 
-  // SIGTERM，超时后 SIGKILL
+  // SIGTERM，超时后 SIGKILL。已经在结束子进程，不再按运行超时处理：
+  // 停止或面板关闭后、子进程退出前看门狗到点时，结果仍记为已停止或中断
   function terminate(run) {
+    clearTimeout(run.watchdog);
     if (run.killTimer) {
       return;
     }
@@ -345,7 +356,12 @@ function createRunner({
       finish(run, "failed", `配置无效：${e.message}`);
       return;
     }
-    fs.mkdirSync(accountDataDir(panelDataDir, account.id), { recursive: true });
+    try {
+      ensurePrivateDir(accountDataDir(panelDataDir, account.id));
+    } catch (e) {
+      finish(run, "failed", `无法创建账号数据目录：${e.message}`);
+      return;
+    }
 
     run.accountName = account.name;
     run.redact = createRedactor(config);
@@ -405,7 +421,19 @@ function createRunner({
     }
     const limit = store.get().settings.maxConcurrentRuns;
     while (running.size < limit && queue.length > 0) {
-      start(queue.shift());
+      const run = queue.shift();
+      try {
+        start(run);
+      } catch (e) {
+        // 启动过程中的意外错误也要结束这次运行，否则它会一直停在排队状态并占用账号
+        console.error("启动运行失败:", run.accountId, run.id, e);
+        if (run.child) {
+          setResult(run, "failed", `无法启动运行：${e.message}`);
+          terminate(run);
+        } else if (active.get(run.accountId) === run) {
+          finish(run, "failed", `无法启动运行：${e.message}`);
+        }
+      }
     }
   }
 
@@ -481,7 +509,10 @@ function createRunner({
         throw new PanelError(404, "run_not_active", `账号没有正在运行或排队的任务：${accountId}`);
       }
       if (run.status === "queued") {
-        queue.splice(queue.indexOf(run), 1);
+        const index = queue.indexOf(run);
+        if (index >= 0) {
+          queue.splice(index, 1);
+        }
         panelLog(run, "已取消排队");
         finish(run, "stopped");
         return publicRun(run);
