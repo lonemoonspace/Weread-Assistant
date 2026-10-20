@@ -1,0 +1,5 @@
+# 统一以 LF 检出：Windows 上 core.autocrlf=true 时，npm run check 对第三方文件的 SHA-256 校验与入口脚本不受影响
+* text=auto eol=lf
+# 第三方文件按原样保存与检出，校验值见 src/panel/public/assets/vendor/README.md
+src/panel/public/assets/vendor/** -text
+*.png binary
