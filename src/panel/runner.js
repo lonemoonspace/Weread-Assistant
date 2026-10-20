@@ -4,6 +4,7 @@ const readline = require("readline");
 const { fork } = require("child_process");
 const { CONFIG_SCHEMA } = require("../config/schema");
 const { formatLocalTimestamp } = require("../shared/log");
+const { ensurePrivateDir } = require("../shared/files");
 const { normalizeSeleniumUrl } = require("../shared/selenium");
 const { findAccount } = require("./accounts");
 const { SECRET_MASK, accountDataDir, resolveAccountConfig } = require("./config");
@@ -91,6 +92,8 @@ function publicRun(run, { withLog = false } = {}) {
     plannedMinutes: run.plannedMinutes,
     screenshot: run.screenshot,
     loginUrl: run.loginUrl,
+    // 最近一次出现二维码的时间：二维码解析不出登录链接时，页面据此加载二维码截图
+    loginQrAt: run.loginQrAt,
     error: run.error,
   };
   if (withLog) {
@@ -102,21 +105,37 @@ function publicRun(run, { withLog = false } = {}) {
 // 写入 meta.json 的运行记录：不含登录链接（一次性且很快过期）。
 // minuteMarks 为每一分钟阅读完成的时间，按天统计时用它把跨天的运行拆到各自的日期
 function runMeta(run) {
-  const { loginUrl, stopRequested, ...meta } = publicRun(run);
+  const { loginUrl, loginQrAt, stopRequested, ...meta } = publicRun(run);
   return { ...meta, minuteMarks: run.minuteMarks, exitCode: run.exitCode, exitSignal: run.exitSignal };
 }
 
-// 补齐到 count 个分钟记录，时间记为现在（进度事件跳过了某些分钟，或最后一分钟没来得及上报）
+// 补齐到 count 个分钟记录（进度事件跳过了某些分钟，或最后一分钟没来得及上报）。补记的分钟在上一条记录
+// （没有时为开始阅读的时间）与现在之间均匀分布，最后一条为现在：跨午夜时仍能大致归到各自的日期
 function fillMinuteMarks(run, count) {
-  const now = new Date().toISOString();
-  while (run.minuteMarks.length < count) {
-    run.minuteMarks.push(now);
+  const missing = count - run.minuteMarks.length;
+  if (missing <= 0) {
+    return;
+  }
+  const now = Date.now();
+  const last = Date.parse(run.minuteMarks.at(-1) || run.readingStartedAt || "");
+  const from = Number.isNaN(last) || last > now ? now : last;
+  const step = (now - from) / missing;
+  for (let i = 1; i <= missing; i += 1) {
+    run.minuteMarks.push(new Date(from + step * i).toISOString());
   }
 }
 
+// fetch 不接受带用户名与密码的地址：从地址中取出，改用 Authorization 请求头（与连接浏览器时一致）
 async function deleteSeleniumSession(seleniumUrl, sessionId) {
-  const url = `${normalizeSeleniumUrl(seleniumUrl)}/session/${encodeURIComponent(sessionId)}`;
-  const res = await fetch(url, { method: "DELETE", signal: AbortSignal.timeout(SESSION_DELETE_TIMEOUT_MS) });
+  const url = new URL(`${normalizeSeleniumUrl(seleniumUrl)}/session/${encodeURIComponent(sessionId)}`);
+  const headers = {};
+  if (url.username || url.password) {
+    const credentials = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`;
+    headers.Authorization = `Basic ${Buffer.from(credentials).toString("base64")}`;
+    url.username = "";
+    url.password = "";
+  }
+  const res = await fetch(url, { method: "DELETE", headers, signal: AbortSignal.timeout(SESSION_DELETE_TIMEOUT_MS) });
   return res.status;
 }
 
@@ -125,6 +144,7 @@ async function deleteSeleniumSession(seleniumUrl, sessionId) {
  * 日志取自子进程的标准输出并写入运行目录。同一账号同时只有一个运行（排队或进行中），
  * 同时运行的数量由面板设置 maxConcurrentRuns 决定。
  *
+ * options.publicUrl：面板的外网地址（PANEL_PUBLIC_URL），用于扫码推送中的面板链接
  * options.workerPath / killTimeoutMs / runTimeoutMs / startOptions 供测试替换子进程与缩短等待
  */
 function createRunner({
@@ -134,6 +154,7 @@ function createRunner({
   killTimeoutMs = KILL_TIMEOUT_MS,
   exitAfterResultMs = EXIT_AFTER_RESULT_MS,
   runTimeoutMs,
+  publicUrl = "",
   startOptions = {},
   onFinish = () => {},
 }) {
@@ -195,6 +216,7 @@ function createRunner({
     run.status = status;
     run.error = error;
     run.loginUrl = "";
+    run.loginQrAt = "";
     run.endedAt = new Date().toISOString();
     const summary = { success: "成功", failed: "失败", stopped: "已停止", interrupted: "中断" }[status];
     panelLog(run, `运行结束：${summary}${error ? `（${error}）` : ""}`);
@@ -212,8 +234,10 @@ function createRunner({
     pump();
   }
 
-  // SIGTERM，超时后 SIGKILL
+  // SIGTERM，超时后 SIGKILL。已经在结束子进程，不再按运行超时处理：
+  // 停止或面板关闭后、子进程退出前看门狗到点时，结果仍记为已停止或中断
   function terminate(run) {
+    clearTimeout(run.watchdog);
     if (run.killTimer) {
       return;
     }
@@ -232,6 +256,7 @@ function createRunner({
     run.status = status;
     run.error = error;
     run.loginUrl = "";
+    run.loginQrAt = "";
     clearTimeout(run.watchdog);
     run.exitTimer = setTimeout(() => {
       panelLog(run, `运行已结束但子进程 ${Math.round(exitAfterResultMs / 1000)} 秒内未退出，正在结束`);
@@ -258,10 +283,12 @@ function createRunner({
       case "login-required":
         run.status = "waiting-login";
         run.loginUrl = String(data.url || "");
+        run.loginQrAt = new Date().toISOString();
         break;
       case "login-ok":
         run.status = "starting";
         run.loginUrl = "";
+        run.loginQrAt = "";
         break;
       case "book-opened":
         run.status = "reading";
@@ -269,14 +296,14 @@ function createRunner({
         run.readingStartedAt = new Date().toISOString();
         break;
       case "reading-minute":
-        run.minutes = toCount(data.minute);
+        run.minutes = Math.min(toCount(data.minute), run.maxMinutes);
         fillMinuteMarks(run, run.minutes);
         run.plannedMinutes = toCount(data.total) || run.plannedMinutes;
         run.screenshot = path.basename(String(data.screenshot || ""));
         break;
       case "done":
         // 以较大者为准：最后一分钟的进度可能没来得及上报
-        run.minutes = Math.max(run.minutes, toCount(data.minutes));
+        run.minutes = Math.min(Math.max(run.minutes, toCount(data.minutes)), run.maxMinutes);
         fillMinuteMarks(run, run.minutes);
         setResult(run, "success");
         break;
@@ -345,12 +372,20 @@ function createRunner({
       finish(run, "failed", `配置无效：${e.message}`);
       return;
     }
-    fs.mkdirSync(accountDataDir(panelDataDir, account.id), { recursive: true });
+    try {
+      ensurePrivateDir(accountDataDir(panelDataDir, account.id));
+    } catch (e) {
+      finish(run, "failed", `无法创建账号数据目录：${e.message}`);
+      return;
+    }
 
     run.accountName = account.name;
     run.redact = createRedactor(config);
     run.seleniumUrl = config.seleniumUrl;
     run.plannedMinutes = run.mode === "read" ? config.duration : 0;
+    // 子进程上报的分钟数不超过本次的阅读时长（读完时按四舍五入计，留 1 分钟余量）：
+    // 异常值不会让分钟记录变长，也不会把大量补记的分钟挤到同一时刻
+    run.maxMinutes = run.mode === "read" ? config.duration + 1 : 0;
     run.status = "starting";
     run.startedAt = new Date().toISOString();
 
@@ -384,7 +419,9 @@ function createRunner({
       onClose(run, code, signal).catch((e) => console.error("处理子进程退出失败:", e));
     });
     // 阅读截图直接写入运行目录
-    child.send({ type: "start", mode: run.mode, config, screenshotDir: run.dir, ...startOptions });
+    // 配置了面板外网地址时，扫码推送附带该账号实时页面的链接
+    const panelLink = publicUrl ? `${publicUrl}#/accounts/${run.accountId}/live` : "";
+    child.send({ type: "start", mode: run.mode, config, screenshotDir: run.dir, panelLink, ...startOptions });
 
     const limitMs =
       runTimeoutMs || (config.loginTimeout + (run.mode === "read" ? config.duration : 0)) * 60000 + RUN_TIMEOUT_MARGIN_MS;
@@ -405,7 +442,19 @@ function createRunner({
     }
     const limit = store.get().settings.maxConcurrentRuns;
     while (running.size < limit && queue.length > 0) {
-      start(queue.shift());
+      const run = queue.shift();
+      try {
+        start(run);
+      } catch (e) {
+        // 启动过程中的意外错误也要结束这次运行，否则它会一直停在排队状态并占用账号
+        console.error("启动运行失败:", run.accountId, run.id, e);
+        if (run.child) {
+          setResult(run, "failed", `无法启动运行：${e.message}`);
+          terminate(run);
+        } else if (active.get(run.accountId) === run) {
+          finish(run, "failed", `无法启动运行：${e.message}`);
+        }
+      }
     }
   }
 
@@ -446,10 +495,12 @@ function createRunner({
         book: "",
         readingStartedAt: null,
         minutes: 0,
+        maxMinutes: 0,
         minuteMarks: [],
         plannedMinutes: 0,
         screenshot: "",
         loginUrl: "",
+        loginQrAt: "",
         error: "",
         exitCode: null,
         exitSignal: null,
@@ -481,7 +532,10 @@ function createRunner({
         throw new PanelError(404, "run_not_active", `账号没有正在运行或排队的任务：${accountId}`);
       }
       if (run.status === "queued") {
-        queue.splice(queue.indexOf(run), 1);
+        const index = queue.indexOf(run);
+        if (index >= 0) {
+          queue.splice(index, 1);
+        }
         panelLog(run, "已取消排队");
         finish(run, "stopped");
         return publicRun(run);
@@ -494,6 +548,24 @@ function createRunner({
         changed(run);
       }
       return publicRun(run);
+    },
+
+    // 正在等待扫码的运行这一次保存的二维码截图（只含二维码的优先，没有时用整页截图）；没有时返回 null。
+    // 二维码解析不出登录链接时由页面显示，之前运行留下的截图不会返回
+    loginQrImage(accountId) {
+      const run = active.get(accountId);
+      if (!run || run.status !== "waiting-login" || !run.startedAt) {
+        return null;
+      }
+      const dir = accountDataDir(panelDataDir, accountId);
+      for (const name of ["login-qr.png", "login.png"]) {
+        try {
+          if (fs.statSync(path.join(dir, name)).mtimeMs >= Date.parse(run.startedAt)) {
+            return { dir, name };
+          }
+        } catch (_) {}
+      }
+      return null;
     },
 
     isActive(accountId) {

@@ -59,7 +59,7 @@ export const LiveTab = {
       <p v-if="run.error" class="error-text">{{ run.error }}</p>
 
       <article v-if="run.status === 'waiting-login'" class="scan-card">
-        <qr-login :url="run.loginUrl" />
+        <qr-login :url="run.loginUrl" :account-id="run.accountId" :qr-at="run.loginQrAt" />
       </article>
 
       <div class="live-grid">

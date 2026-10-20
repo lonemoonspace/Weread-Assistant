@@ -67,10 +67,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      # 与部署相同的 Selenium 镜像；使用主机网络，容器中的浏览器才能访问本机的模拟页面与面板
+      # 与 docker-compose.yml 相同版本的 Selenium 镜像（升级时两处一起改）；使用主机网络，容器中的浏览器才能访问本机的模拟页面与面板
       - name: 启动 Selenium
         run: |
-          docker run -d --name selenium --network host --shm-size 2g selenium/standalone-chromium:latest
+          docker run -d --name selenium --network host --shm-size 2g selenium/standalone-chromium:4.51.0-20261010
           for i in $(seq 1 60); do
             if curl -sf http://localhost:4444/status | grep -q '"ready": *true'; then
               exit 0

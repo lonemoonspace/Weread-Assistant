@@ -3,12 +3,14 @@
 //   ok-*        正常阅读 2 分钟（写入两张截图）后上报 done
 //   login-*     仅登录：上报登录链接，随后登录成功
 //   qr-*        上报登录链接后一直等待扫码，收到 SIGTERM 后退出
+//   qrimg-*     保存二维码截图（login-qr.png）但解析不出登录链接，一直等待扫码
 //   fail-*      上报 error
 //   timeout-*   上报 login-timeout
 //   crash-*     不上报结果直接以退出码 3 退出
 //   slow-*      打开书后一直阅读，收到 SIGTERM 后退出
 //   stubborn-*  忽略 SIGTERM，只能被强制结束
 //   hang-*      建立会话后不再有任何动作，收到 SIGTERM 后退出
+//   skip-*      进度从第 1 分钟跳到第 5 分钟，最后上报一个远超阅读时长的分钟数
 const fs = require("fs");
 const path = require("path");
 const { PNG } = require("pngjs");
@@ -43,7 +45,7 @@ async function exit(code) {
   process.exit(code);
 }
 
-process.once("message", async ({ mode, config, screenshotDir }) => {
+process.once("message", async ({ mode, config, screenshotDir, panelLink }) => {
   const id = config.profileName;
   const kind = id.split("-")[0];
   const sessionId = `stub-session-${id}`;
@@ -58,7 +60,7 @@ process.once("message", async ({ mode, config, screenshotDir }) => {
     });
   }
 
-  log(`mode=${mode} account=${config.accountName} dataDir=${config.dataDir}`);
+  log(`mode=${mode} account=${config.accountName} dataDir=${config.dataDir} panelLink=${panelLink || "-"}`);
   log(`环境变量: ${JSON.stringify(Object.keys(process.env).sort())}`);
   log(`barkKey 已下发: ${Boolean(config.barkKey)}`);
   // 模拟子进程不小心打印了密钥与登录链接，面板写入日志前应替换为掩码
@@ -71,6 +73,13 @@ process.once("message", async ({ mode, config, screenshotDir }) => {
     return;
   }
   send("session", { sessionId });
+
+  if (kind === "qrimg") {
+    fs.writeFileSync(path.join(config.dataDir, "login-qr.png"), stubScreenshot(9));
+    send("login-required", { url: "" });
+    setInterval(() => {}, 1000);
+    return;
+  }
 
   if (kind === "qr") {
     send("login-required", { url: `https://weread.qq.com/web/confirm?uid=${id}` });
@@ -113,6 +122,16 @@ process.once("message", async ({ mode, config, screenshotDir }) => {
       send("reading-minute", { minute, total: 2, screenshot: `screenshot-${minute}.png` });
     }
     send("done", { minutes: 2 });
+    await exit(0);
+    return;
+  }
+
+  if (kind === "skip") {
+    await sleep(100);
+    send("reading-minute", { minute: 1, total: 5, screenshot: "" });
+    await sleep(400);
+    send("reading-minute", { minute: 5, total: 5, screenshot: "" });
+    send("done", { minutes: 10 ** 9 });
     await exit(0);
     return;
   }

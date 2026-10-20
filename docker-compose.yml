@@ -2,9 +2,8 @@ services:
   # Web 面板：docker compose up -d 启动，浏览器访问 http://127.0.0.1:26868/
   # 首次启动的初始密码：docker compose logs app | grep 面板初始密码
   app:
-    # 固定版本时在同目录的 .env 中写 WEREAD_ASSISTANT_TAG=0.1.0；dev 为 main 分支的最新构建
+    # 固定版本时在同目录的 .env 中写 WEREAD_ASSISTANT_TAG=0.1.1；dev 为 main 分支的最新构建
     image: lonemoonspace/weread-assistant:${WEREAD_ASSISTANT_TAG:-latest}
-    build: .
     restart: unless-stopped
     # 停止时面板先结束进行中的阅读（关闭浏览器，最长 15 秒）
     stop_grace_period: 30s
@@ -17,17 +16,19 @@ services:
       # - PANEL_PASSWORD=change-me
       # - PANEL_TRUST_PROXY=true
       # - PANEL_BASE_PATH=/weread/
+      # - PANEL_PUBLIC_URL=https://example.com/weread/ # 扫码推送中附带面板链接
     volumes:
       - ./data:/app/data
     depends_on:
       selenium:
         condition: service_healthy
-    dns:
-      - 223.5.5.5
+    # 容器默认使用宿主机的 DNS。宿主机解析微信读书或通知服务较慢时，可以取消注释指定 DNS（两个服务都加）
+    # dns:
+    #   - 223.5.5.5
 
   selenium:
-    image: selenium/standalone-chromium:latest
-    pull_policy: if_not_present
+    # 固定版本，与 CI 中测试的版本一致；升级时随本文件一起更新
+    image: selenium/standalone-chromium:4.51.0-20261010
     restart: unless-stopped
     shm_size: 2gb
     environment:
@@ -43,8 +44,8 @@ services:
     # 不要经反向代理或公网暴露 7900 端口
     # ports:
     #   - "127.0.0.1:7900:7900"
-    dns:
-      - 223.5.5.5
+    # dns:
+    #   - 223.5.5.5
     healthcheck:
       test: ["CMD", "curl", "-f", "http://selenium:4444/status"]
       interval: 5s

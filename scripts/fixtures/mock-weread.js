@@ -3,6 +3,8 @@
 //
 // 每个场景挂在 /s/<name>/ 下，场景参数：
 //   loggedIn       首页直接显示“我的书架”（否则需要扫码，扫码成功后写入 wr_vid cookie）
+//   noEntry        首页既没有“登录”入口也没有书架（页面没加载出来或已改版）
+//   noQr           点击“登录”后不出现二维码弹窗
 //   qrExpireMs     二维码多久后显示“点击刷新二维码”
 //   scanOnQr       第几张二维码出现后视为扫码成功；不设置则永远不扫码
 //   scanDelayMs    该二维码出现多久后完成扫码
@@ -66,6 +68,9 @@ function reportScript(base) {
 
 function homePage(name, scenario, loggedIn) {
   const base = `/s/${name}`;
+  if (scenario.noEntry) {
+    return page("微信读书", "<div>页面加载中</div>", "");
+  }
   if (loggedIn) {
     // 与真实页面一致：书籍卡片中的链接负责跳转；公众号文章打开另一种阅读页
     const cards = [
@@ -104,13 +109,20 @@ function homePage(name, scenario, loggedIn) {
       }, cfg.qrExpireMs);
     }
     document.getElementById("login").onclick = () => {
+      if (cfg.noQr) {
+        report("login-click");
+        return;
+      }
       document.getElementById("modal").style.display = "block";
       showQr();
     };`;
   return page(
     "微信读书",
-    `<a id="login" href="javascript:void(0)">登录</a>
-     <div id="modal" style="display:none"><img id="qr" class="wr_login_modal_qr_img" alt="二维码"><div id="overlay"></div></div>`,
+    `<a id="login" href="javascript:void(0)">登录</a>${
+      scenario.noQr
+        ? ""
+        : `<div id="modal" style="display:none"><img id="qr" class="wr_login_modal_qr_img" alt="二维码"><div id="overlay"></div></div>`
+    }`,
     script
   );
 }

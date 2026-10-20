@@ -27,8 +27,8 @@ function gridStatus(maxSessions, used, availability) {
 }
 
 async function startMockSelenium({ mode = "grid", maxSessions = 1, used = 0 } = {}) {
-  // authorization 为最近一次状态请求带的 Authorization 请求头
-  const state = { mode, maxSessions, used, availability: "UP", delayMs: 0, authorization: "" };
+  // authorization / sessionAuthorization 为最近一次状态请求 / 其他请求带的 Authorization 请求头
+  const state = { mode, maxSessions, used, availability: "UP", delayMs: 0, authorization: "", sessionAuthorization: "" };
   const requests = [];
   const sockets = new Set();
   const server = http.createServer(async (req, res) => {
@@ -38,6 +38,7 @@ async function startMockSelenium({ mode = "grid", maxSessions = 1, used = 0 } = 
       state.authorization = req.headers.authorization || "";
     }
     if (!isStatus) {
+      state.sessionAuthorization = req.headers.authorization || "";
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end('{"value":null}');
       return;

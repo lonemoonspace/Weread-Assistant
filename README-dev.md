@@ -8,14 +8,15 @@ npm install
 
 # 启动 Selenium（Chromium 在容器中运行，http://localhost:7900/ 可查看画面，VNC 默认密码 secret；
 # 在面板设置中填写该地址后，总览会显示 noVNC 链接）
-docker run -d --name selenium -p 4444:4444 -p 127.0.0.1:7900:7900 --shm-size 2g selenium/standalone-chromium:latest
+docker run -d --name selenium -p 4444:4444 -p 127.0.0.1:7900:7900 --shm-size 2g selenium/standalone-chromium:4.51.0-20261010
 
 # 启动面板（首次启动时在输出中打印初始密码），浏览器打开 http://localhost:26868/
 # SELENIUM_URL 只在首次启动时写入面板的全局配置，之后在面板中修改
 SELENIUM_URL=http://localhost:4444 npm start
 
-# 用 Docker 启动面板与 Selenium
-docker compose up -d
+# 用 Docker 启动面板与 Selenium：docker-compose.yml 只拉取发布的镜像，测试本地改动时先构建同名镜像
+docker build -t lonemoonspace/weread-assistant:local .
+WEREAD_ASSISTANT_TAG=local docker compose up -d
 
 # 查看帮助与面板环境变量
 node src/cli.js help
@@ -33,6 +34,8 @@ npm run test:runtime   # 需要 Docker
 node src/cli.js run --account <id>
 node src/cli.js run --account <id> --login-only   # 只登录并保存 cookies
 ```
+
+测试只在 Linux 与 macOS 上运行：`test:panel` 会检查文件权限（0600 / 0700）、子进程的环境变量白名单，以及子进程收到 SIGTERM 后先关闭浏览器再退出，这些在 Windows 上的行为不同。在 Windows 上开发时请使用 WSL；仓库的 `.gitattributes` 固定以 LF 检出，`npm run check` 校验第三方文件的 SHA-256 不受 `core.autocrlf` 影响。
 
 没有 Docker 时，可以用与本机 Chrome 版本一致的 chromedriver 代替 Selenium：先执行 `chromedriver --port=9515`，再以 `SELENIUM_URL=http://localhost:9515` 运行。
 

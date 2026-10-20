@@ -262,6 +262,21 @@ button.small,
   image-rendering: pixelated;
 }
 
+/* 二维码截图：可能是整页截图，按原比例尽量放大显示，不塞进二维码的方框 */
+.qr-shot {
+  display: block;
+  flex: 0 1 480px;
+  max-width: 100%;
+}
+
+.qr-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  background: #fff;
+}
+
 .qr-help {
   flex: 1 1 240px;
 }

@@ -1,7 +1,7 @@
 // 阅读子进程入口：由面板 fork，经 IPC 接收本次运行的配置并上报运行事件，日志写到标准输出，由面板保存。
 // 收到 SIGTERM / SIGINT 或与面板断开连接时关闭浏览器后退出。
 //
-// 面板 → 子进程：{ type: "start", mode: "read" | "login", config, screenshotDir }
+// 面板 → 子进程：{ type: "start", mode: "read" | "login", config, screenshotDir, panelLink }
 // 子进程 → 面板：{ event, data }，事件见 docs/design.md“子进程事件”
 const { resolveConfig } = require("../config/resolve");
 const { initConsole } = require("../shared/log");
@@ -74,6 +74,7 @@ async function main() {
     report: (event, data = {}) => send({ event, data }),
     terminalQr: false,
     screenshotDir: message.screenshotDir,
+    panelLink: typeof message.panelLink === "string" ? message.panelLink : "",
     // 仅供测试：指向模拟页面并缩短等待时间
     homeUrl: message.homeUrl,
     timing: message.timing,

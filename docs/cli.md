@@ -7,7 +7,7 @@
 | 命令 | 职责 | 输入 | 输出 | 关键约束 |
 | --- | --- | --- | --- | --- |
 | `panel` / 无参数 | 启动 Web 面板 | `PANEL_*` 与 `SELENIUM_URL` 环境变量 | HTTP 服务、`<面板数据目录>/panel.log` | 镜像默认命令；不接受额外参数；端口被占用时报错退出 |
-| `run --account <id>` | 按面板中的账号配置执行一次自动阅读 | `PANEL_DATA_DIR` 下的 `panel.json` | 控制台日志、`accounts/<id>/` 下的 `output.log`、cookies、登录二维码、截图、通知 | 账号覆盖 > 全局默认 > 内置默认；不读取运行相关的环境变量；只读 `panel.json` |
+| `run --account <id>` | 按面板中的账号配置执行一次自动阅读 | `PANEL_DATA_DIR` 下的 `panel.json` | 控制台日志、`accounts/<id>/` 下的 `output.log`、cookies、登录二维码、截图、通知 | 账号覆盖 > 全局默认 > 内置默认；不读取运行相关的环境变量；只读 `panel.json`；不检查面板是否正在运行同一账号，两边会同时写 cookies 与截图，调试前先在面板中停止该账号的运行 |
 | `--login-only` | 与 `run --account` 搭配，只登录（需要时扫码）并保存 cookies | 同上 | 同上，不选书、不阅读 | 用于刷新登录态 |
 | `help` / `-h` / `--help` | 输出帮助与面板环境变量清单 | 无 | 帮助文本 | 不启动浏览器 |
 

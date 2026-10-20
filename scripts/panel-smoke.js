@@ -14,7 +14,7 @@ const os = require("os");
 const path = require("path");
 
 const { startPanel } = require(path.resolve(__dirname, "..", "src", "panel", "server"));
-const { hashPassword } = require(path.resolve(__dirname, "..", "src", "panel", "auth"));
+const { SESSION_TTL_MS, createAuth, hashPassword } = require(path.resolve(__dirname, "..", "src", "panel", "auth"));
 const { SECRET_MASK, resolveAccountConfig } = require(path.resolve(__dirname, "..", "src", "panel", "config"));
 const { CHILD_ENV_KEYS } = require(path.resolve(__dirname, "..", "src", "panel", "runner"));
 const { describeSchedule, nextRuns, normalizeSchedules, schedulePatterns } = require(
@@ -353,6 +353,24 @@ async function main() {
       assert.match(ok.headers.get("set-cookie"), /Path=\/weread\//);
     });
 
+    await scenario("登录时回收已过期的会话", async () => {
+      let t = Date.now();
+      const auth = createAuth({ store: { get: () => ({ auth: { passwordHash: "" } }) }, envPassword: "correct-horse", now: () => t });
+      await auth.init();
+      const first = await auth.login("127.0.0.1", "correct-horse");
+      let ended = false;
+      auth.watchSession(first.token, () => {
+        ended = true;
+      });
+      t += SESSION_TTL_MS + 1;
+      assert.ok((await auth.login("127.0.0.1", "correct-horse")).ok);
+      assert.ok(ended, "过期的会话应在下次登录时回收");
+    });
+
+    await scenario("环境变量中的密码少于 8 位时拒绝启动", async () => {
+      await assert.rejects(start({ password: "short" }), /PANEL_PASSWORD 至少 8 位/);
+    });
+
     await scenario("修改密码后旧会话失效、旧密码不能登录；密码来自环境变量时拒绝修改", async () => {
       const panel = await start();
       const original = panel.generatedPassword;
@@ -501,13 +519,17 @@ async function main() {
         { id: "me", name: "我", enabled: true }
       );
       assert.strictEqual(created.json.account.hasCookies, false);
-      assert.ok(fs.existsSync(path.join(accountsDir, "me")));
+      // 账号目录保存 cookies 与登录二维码，只允许属主访问
+      assert.strictEqual(fs.statSync(path.join(accountsDir, "me")).mode & 0o777, 0o700);
 
       assert.strictEqual((await panel.call("POST", "api/accounts", { id: "me" })).status, 409);
       for (const id of ["Bad_ID", "-x", "x-", "a".repeat(33), "../etc"]) {
         assert.strictEqual((await panel.call("POST", "api/accounts", { id })).status, 400, id);
       }
       assert.strictEqual((await panel.call("POST", "api/accounts", { id: "long", name: "名".repeat(33) })).status, 400);
+      assert.strictEqual((await panel.call("POST", "api/accounts", "null")).status, 400);
+      const typo = await panel.call("POST", "api/accounts", { id: "typo", nmae: "拼错" });
+      assert.deepStrictEqual([typo.status, typo.json.message], [400, "不支持的字段：nmae"]);
       const defaultName = await panel.call("POST", "api/accounts", { id: "second" });
       assert.strictEqual(defaultName.json.account.name, "second");
 
@@ -636,6 +658,51 @@ async function main() {
       assert.deepStrictEqual(Object.keys(upgraded), ["version", "auth", "settings", "defaults", "accounts"]);
       assert.deepStrictEqual(upgraded.defaults, { seleniumUrl: "http://selenium:4444" });
       assert.deepStrictEqual(upgraded.accounts, []);
+    });
+
+    await scenario("panel.json 修改前保存上一版；损坏时备份损坏文件并从上一版恢复，上一版也不可用时拒绝启动", async () => {
+      const first = await startAuthed();
+      await first.call("POST", "api/accounts", { id: "keep-1" });
+      await first.call("POST", "api/accounts", { id: "keep-2" });
+      await first.close();
+      const { dataDir } = first.options;
+      const file = path.join(dataDir, "panel.json");
+      const backup = JSON.parse(fs.readFileSync(`${file}.bak`, "utf8"));
+      assert.deepStrictEqual(backup.accounts.map((account) => account.id), ["keep-1"]);
+      assert.strictEqual(fs.statSync(`${file}.bak`).mode & 0o777, 0o600);
+
+      // 模拟断电后的空文件；损坏文件的副本只保留最近 3 份
+      for (const stamp of [1000000000001, 1000000000002, 1000000000003]) {
+        fs.writeFileSync(`${file}.corrupt-${stamp}`, "old");
+      }
+      fs.writeFileSync(file, "");
+      const restored = await startAuthed({ dataDir });
+      assert.deepStrictEqual((await restored.call("GET", "api/accounts")).json.accounts.map((account) => account.id), ["keep-1"]);
+      const copies = fs.readdirSync(dataDir).filter((name) => name.startsWith("panel.json.corrupt-")).sort();
+      assert.strictEqual(copies.length, 3);
+      assert.ok(!copies.includes("panel.json.corrupt-1000000000001"), "最早的副本应被删除");
+      assert.strictEqual(fs.readFileSync(path.join(dataDir, copies[2]), "utf8"), "", "最新的副本是这次损坏的文件");
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, "utf8")).accounts.map((account) => account.id), ["keep-1"]);
+      await restored.call("POST", "api/accounts", { id: "keep-3" });
+      await restored.close();
+
+      // panel.json 不见了（例如恢复过程中崩溃）时从上一版恢复，第一次修改不会用空数据覆盖上一版
+      fs.rmSync(file);
+      const missing = await startAuthed({ dataDir });
+      assert.deepStrictEqual((await missing.call("GET", "api/accounts")).json.accounts.map((account) => account.id), ["keep-1"]);
+      await missing.call("POST", "api/accounts", { id: "keep-4" });
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(`${file}.bak`, "utf8")).accounts.map((account) => account.id), ["keep-1"]);
+      await missing.close();
+
+      fs.writeFileSync(file, "{broken");
+      fs.writeFileSync(`${file}.bak`, "{broken too");
+      await assert.rejects(start({ dataDir, password: "correct-horse" }), /也没有可用的上一版/);
+    });
+
+    await scenario("panel.json 中手工写入的无效账号 ID 在启动时拒绝", async () => {
+      const dataDir = tempDir();
+      fs.writeFileSync(path.join(dataDir, "panel.json"), JSON.stringify({ version: 1, auth: { passwordHash: "" }, accounts: [{ id: "../x" }] }), { mode: 0o600 });
+      await assert.rejects(start({ dataDir, password: "correct-horse" }), /panel\.json 中有无效的账号 ID：\.\.\/x/);
     });
 
     await scenario("同一数据目录只能运行一个面板；关闭后释放", async () => {
@@ -856,6 +923,22 @@ async function main() {
         assert.match(log, /已请求 Selenium 删除会话 stub-session-stubborn-1/);
         // 正常退出的子进程自己关闭了浏览器，不需要删除会话
         assert.deepStrictEqual(selenium.requests, ["DELETE /session/stub-session-stubborn-1"]);
+        assert.strictEqual(selenium.state.sessionAuthorization, "");
+
+        // Selenium 地址带用户名与密码时，删除会话改用 Authorization 请求头
+        await panel.call("PATCH", "api/settings", {
+          defaults: { seleniumUrl: selenium.url.replace("://", "://robot:p%40ss@") },
+        });
+        const authReading = nextRun(panel, (run) => run.accountId === "stubborn-2" && run.status === "reading");
+        await panel.call("POST", "api/accounts", { id: "stubborn-2" });
+        await panel.call("POST", "api/accounts/stubborn-2/runs");
+        await authReading;
+        const authEnded = nextRun(panel, ended("stubborn-2"));
+        await panel.call("POST", "api/accounts/stubborn-2/stop");
+        const authRun = await authEnded;
+        assert.match(await runFiles(panel, "stubborn-2", authRun.id).log(), /已请求 Selenium 删除会话 stub-session-stubborn-2（HTTP 200）/);
+        assert.strictEqual(selenium.requests.at(-1), "DELETE /session/stub-session-stubborn-2");
+        assert.strictEqual(selenium.state.sessionAuthorization, `Basic ${Buffer.from("robot:p@ss").toString("base64")}`);
 
         const idle = await panel.call("POST", "api/accounts/slow-1/stop");
         assert.strictEqual(idle.status, 404);
@@ -882,6 +965,48 @@ async function main() {
       assert.ok(!fs.readFileSync(path.join(files.dir, "meta.json"), "utf8").includes("confirm?uid"));
     });
 
+    await scenario("二维码解析不出登录链接时提供这次运行的二维码截图；没有等待扫码时返回 404；面板地址下发给子进程", async () => {
+      const panel = await startAuthed({ publicUrl: "https://example.com/weread/" });
+      await panel.call("POST", "api/accounts", { id: "qrimg-1" });
+      // 之前运行留下的截图不返回
+      const stale = path.join(panel.options.dataDir, "accounts", "qrimg-1", "login.png");
+      fs.writeFileSync(stale, "old");
+      fs.utimesSync(stale, new Date(Date.now() - 3600000), new Date(Date.now() - 3600000));
+      assert.strictEqual((await panel.call("GET", "api/accounts/qrimg-1/login-qr")).status, 404);
+      const waiting = nextRun(panel, (run) => run.accountId === "qrimg-1" && run.status === "waiting-login");
+      await panel.call("POST", "api/accounts/qrimg-1/runs", { mode: "login" });
+      const run = await waiting;
+      assert.strictEqual(run.loginUrl, "");
+      assert.ok(run.loginQrAt);
+      const image = await panel.call("GET", "api/accounts/qrimg-1/login-qr");
+      assert.strictEqual(image.status, 200);
+      assert.strictEqual(image.headers.get("content-type"), "image/png");
+      assert.strictEqual(image.headers.get("cache-control"), "no-store");
+      assert.strictEqual((await panel.request("api/accounts/qrimg-1/login-qr")).status, 401);
+      assert.strictEqual((await panel.call("GET", "api/accounts/nobody/login-qr")).status, 404);
+      const finished = nextRun(panel, ended("qrimg-1"));
+      await panel.call("POST", "api/accounts/qrimg-1/stop");
+      await finished;
+      assert.match(await runFiles(panel, "qrimg-1", run.id).log(), /panelLink=https:\/\/example\.com\/weread\/#\/accounts\/qrimg-1\/live/);
+      assert.strictEqual((await panel.call("GET", "api/accounts/qrimg-1/login-qr")).status, 404);
+      assert.ok(!("loginQrAt" in runFiles(panel, "qrimg-1", run.id).meta()));
+    });
+
+    await scenario("进度跳过的分钟按时间均匀补记；分钟数不超过本次阅读时长（含 1 分钟余量）", async () => {
+      const panel = await startAuthed();
+      await panel.call("POST", "api/accounts", { id: "skip-1" });
+      await panel.call("PATCH", "api/accounts/skip-1", { overrides: { duration: 5 } });
+      const finished = nextRun(panel, ended("skip-1"));
+      await panel.call("POST", "api/accounts/skip-1/runs");
+      const run = await finished;
+      assert.strictEqual(run.minutes, 6);
+      const marks = runFiles(panel, "skip-1", run.id).meta().minuteMarks.map((mark) => Date.parse(mark));
+      assert.strictEqual(marks.length, 6);
+      // 第 2–4 分钟在第 1 分钟与第 5 分钟之间，各不相同
+      assert.ok(marks[0] < marks[1] && marks[1] < marks[2] && marks[2] < marks[3] && marks[3] < marks[4], "补记的分钟应递增");
+      assert.ok(marks.every((mark, i) => i === 0 || mark >= marks[i - 1]));
+    });
+
     await scenario("超过运行时长上限时结束子进程并记为失败", async () => {
       const panel = await startAuthed({ runner: { workerPath: STUB_WORKER, killTimeoutMs: 500, runTimeoutMs: 300 } });
       await panel.call("POST", "api/accounts", { id: "hang-1" });
@@ -889,6 +1014,34 @@ async function main() {
       await panel.call("POST", "api/accounts/hang-1/runs");
       const run = await finished;
       assert.deepStrictEqual([run.status, run.error], ["failed", "运行超时，已强制结束"]);
+    });
+
+    await scenario("停止后、子进程退出前到达运行时长上限时仍记为已停止", async () => {
+      const panel = await startAuthed({ runner: { workerPath: STUB_WORKER, killTimeoutMs: 1500, runTimeoutMs: 1000 } });
+      await panel.call("POST", "api/accounts", { id: "stubborn-1" });
+      const reading = nextRun(panel, (run) => run.accountId === "stubborn-1" && run.status === "reading");
+      await panel.call("POST", "api/accounts/stubborn-1/runs");
+      await reading;
+      const finished = nextRun(panel, ended("stubborn-1"));
+      await panel.call("POST", "api/accounts/stubborn-1/stop");
+      const run = await finished;
+      assert.deepStrictEqual([run.status, run.error], ["stopped", ""]);
+      assert.strictEqual(runFiles(panel, "stubborn-1", run.id).meta().exitSignal, "SIGKILL");
+    });
+
+    await scenario("启动运行出错时记为失败并释放账号，不会一直排队", async () => {
+      const panel = await startAuthed();
+      await panel.call("POST", "api/accounts", { id: "broken-1" });
+      // 账号数据目录被同名文件占用，启动时无法创建
+      const dir = path.join(panel.options.dataDir, "accounts", "broken-1");
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.writeFileSync(dir, "not a directory");
+      const res = await panel.call("POST", "api/accounts/broken-1/runs");
+      assert.strictEqual(res.status, 202);
+      assert.strictEqual(res.json.run.status, "failed");
+      assert.match(res.json.run.error, /无法创建账号数据目录/);
+      assert.deepStrictEqual((await panel.call("GET", "api/runs")).json.runs, []);
+      assert.strictEqual((await panel.call("POST", "api/accounts/broken-1/runs")).json.run.status, "failed");
     });
 
     await scenario("面板停止时进行中与排队中的运行记为中断；启动时把遗留的进行中记录标为中断", async () => {

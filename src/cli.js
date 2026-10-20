@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
-const { DEFAULT_PANEL_PORT, panelOptionsFromEnv } = require("./panel/options");
+const { DEFAULT_PANEL_PORT, panelDataDirFromEnv, panelOptionsFromEnv, publicUrlWarning } = require("./panel/options");
 const { ensureDir, getDataPaths } = require("./reader/paths");
+const { ensurePrivateDir } = require("./shared/files");
 const { closeLogFile, initLogFile } = require("./shared/log");
 const { VERSION } = require("./shared/version");
 
@@ -39,6 +40,10 @@ async function startPanelCommand(args) {
   const options = panelOptionsFromEnv(process.env);
   ensureDir(path.resolve(options.dataDir));
   initLogFile(path.join(path.resolve(options.dataDir), "panel.log"));
+  const warning = publicUrlWarning(options);
+  if (warning) {
+    console.warn(warning);
+  }
 
   const { startPanel } = require("./panel/server");
   const panel = await startPanel(options);
@@ -76,8 +81,8 @@ function parseRunArgs(args) {
 
 // 按面板中保存的账号配置生成运行配置；面板数据不存在、账号不存在或已停用时报错
 function configFromPanelAccount(accountId) {
-  const options = panelOptionsFromEnv(process.env);
-  const dataDir = path.resolve(options.dataDir);
+  // 只读取数据目录：PANEL_PORT、PANEL_PUBLIC_URL 等面板参数与命令行运行无关，取值非法也不影响
+  const dataDir = path.resolve(panelDataDirFromEnv(process.env));
   if (!fs.existsSync(path.join(dataDir, "panel.json"))) {
     throw new Error(`面板数据不存在：${path.join(dataDir, "panel.json")}，请先启动面板并创建账号（或设置 PANEL_DATA_DIR）`);
   }
@@ -116,7 +121,7 @@ async function main(argv) {
     }
     const config = configFromPanelAccount(accountId);
     const paths = getDataPaths(config);
-    ensureDir(paths.dataDir);
+    ensurePrivateDir(paths.dataDir);
     initLogFile(paths.outputLog, { debug: config.debug });
 
     const { runOnce } = require("./reader/run");
