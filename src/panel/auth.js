@@ -94,6 +94,12 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
   function createSession() {
     const token = crypto.randomBytes(32).toString("base64url");
     const t = now();
+    // 顺便回收已过期的会话：过期的会话只有再次被使用时才会被发现
+    for (const [key, session] of sessions) {
+      if (session.expiresAt <= t) {
+        endSession(key);
+      }
+    }
     sessions.set(hashToken(token), { expiresAt: t + SESSION_TTL_MS, cookieSetAt: t });
     return token;
   }
@@ -142,6 +148,10 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     // 准备好面板密码。没有任何密码时生成一个并返回明文（只此一次），否则返回空字符串
     async init() {
       if (envPassword) {
+        // 与在面板中修改密码的要求一致
+        if (envPassword.length < MIN_PASSWORD_LENGTH) {
+          throw new Error(`PANEL_PASSWORD 至少 ${MIN_PASSWORD_LENGTH} 位`);
+        }
         envPasswordHash = await hashPassword(envPassword);
         return "";
       }

@@ -83,7 +83,7 @@ export const OverviewPage = {
     <section v-for="run in waiting" :key="'qr-' + run.id" class="scan-card">
       <article>
         <header><strong>{{ nameOf(run.accountId) }}</strong> 需要扫码登录</header>
-        <qr-login :url="run.loginUrl" />
+        <qr-login :url="run.loginUrl" :account-id="run.accountId" :qr-at="run.loginQrAt" />
       </article>
     </section>
 

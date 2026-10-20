@@ -4,6 +4,9 @@ const { coerceFieldValue, resolveConfig } = require("../config/resolve");
 const { badRequest } = require("./errors");
 const { SETTINGS_FIELDS } = require("./settings");
 
+// 账号 ID 同时用作数据目录名与浏览器配置名：小写字母、数字与短横线，1–32 位，不以短横线开头或结尾
+const ACCOUNT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
+
 // 由面板按账号强制设置的配置项，不出现在表单中，也不能通过接口修改
 const PANEL_MANAGED_KEYS = new Set(["dataDir", "profileName", "accountName"]);
 // 密钥只写不读：接口返回掩码；提交掩码或空字符串表示不修改，提交 null 表示清除
@@ -78,7 +81,11 @@ function applyConfigPatch(current, patch) {
   return next;
 }
 
+// 账号 ID 在拼接路径前再校验一次，手工写入 panel.json 的 ID 不会指向数据目录之外
 function accountDataDir(panelDataDir, accountId) {
+  if (!ACCOUNT_ID_PATTERN.test(accountId)) {
+    throw new Error(`无效的账号 ID：${accountId}`);
+  }
   return path.join(path.resolve(panelDataDir), "accounts", accountId);
 }
 
@@ -100,6 +107,7 @@ function publicEffectiveConfig(config) {
 
 module.exports = {
   SECRET_MASK,
+  ACCOUNT_ID_PATTERN,
   accountDataDir,
   applyConfigPatch,
   maskValues,

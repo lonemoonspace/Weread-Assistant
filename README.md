@@ -67,6 +67,8 @@ docker compose logs app | grep 面板初始密码
 ### 升级
 
 ```bash
+# 重新下载 docker-compose.yml：其中固定了经过测试的 Selenium 版本，新版本可能随之更新（改过该文件时先备份，再把改动合并回去）
+curl -fsSLO https://raw.githubusercontent.com/lonemoonspace/Weread-Assistant/main/docker-compose.yml
 docker compose pull
 docker compose up -d
 ```
@@ -81,7 +83,7 @@ docker compose up -d
 
 | 问题 | 处理 |
 | --- | --- |
-| 忘记面板密码 | 在 `docker-compose.yml` 的 `app` 中设置环境变量 `PANEL_PASSWORD=新密码` 后执行 `docker compose up -d`。设置该变量时面板以它为准（界面中不能再修改密码），需要一直保留；去掉后恢复为原来保存的密码 |
+| 忘记面板密码 | 在 `docker-compose.yml` 的 `app` 中设置环境变量 `PANEL_PASSWORD=新密码`（至少 8 位） 后执行 `docker compose up -d`。设置该变量时面板以它为准（界面中不能再修改密码），需要一直保留；去掉后恢复为原来保存的密码 |
 | 总览显示“无法连接 Selenium” | 执行 `docker compose ps` 确认 `selenium` 在运行，停止时执行 `docker compose up -d selenium`；仍有问题时查看 `docker compose logs selenium` |
 | 总览提示“同时运行的账号数”超过会话数 | 把设置中的“同时运行的账号数”调低，或调大 `docker-compose.yml` 中 Selenium 的 `SE_NODE_MAX_SESSIONS`（两者保持一致） |
 | 端口 26868 被占用 | 修改 `docker-compose.yml` 中端口映射左侧的端口，例如 `"127.0.0.1:30000:26868"` |
@@ -102,7 +104,9 @@ sudo rm -rf data
 | [docs/panel.md](docs/panel.md) | 面板：环境变量、页面、接口、调度、数据保留、反向代理与安全 |
 | [docs/reader.md](docs/reader.md) | 自动阅读流程 |
 | [docs/notifications.md](docs/notifications.md) | 通知渠道 |
+| [docs/cli.md](docs/cli.md) | 命令行：启动面板、按账号运行一次（调试用） |
 | [docs/design.md](docs/design.md) | 整体设计 |
+| [docs/docker-image-publish.md](docs/docker-image-publish.md) | 镜像构建与发布 |
 | [README-dev.md](README-dev.md) | 本地开发与测试 |
 
 ## 致谢

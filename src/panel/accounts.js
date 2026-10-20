@@ -2,12 +2,10 @@ const fs = require("fs");
 const path = require("path");
 const { PanelError, badRequest } = require("./errors");
 const { normalizeChallenge } = require("./challenge");
-const { accountDataDir, applyConfigPatch, maskValues } = require("./config");
+const { ACCOUNT_ID_PATTERN, accountDataDir, applyConfigPatch, maskValues } = require("./config");
 const { nextRunAt, publicSchedule } = require("./schedules");
 const { ensurePrivateDir } = require("../shared/files");
 
-// 账号 ID 同时用作数据目录名与浏览器配置名：小写字母、数字与短横线，1–32 位，不以短横线开头或结尾
-const ACCOUNT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 const MAX_NAME_LENGTH = 32;
 
 function normalizeName(rawName, fallback) {
@@ -45,6 +43,10 @@ function publicAccount(account, panelDataDir, timezone) {
 }
 
 async function createAccount(store, panelDataDir, body = {}) {
+  const unknown = Object.keys(body).filter((key) => !["id", "name"].includes(key));
+  if (unknown.length > 0) {
+    throw badRequest(`不支持的字段：${unknown.join(", ")}`);
+  }
   const id = String(body.id || "").trim();
   if (!ACCOUNT_ID_PATTERN.test(id)) {
     throw badRequest("账号 ID 只能包含小写字母、数字与短横线，长度 1–32，不能以短横线开头或结尾");

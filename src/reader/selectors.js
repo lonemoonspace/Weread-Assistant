@@ -8,7 +8,8 @@ const XPATH = {
   loginLink: "//a[contains(text(), '登录')]",
   shelfLink: "//div[contains(text(), '我的书架') and @class='wr_index_page_top_section_header_action_link']",
   qrImage: "//img[contains(@class, 'qr') or contains(@src, 'qr') or contains(@alt, '二维码')]",
-  qrHint: "//*[contains(text(), '扫码') or contains(text(), '二维码')]",
+  // 排除脚本与样式：页面脚本中常含有这些字，不代表二维码弹窗已出现
+  qrHint: "//*[not(self::script) and not(self::style) and (contains(text(), '扫码') or contains(text(), '二维码'))]",
   qrExpiredOverlay: "//div[contains(text(), '点击刷新二维码') and @class='wr_login_modal_qr_overlay_text']",
   qrExpiredText: "//*[contains(text(), '二维码已失效')]",
   // 书架加载完成前首页先显示 4 个不含链接的占位卡片，点击无效；公众号文章打开的是另一种阅读页，没有目录按钮

@@ -79,8 +79,10 @@ function buildReportEmailHtml(heading, text, attachments = []) {
 }
 
 // 登录链接邮件：二维码图片作为附件内嵌（qrCid 为附件文件名），不经过第三方服务生成
-function buildLoginLinkEmailHtml(heading, loginUrl, qrCid = "") {
-  const safeUrl = escapeHtml(loginUrl);
+// loginUrl 为空（二维码解析不出登录链接）时只放二维码截图；panelLink 为面板中该账号的实时页面
+function buildLoginLinkEmailHtml(heading, loginUrl, qrCid = "", panelLink = "") {
+  const button = (url, text) =>
+    `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" style="display: inline-block; background: #2d8cf0; color: #fff; text-decoration: none; padding: 8px 14px; border-radius: 6px; margin: 4px;">${text}</a>`;
   const qrImage = qrCid
     ? `<img src="cid:${escapeHtml(qrCid)}" alt="微信读书登录二维码" style="width: 240px; height: 240px; display: block; margin: 8px auto 12px auto;" />`
     : "";
@@ -91,7 +93,8 @@ function buildLoginLinkEmailHtml(heading, loginUrl, qrCid = "") {
             <p>需要扫码登录微信读书。二维码约 1 分钟后失效，失效后会自动刷新。</p>
             <div style="background: #f9f9f9; border-left: 4px solid #2d8cf0; padding: 16px; text-align: center;">
                 ${qrImage}
-                <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" style="display: inline-block; background: #2d8cf0; color: #fff; text-decoration: none; padding: 8px 14px; border-radius: 6px;">在微信中打开登录链接</a>
+                ${loginUrl ? button(loginUrl, "在微信中打开登录链接") : ""}
+                ${panelLink ? button(panelLink, "在面板中扫码") : ""}
             </div>
     `
   );

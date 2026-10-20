@@ -14,6 +14,7 @@ const NOTIFY_EVENTS = {
   failure: { toggle: "notifyOnFailure", subtitle: "运行失败", level: "critical", sound: "alarm" },
 };
 
+const PANEL_ONLY_TEXT = "需要扫码登录，但未能从二维码中解析出登录链接，请在面板中扫码。";
 const LOGIN_LINK_TEXT = "请在微信中打开登录链接，或扫描二维码登录。二维码约 1 分钟后失效，失效后会自动刷新。";
 
 function getEnabledNotificationChannels(config) {
@@ -53,8 +54,9 @@ function notificationTitle(config) {
   return config.accountName ? `${BRAND} · ${config.accountName}` : BRAND;
 }
 
-// 绑定一次运行的配置。loginLinkIntervalMs：两次推送登录链接的最小间隔
-function createNotifier(config, { loginLinkIntervalMs = 0 } = {}) {
+// 绑定一次运行的配置。loginLinkIntervalMs：两次推送登录链接的最小间隔；
+// panelLink：面板中该账号实时页面的地址（配置了 PANEL_PUBLIC_URL 时），附在扫码推送中
+function createNotifier(config, { loginLinkIntervalMs = 0, panelLink = "" } = {}) {
   let lastLoginLink = "";
   let lastLoginLinkAt = 0;
   const isEnabled = (name) => Boolean(config[NOTIFY_EVENTS[name].toggle]);
@@ -85,11 +87,13 @@ function createNotifier(config, { loginLinkIntervalMs = 0 } = {}) {
     await Promise.allSettled(tasks);
   }
 
+  // 推送登录链接。解析不出登录链接（loginUrl 为空）时，有面板地址则推送面板链接，在面板中扫码
   async function loginLink(loginUrl, qrImagePath = "") {
-    if (!loginUrl) {
+    const key = loginUrl || panelLink;
+    if (!key) {
       return;
     }
-    if (loginUrl === lastLoginLink) {
+    if (key === lastLoginLink) {
       console.info("登录链接未变化，跳过重复推送");
       return;
     }
@@ -98,17 +102,27 @@ function createNotifier(config, { loginLinkIntervalMs = 0 } = {}) {
       console.info(`距上次推送登录链接不足 ${Math.round(loginLinkIntervalMs / 60000)} 分钟，本次不推送`);
       return;
     }
-    lastLoginLink = loginUrl;
+    lastLoginLink = key;
     lastLoginLinkAt = now;
 
-    await event("loginRequired", `${LOGIN_LINK_TEXT}\n\n登录链接：${loginUrl}`, {
-      url: loginUrl,
-      actions: [{ action: "view", label: "打开登录链接", url: loginUrl, clear: false }],
+    const lines = [loginUrl ? `${LOGIN_LINK_TEXT}\n\n登录链接：${loginUrl}` : PANEL_ONLY_TEXT];
+    const actions = [];
+    if (loginUrl) {
+      actions.push({ action: "view", label: "打开登录链接", url: loginUrl, clear: false });
+    }
+    if (panelLink) {
+      lines.push(`在面板中扫码：${panelLink}`);
+      actions.push({ action: "view", label: "在面板中扫码", url: panelLink, clear: false });
+    }
+    await event("loginRequired", lines.join("\n\n"), {
+      url: key,
+      actions,
       attachments: qrImagePath ? [qrImagePath] : [],
       html: buildLoginLinkEmailHtml(
         notificationTitle(config),
         loginUrl,
-        qrImagePath ? path.basename(qrImagePath) : ""
+        qrImagePath ? path.basename(qrImagePath) : "",
+        panelLink
       ),
     });
   }

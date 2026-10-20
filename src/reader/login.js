@@ -80,10 +80,12 @@ async function findQRCodeElement(driver) {
 // 从页面二维码图片中解码登录链接并推送，命令行运行时在终端显示；返回登录链接，解析失败时返回 null。
 // 登录链接在有效期内可用于完成这次登录，不写入日志：由面板运行时经 login-required 事件交给面板显示
 async function extractAndDisplayQRCode(driver, ctx) {
+  let qrSaved = false;
   try {
     const qrImg = await driver.findElement(By.xpath(XPATH.qrImage));
     const base64Png = await qrImg.takeScreenshot();
     writeFileAtomic(ctx.paths.loginQrImage, Buffer.from(base64Png, "base64"), { mode: 0o600 });
+    qrSaved = true;
 
     const { PNG } = require("pngjs");
     const png = PNG.sync.read(Buffer.from(base64Png, "base64"));
@@ -103,11 +105,12 @@ async function extractAndDisplayQRCode(driver, ctx) {
       return code.data;
     }
     console.warn("无法从二维码图片中解析登录链接");
-    return null;
   } catch (e) {
     console.warn("提取二维码登录链接失败:", e.message);
-    return null;
   }
+  // 配置了面板地址时改为推送面板链接，在面板中扫二维码截图
+  await ctx.notifier.loginLink("", qrSaved ? ctx.paths.loginQrImage : "");
+  return null;
 }
 
 // 截取整页保存为登录二维码图片，并解析、推送登录链接
@@ -144,6 +147,17 @@ async function openLoginDialog(driver, ctx) {
   }
   await captureQRCode(driver, ctx);
   return true;
+}
+
+// 打开登录弹窗；没有二维码可扫时立即失败，不再静默等到扫码超时。刷新页面后已登录（出现书架）时不算失败
+async function openLoginDialogOrFail(driver, ctx) {
+  if (await openLoginDialog(driver, ctx)) {
+    return;
+  }
+  if ((await xpathsExist(driver, [XPATH.shelfLink]))[0]) {
+    return;
+  }
+  throw new Error("未能打开扫码登录弹窗（找不到登录入口或二维码）：页面结构可能已改版");
 }
 
 // 安全点击元素函数，处理元素被拦截的情况
@@ -255,11 +269,20 @@ async function login(driver, ctx) {
 
   ensurePrivateDir(paths.dataDir);
 
-  // 等首页渲染出“登录”入口或“我的书架”
+  // 等首页渲染出“登录”入口或“我的书架”；都没有时刷新重试一次，仍没有就失败，不进入等待扫码
   console.info("Find login links...");
-  const entry = await waitForAnyXpath(driver, [XPATH.loginLink, XPATH.shelfLink], timing.pageWaitMs);
+  const entryXpaths = [XPATH.loginLink, XPATH.shelfLink];
+  let entry = await waitForAnyXpath(driver, entryXpaths, timing.pageWaitMs);
+  if (entry === -1) {
+    console.warn("首页未出现登录入口或书架，刷新页面后重试");
+    await driver.navigate().refresh();
+    entry = await waitForAnyXpath(driver, entryXpaths, timing.pageWaitMs);
+  }
+  if (entry === -1) {
+    throw new Error("首页未出现“登录”入口或“我的书架”：请检查网络，或页面结构是否已改版");
+  }
   if (entry === 0) {
-    await openLoginDialog(driver, ctx);
+    await openLoginDialogOrFail(driver, ctx);
   }
 
   const deadline = Date.now() + timing.loginTimeoutMs;
@@ -289,7 +312,7 @@ async function login(driver, ctx) {
         console.error("二维码刷新失败，重新加载页面后再次打开登录弹窗");
         await driver.navigate().refresh();
         await sleep(3000);
-        await openLoginDialog(driver, ctx);
+        await openLoginDialogOrFail(driver, ctx);
       }
       console.info("Waiting for login...");
       continue;

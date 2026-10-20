@@ -8,7 +8,7 @@
  * 检查经 IPC 上报的事件，以及收到 SIGTERM 后关闭浏览器。不访问微信读书。
  *
  * 用法: SELENIUM_URL=http://localhost:4444 node scripts/reader-smoke.js
- *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / timeout / corrupt / reading / single / worker / worker-stop）。
+ *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / timeout / no-entry / no-qr / corrupt / reading / single / worker / worker-stop）。
  *   SELENIUM_URL 默认 http://localhost:4444，也可以直接指向 chromedriver（如 http://localhost:9515）。
  *   浏览器需要能访问本机的模拟服务；Selenium 跑在容器里时用 --network host 启动，
  *   或通过 MOCK_HOST 指定浏览器访问本机时使用的地址。
@@ -180,6 +180,29 @@ async function main() {
         assert.ok(countEvents(events, "refresh") >= 3, `刷新次数 ${countEvents(events, "refresh")} 应不少于 3`);
         assert.ok(pushes.some((push) => push.title.endsWith("运行失败") && push.message.includes("等待扫码超时")));
         return `刷新二维码 ${countEvents(events, "refresh")} 次`;
+      },
+    });
+
+    await scenario("首页没有登录入口与书架：刷新重试一次后失败，不等到扫码超时", {
+      name: "no-entry",
+      site: { noEntry: true },
+      mode: "login",
+      timing: { loginTimeoutMs: 120000, pageWaitMs: 1500 },
+      check({ result }) {
+        assert.strictEqual(result.status, "error");
+        assert.match(result.error, /首页未出现“登录”入口或“我的书架”/);
+      },
+    });
+
+    await scenario("点击登录后没有二维码：立即失败，不等到扫码超时", {
+      name: "no-qr",
+      site: { noQr: true },
+      mode: "login",
+      timing: { loginTimeoutMs: 120000 },
+      check({ result, events }) {
+        assert.strictEqual(result.status, "error");
+        assert.match(result.error, /未能打开扫码登录弹窗/);
+        assert.strictEqual(countEvents(events, "login-click"), 1);
       },
     });
 

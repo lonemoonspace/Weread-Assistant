@@ -14,7 +14,7 @@ const os = require("os");
 const path = require("path");
 
 const { startPanel } = require(path.resolve(__dirname, "..", "src", "panel", "server"));
-const { hashPassword } = require(path.resolve(__dirname, "..", "src", "panel", "auth"));
+const { SESSION_TTL_MS, createAuth, hashPassword } = require(path.resolve(__dirname, "..", "src", "panel", "auth"));
 const { SECRET_MASK, resolveAccountConfig } = require(path.resolve(__dirname, "..", "src", "panel", "config"));
 const { CHILD_ENV_KEYS } = require(path.resolve(__dirname, "..", "src", "panel", "runner"));
 const { describeSchedule, nextRuns, normalizeSchedules, schedulePatterns } = require(
@@ -353,6 +353,24 @@ async function main() {
       assert.match(ok.headers.get("set-cookie"), /Path=\/weread\//);
     });
 
+    await scenario("登录时回收已过期的会话", async () => {
+      let t = Date.now();
+      const auth = createAuth({ store: { get: () => ({ auth: { passwordHash: "" } }) }, envPassword: "correct-horse", now: () => t });
+      await auth.init();
+      const first = await auth.login("127.0.0.1", "correct-horse");
+      let ended = false;
+      auth.watchSession(first.token, () => {
+        ended = true;
+      });
+      t += SESSION_TTL_MS + 1;
+      assert.ok((await auth.login("127.0.0.1", "correct-horse")).ok);
+      assert.ok(ended, "过期的会话应在下次登录时回收");
+    });
+
+    await scenario("环境变量中的密码少于 8 位时拒绝启动", async () => {
+      await assert.rejects(start({ password: "short" }), /PANEL_PASSWORD 至少 8 位/);
+    });
+
     await scenario("修改密码后旧会话失效、旧密码不能登录；密码来自环境变量时拒绝修改", async () => {
       const panel = await start();
       const original = panel.generatedPassword;
@@ -509,6 +527,8 @@ async function main() {
         assert.strictEqual((await panel.call("POST", "api/accounts", { id })).status, 400, id);
       }
       assert.strictEqual((await panel.call("POST", "api/accounts", { id: "long", name: "名".repeat(33) })).status, 400);
+      const typo = await panel.call("POST", "api/accounts", { id: "typo", nmae: "拼错" });
+      assert.deepStrictEqual([typo.status, typo.json.message], [400, "不支持的字段：nmae"]);
       const defaultName = await panel.call("POST", "api/accounts", { id: "second" });
       assert.strictEqual(defaultName.json.account.name, "second");
 
@@ -637,6 +657,36 @@ async function main() {
       assert.deepStrictEqual(Object.keys(upgraded), ["version", "auth", "settings", "defaults", "accounts"]);
       assert.deepStrictEqual(upgraded.defaults, { seleniumUrl: "http://selenium:4444" });
       assert.deepStrictEqual(upgraded.accounts, []);
+    });
+
+    await scenario("panel.json 修改前保存上一版；损坏时备份损坏文件并从上一版恢复，上一版也不可用时拒绝启动", async () => {
+      const first = await startAuthed();
+      await first.call("POST", "api/accounts", { id: "keep-1" });
+      await first.call("POST", "api/accounts", { id: "keep-2" });
+      await first.close();
+      const { dataDir } = first.options;
+      const file = path.join(dataDir, "panel.json");
+      const backup = JSON.parse(fs.readFileSync(`${file}.bak`, "utf8"));
+      assert.deepStrictEqual(backup.accounts.map((account) => account.id), ["keep-1"]);
+      assert.strictEqual(fs.statSync(`${file}.bak`).mode & 0o777, 0o600);
+
+      // 模拟断电后的空文件
+      fs.writeFileSync(file, "");
+      const restored = await startAuthed({ dataDir });
+      assert.deepStrictEqual((await restored.call("GET", "api/accounts")).json.accounts.map((account) => account.id), ["keep-1"]);
+      assert.ok(fs.readdirSync(dataDir).some((name) => name.startsWith("panel.json.corrupt-")));
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, "utf8")).accounts.map((account) => account.id), ["keep-1"]);
+      await restored.close();
+
+      fs.writeFileSync(file, "{broken");
+      fs.writeFileSync(`${file}.bak`, "{broken too");
+      await assert.rejects(start({ dataDir, password: "correct-horse" }), /也没有可用的上一版/);
+    });
+
+    await scenario("panel.json 中手工写入的无效账号 ID 在启动时拒绝", async () => {
+      const dataDir = tempDir();
+      fs.writeFileSync(path.join(dataDir, "panel.json"), JSON.stringify({ version: 1, auth: { passwordHash: "" }, accounts: [{ id: "../x" }] }), { mode: 0o600 });
+      await assert.rejects(start({ dataDir, password: "correct-horse" }), /panel\.json 中有无效的账号 ID：\.\.\/x/);
     });
 
     await scenario("同一数据目录只能运行一个面板；关闭后释放", async () => {
@@ -897,6 +947,47 @@ async function main() {
       const files = runFiles(panel, "login-1", run.id);
       await files.log();
       assert.ok(!fs.readFileSync(path.join(files.dir, "meta.json"), "utf8").includes("confirm?uid"));
+    });
+
+    await scenario("二维码解析不出登录链接时提供这次运行的二维码截图；没有等待扫码时返回 404；面板地址下发给子进程", async () => {
+      const panel = await startAuthed({ publicUrl: "https://example.com/weread/" });
+      await panel.call("POST", "api/accounts", { id: "qrimg-1" });
+      // 之前运行留下的截图不返回
+      const stale = path.join(panel.options.dataDir, "accounts", "qrimg-1", "login.png");
+      fs.writeFileSync(stale, "old");
+      fs.utimesSync(stale, new Date(Date.now() - 3600000), new Date(Date.now() - 3600000));
+      assert.strictEqual((await panel.call("GET", "api/accounts/qrimg-1/login-qr")).status, 404);
+      const waiting = nextRun(panel, (run) => run.accountId === "qrimg-1" && run.status === "waiting-login");
+      await panel.call("POST", "api/accounts/qrimg-1/runs", { mode: "login" });
+      const run = await waiting;
+      assert.strictEqual(run.loginUrl, "");
+      assert.ok(run.loginQrAt);
+      const image = await panel.call("GET", "api/accounts/qrimg-1/login-qr");
+      assert.strictEqual(image.status, 200);
+      assert.strictEqual(image.headers.get("content-type"), "image/png");
+      assert.strictEqual(image.headers.get("cache-control"), "no-store");
+      assert.strictEqual((await panel.request("api/accounts/qrimg-1/login-qr")).status, 401);
+      assert.strictEqual((await panel.call("GET", "api/accounts/nobody/login-qr")).status, 404);
+      const finished = nextRun(panel, ended("qrimg-1"));
+      await panel.call("POST", "api/accounts/qrimg-1/stop");
+      await finished;
+      assert.match(await runFiles(panel, "qrimg-1", run.id).log(), /panelLink=https:\/\/example\.com\/weread\/#\/accounts\/qrimg-1\/live/);
+      assert.strictEqual((await panel.call("GET", "api/accounts/qrimg-1/login-qr")).status, 404);
+      assert.ok(!("loginQrAt" in runFiles(panel, "qrimg-1", run.id).meta()));
+    });
+
+    await scenario("进度跳过的分钟按时间均匀补记；分钟数不超过阅读时长上限", async () => {
+      const panel = await startAuthed();
+      await panel.call("POST", "api/accounts", { id: "skip-1" });
+      const finished = nextRun(panel, ended("skip-1"));
+      await panel.call("POST", "api/accounts/skip-1/runs");
+      const run = await finished;
+      assert.strictEqual(run.minutes, 1440);
+      const marks = runFiles(panel, "skip-1", run.id).meta().minuteMarks.map((mark) => Date.parse(mark));
+      assert.strictEqual(marks.length, 1440);
+      // 第 2–4 分钟在第 1 分钟与第 5 分钟之间，各不相同
+      assert.ok(marks[0] < marks[1] && marks[1] < marks[2] && marks[2] < marks[3] && marks[3] < marks[4], "补记的分钟应递增");
+      assert.ok(marks.every((mark, i) => i === 0 || mark >= marks[i - 1]));
     });
 
     await scenario("超过运行时长上限时结束子进程并记为失败", async () => {

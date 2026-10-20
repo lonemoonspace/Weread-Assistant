@@ -259,6 +259,8 @@ button.small,
   padding: 6px;
   border-radius: 8px;
   background: #fff;
+  /* 二维码截图（尤其是整页截图）不是正方形时按比例缩放，不拉伸 */
+  object-fit: contain;
   image-rendering: pixelated;
 }
 

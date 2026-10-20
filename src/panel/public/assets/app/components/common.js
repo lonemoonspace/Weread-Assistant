@@ -1,5 +1,6 @@
 import qrcode from "../../vendor/qrcode.mjs";
 import { computed, ref } from "../../vendor/vue.esm-browser.prod.js";
+import { apiUrl } from "../api.js";
 import { ACTIVE_STATUSES, STATUS_LABELS } from "../format.js";
 import { startRun, state, stopRun } from "../store.js";
 
@@ -11,14 +12,17 @@ export const StatusBadge = {
   template: `<span class="badge" :class="'status-' + status">{{ label }}</span>`,
 };
 
-// 登录二维码：由登录链接在浏览器本地生成，不经过第三方服务
+// 登录二维码：由登录链接在浏览器本地生成，不经过第三方服务。
+// 解析不出登录链接时（qrAt 不为空而 url 为空）改为显示阅读浏览器中二维码的截图
 export const QrLogin = {
-  props: { url: String },
+  props: { url: String, accountId: String, qrAt: String },
   setup(props) {
     const showLink = ref(false);
     const image = computed(() => {
       if (!props.url) {
-        return "";
+        return props.qrAt && props.accountId
+          ? apiUrl(`accounts/${props.accountId}/login-qr?t=${encodeURIComponent(props.qrAt)}`)
+          : "";
       }
       const qr = qrcode(0, "M");
       qr.addData(props.url);
@@ -49,7 +53,8 @@ export const QrLogin = {
       <img v-if="image" class="qr" :src="image" alt="微信读书登录二维码">
       <p v-else class="muted" aria-busy="true">正在获取二维码…</p>
       <div class="qr-help">
-        <p>用微信扫描二维码登录；在手机上可以复制链接，发到微信中打开。二维码约 1 分钟后失效，会自动刷新。</p>
+        <p v-if="url">用微信扫描二维码登录；在手机上可以复制链接，发到微信中打开。二维码约 1 分钟后失效，会自动刷新。</p>
+        <p v-else-if="image">未能从二维码中解析出登录链接，下面是阅读浏览器中二维码的截图，用微信扫描即可。二维码约 1 分钟后失效，会自动刷新。</p>
         <button v-if="url" type="button" class="secondary" @click="copy">{{ copied ? "已复制" : "复制登录链接" }}</button>
         <input v-if="showLink" class="login-link" type="text" readonly :value="url" @focus="$event.target.select()">
       </div>

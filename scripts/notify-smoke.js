@@ -382,6 +382,32 @@ async function main() {
       assert.doesNotMatch(mock.requests[0].body, /qrserver/);
     });
 
+    await scenario("配置了面板地址时扫码推送附带面板链接；解析不出登录链接时改为推送面板链接", async () => {
+      config = resolveConfig({
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
+      });
+      const panelLink = "https://example.com/weread/#/accounts/me/live";
+      const notifier = createNotifier(config, { panelLink });
+      await notifier.loginLink("https://weread.qq.com/web/confirm?uid=both");
+      const both = parseBody(mock.requests[0]);
+      assert.strictEqual(both.click, "https://weread.qq.com/web/confirm?uid=both");
+      assert.match(both.message, /在面板中扫码：https:\/\/example\.com\/weread\/#\/accounts\/me\/live/);
+      assert.deepStrictEqual(both.actions.map((action) => action.label), ["打开登录链接", "在面板中扫码"]);
+
+      await notifier.loginLink("");
+      await notifier.loginLink("");
+      assert.strictEqual(mock.requests.length, 2, "解析不出登录链接时只推送一次面板链接");
+      const panelOnly = parseBody(mock.requests[1]);
+      assert.strictEqual(panelOnly.click, panelLink);
+      assert.match(panelOnly.message, /未能从二维码中解析出登录链接/);
+      assert.deepStrictEqual(panelOnly.actions.map((action) => action.label), ["在面板中扫码"]);
+
+      // 没有面板地址时解析不出登录链接不推送
+      await createNotifier(config).loginLink("");
+      assert.strictEqual(mock.requests.length, 2);
+    });
+
     await scenario("二维码刷新后按最小间隔限制登录链接推送", async () => {
       config = resolveConfig({
         ntfyTopic: "weread_smoke_topic",

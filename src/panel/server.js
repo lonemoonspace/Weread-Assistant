@@ -372,6 +372,17 @@ function createPanelApp(options, { auth, store, runner }) {
     res.sendFile(name, { root: dir });
   });
 
+  // 等待扫码时的二维码截图，二维码解析不出登录链接时页面用它代替本地生成的二维码
+  api.get("/accounts/:id/login-qr", (req, res) => {
+    findAccount(store.get(), req.params.id);
+    const image = runner.loginQrImage(req.params.id);
+    if (!image) {
+      throw new PanelError(404, "login_qr_not_found", "当前没有等待扫码的二维码截图");
+    }
+    res.set("Content-Type", "image/png");
+    res.sendFile(image.name, { root: image.dir });
+  });
+
   // 打卡日历：?month=YYYY-MM（默认本月，按面板时区）
   api.get("/accounts/:id/calendar", (req, res) => {
     const data = store.get();
@@ -588,6 +599,7 @@ async function startPanel(options) {
     runner = createRunner({
       dataDir: options.dataDir,
       store,
+      publicUrl: options.publicUrl,
       onFinish: () => setImmediate(cleanup),
       ...options.runner,
     });

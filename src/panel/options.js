@@ -12,6 +12,26 @@ function normalizeBasePath(raw) {
   return trimmed ? `/${trimmed}/` : "/";
 }
 
+// 面板的外网地址，用于推送中的跳转链接：http(s) 地址，末尾补齐斜杠；不设置时为空
+function normalizePublicUrl(raw) {
+  const value = String(raw || "").trim();
+  if (!value) {
+    return "";
+  }
+  let url;
+  try {
+    url = new URL(value);
+  } catch (_) {
+    throw new Error(`PANEL_PUBLIC_URL 不是有效的地址: ${value}`);
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+    throw new Error(`PANEL_PUBLIC_URL 应为不含用户名与密码的 http(s) 地址: ${value}`);
+  }
+  url.hash = "";
+  url.search = "";
+  return url.toString().replace(/\/*$/, "/");
+}
+
 // false：不信任代理头；数字：信任的代理层数。"true" 视为 1 层
 function parseTrustProxy(raw) {
   const value = String(raw === undefined ? "" : raw).trim();
@@ -42,7 +62,7 @@ function panelOptionsFromEnv(env = process.env) {
     host: env.PANEL_HOST || "0.0.0.0",
     basePath: normalizeBasePath(env.PANEL_BASE_PATH),
     trustProxy: parseTrustProxy(env.PANEL_TRUST_PROXY),
-    publicUrl: env.PANEL_PUBLIC_URL || "",
+    publicUrl: normalizePublicUrl(env.PANEL_PUBLIC_URL),
     password: env.PANEL_PASSWORD || "",
     dataDir: env.PANEL_DATA_DIR || "data",
     // 首次启动时写入全局默认配置，之后以面板中的设置为准

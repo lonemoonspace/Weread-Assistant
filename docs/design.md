@@ -1,6 +1,6 @@
 ## WeReadAssistant 设计
 
-> 状态：设计已确认，尚未实现。初始提交是上游代码的原样快照（`src/weread-challenge.js` 等），后续按"开发顺序"逐步改造；实现完成后本文转为功能说明，并补充 `cases/` 验收用例。
+> 状态：已按"开发顺序"全部实现，0.1.0 为第一个发布版本。本文保留当时的设计与取舍；各模块的现行行为以 `docs/panel.md`、`docs/reader.md`、`docs/cli.md`、`docs/notifications.md` 为准，验收用例见 `cases/`。
 
 ### 目标与范围
 
@@ -267,7 +267,7 @@ sequenceDiagram
 | `PANEL_HOST` | `0.0.0.0` | 监听地址（容器内） |
 | `PANEL_BASE_PATH` | `/` | 部署在子路径时设置，例如 `/weread/`；前端全部使用相对路径 |
 | `PANEL_TRUST_PROXY` | `false` | 设为 `true` 后信任 `X-Forwarded-For` / `X-Forwarded-Proto`，用于识别真实 IP 与 HTTPS |
-| `PANEL_PUBLIC_URL` | 空 | 面板的外网地址，用于推送中的跳转链接 |
+| `PANEL_PUBLIC_URL` | 空 | 面板的外网地址，扫码推送附带该账号实时页面的链接（解析不出登录链接时只推送面板链接） |
 | `PANEL_PASSWORD` | 空 | 面板密码 |
 | `SELENIUM_URL` | `http://selenium:4444` | 首次启动时写入全局配置 |
 
@@ -300,11 +300,8 @@ services:
     depends_on:
       selenium:
         condition: service_healthy
-    dns:
-      - 223.5.5.5
   selenium:
-    image: selenium/standalone-chromium:latest
-    pull_policy: if_not_present
+    image: selenium/standalone-chromium:4.51.0-20261010
     restart: unless-stopped
     shm_size: 2gb
     environment:
@@ -316,8 +313,6 @@ services:
       # - SE_VNC_VIEW_ONLY=1          # 只能看，不能操作
     # ports:                          # noVNC，只映射到本机或可信局域网
     #   - "127.0.0.1:7900:7900"
-    dns:
-      - 223.5.5.5
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4444/status"]
       interval: 5s

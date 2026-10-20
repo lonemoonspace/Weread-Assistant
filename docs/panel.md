@@ -24,10 +24,10 @@ docker compose logs app | grep 面板初始密码
 | --- | --- | --- |
 | `PANEL_PORT` | `26868` | 监听端口，1–65535；选用不常见端口，避开常被占用的 8080 等端口。只能通过环境变量设置，与镜像健康检查读取同一个值 |
 | `PANEL_HOST` | `0.0.0.0` | 监听地址 |
-| `PANEL_PASSWORD` | 空 | 面板密码；设置后以它为准，界面中不能修改 |
+| `PANEL_PASSWORD` | 空 | 面板密码，至少 8 位（不足时拒绝启动）；设置后以它为准，界面中不能修改 |
 | `PANEL_BASE_PATH` | `/` | 部署在反向代理子路径下时设置，例如 `/weread/` |
 | `PANEL_TRUST_PROXY` | `false` | `true` 表示信任 1 层代理，也可填信任的代理层数 |
-| `PANEL_PUBLIC_URL` | 空 | 面板的外网地址，后续用于推送中的跳转链接 |
+| `PANEL_PUBLIC_URL` | 空 | 面板的外网地址（不含用户名与密码的 http(s) 地址，例如 `https://example.com/weread/`）：扫码推送附带该账号实时页面的链接；二维码解析不出登录链接时改为推送面板链接，在面板中扫二维码截图。地址无效时拒绝启动 |
 | `PANEL_DATA_DIR` | `data` | 面板数据目录，保存 `panel.json`、`panel.log` 与各账号的数据 |
 | `SELENIUM_URL` | 空 | 首次初始化全局默认配置时写入 Selenium 地址；之后以面板中的设置为准 |
 
@@ -47,7 +47,7 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/challenge.js` | 阅读挑战（月卡、年卡）的规则与设置校验 | |
 | `src/shared/selenium.js` | 查询 Selenium 的 `/status`：是否就绪、已用/总会话数；面板总览与阅读子进程的运行日志共用 | 先 `/status`，不是 Selenium 状态时再试 `/wd/hub/status`；3 秒超时；展示的地址去掉其中的用户名与密码 |
 | `src/reader/worker.js` | 阅读子进程入口：经 IPC 接收配置、上报事件，收到 SIGTERM 时关闭浏览器后退出 | 只由面板启动，见 `docs/reader.md` |
-| `src/panel/store.js` | `panel.json` 读写 | 串行写入、先写临时文件再重命名、权限 0600；启动时把已有文件的权限收紧为 0600，改不了或文件损坏时拒绝启动；补齐缺少的部分（旧文件自动升级） |
+| `src/panel/store.js` | `panel.json` 读写 | 串行写入、先写临时文件并刷到磁盘再重命名、权限 0600；每次修改前把上一版保存为 `panel.json.bak`；启动时把已有文件的权限收紧为 0600，改不了时拒绝启动；文件损坏时改名为 `panel.json.corrupt-<时间>` 并从上一版恢复，上一版也不可用时拒绝启动；补齐缺少的部分（旧文件自动升级） |
 | `src/panel/auth.js` | 密码哈希、会话、登录限速、修改密码 | 密码以 scrypt 哈希保存；会话只在内存中保存令牌哈希，面板重启后需重新登录 |
 | `src/panel/server.js` | Express 应用、页面与接口 | 统一安全响应头；修改类请求校验自定义请求头 |
 | `src/panel/healthcheck.js` | 镜像 `HEALTHCHECK` 使用 | 请求 `<子路径>healthz` |
@@ -82,7 +82,8 @@ docker compose logs app | grep 面板初始密码
 | `GET api/selenium/status` | 是 | 全局默认配置与各账号实际使用的每个 Selenium 地址的状态与会话数，见下文“Selenium 状态与 noVNC” |
 | `GET api/accounts/:id/runs` | 是 | 运行历史，最新的在前：`{ runs, nextBefore }`；`?limit=`（1–100，默认 20）、`?before=<nextBefore>` 翻页。每条为运行记录加 `hasLog` 与截图文件名 `screenshots` |
 | `GET api/accounts/:id/runs/:runId` | 是 | `{ run }`：运行记录、截图文件名与按天拆分的阅读分钟数 `minutesByDate` |
-| `GET api/accounts/:id/runs/:runId/screenshots/:name` | 是 | 截图（`image/png`），运行中也可读取最新的截图；文件名只接受 `screenshot-<分钟>.png` |
+| `GET api/accounts/:id/runs/:runId/screenshots/:name` | 是 | 截图（`image/png`），运行中也可读取最新的截图；文件名只接受 `screenshot-<分钟>.png`（0.1.0 的旧记录中还可能有发邮件时留下的 `screenshot.png`，同样可读取） |
+| `GET api/accounts/:id/login-qr` | 是 | 账号正在等待扫码时，这次运行保存的二维码截图（`image/png`，只含二维码的 `login-qr.png` 优先，没有时为整页 `login.png`）；没有等待扫码或截图早于这次运行时 404。二维码解析不出登录链接时页面用它代替本地生成的二维码 |
 | `GET api/accounts/:id/runs/:runId/log` | 是 | 运行日志（`text/plain`）；`?download=1` 时作为附件下载；超过保留天数被清理后返回 404 |
 | `GET api/accounts/:id/calendar` | 是 | 打卡日历，`?month=YYYY-MM`（默认本月）：每天的阅读分钟数与是否打卡、今天、本月合计与本轮挑战进度，见下文 |
 | `GET api/events` | 是 | 实时推送（SSE），见下文 |
@@ -124,7 +125,7 @@ docker compose logs app | grep 面板初始密码
 | --- | --- | --- |
 | 排队中 | `queued` | 加入队列，等待并发槽位 |
 | 启动中 | `starting` | 子进程已启动，正在连接浏览器、打开首页；登录成功后、打开书之前也是这个状态 |
-| 等待扫码 | `waiting-login` | 子进程上报 `login-required`；`loginUrl` 为二维码中的登录链接，二维码刷新后随之更新 |
+| 等待扫码 | `waiting-login` | 子进程上报 `login-required`；`loginUrl` 为二维码中的登录链接，二维码刷新后随之更新；`loginQrAt` 为最近一次上报的时间，`loginUrl` 为空（解析不出链接）时页面据此加载 `login-qr` 截图（两者都不写入 meta.json） |
 | 阅读中 | `reading` | 子进程上报 `book-opened`；`reading-minute` 更新 `minutes`、`plannedMinutes` 与最新截图文件名 `screenshot` |
 | 成功 | `success` | 子进程上报 `done` |
 | 失败 | `failed` | 子进程上报 `error`（`error` 为错误信息）或 `login-timeout`（`等待扫码超时`）；子进程退出前没有上报结果（`阅读子进程异常退出（退出码 N）`）；超过运行时长上限（`运行超时，已强制结束`） |
@@ -280,6 +281,7 @@ noVNC 默认关闭：只有在设置中填写“noVNC 地址”后，总览与�
 ```
 data/
   panel.json              # 面板设置、全局默认配置、账号与调度规则、密码哈希（0600）
+  panel.json.bak          # 上一版 panel.json，损坏时自动恢复（0600）
   panel.log
   panel.lock              # 面板运行期间存在，防止同一数据目录启动多个面板
   accounts/<id>/          # 账号数据（0700）：cookies.json、login.png、login-qr.png（0600；命令行运行时的截图也在这里）
@@ -335,7 +337,7 @@ data/
 | 跨站请求伪造 | 修改类请求必须带 `X-WA-Request: 1` 请求头且为 JSON，配合 `SameSite=Strict` |
 | 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`；接口响应 `Cache-Control: no-store` |
 | 文件 | `panel.json` 权限 0600，已有文件在启动时收紧；账号数据目录 0700，`cookies.json` 与登录二维码图片 0600（等同于登录状态）；初始密码不写入日志文件 |
-| 容器 | 以 `node` 用户运行；入口脚本先把数据目录中不属于 `node` 的文件改过来再降权 |
+| 容器 | 面板进程以 `node` 用户运行：入口脚本以 root 把数据目录中不属于 `node` 的文件改过来后再降权。镜像的 `HEALTHCHECK` 由 Docker 以镜像默认用户（root）执行，只请求本机的 `/healthz`，不读写数据目录 |
 
 ### 反向代理
 

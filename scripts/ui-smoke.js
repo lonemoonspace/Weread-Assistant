@@ -284,6 +284,22 @@ async function desktop(env, h, driver, results) {
   await h.waitText(".live-status", "已停止");
   step("扫码：需要扫码的账号在总览置顶显示本地生成的二维码与复制按钮，实时页面同样显示；停止后状态为已停止");
 
+  // 二维码解析不出登录链接时显示阅读浏览器中的二维码截图，没有复制按钮
+  await call("POST", "api/accounts", { id: "qrimg-1", name: "截图扫码" });
+  await call("POST", "api/accounts/qrimg-1/runs", { mode: "login" });
+  await h.go("#/accounts/qrimg-1/live");
+  await h.waitText(".live-status", "等待扫码");
+  const qrShot = await h.waitFor(".live .qr-login img.qr");
+  assert.match(await qrShot.getAttribute("src"), /\/api\/accounts\/qrimg-1\/login-qr\?t=/);
+  await h.imagesLoaded(".live .qr-login img.qr");
+  await h.waitText(".live .qr-login", "未能从二维码中解析出登录链接");
+  assert.strictEqual((await driver.findElements(By.xpath("//div[contains(@class, 'qr-login')]//button"))).length, 0, "没有登录链接时不显示复制按钮");
+  await h.shot("04b-live-scan-screenshot");
+  await h.clickButton("停止");
+  await h.waitText(".live-status", "已停止");
+  await call("DELETE", "api/accounts/qrimg-1", { deleteData: true });
+  step("扫码：解析不出登录链接时显示阅读浏览器中的二维码截图");
+
   await h.go("#/accounts/ok-1/live");
   await h.clickButton("立即运行");
   await h.waitText(".live-status", "成功");

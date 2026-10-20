@@ -91,13 +91,19 @@ const scenarios = [
     rejects(() => panelOptionsFromEnv({ PANEL_PORT: "70000" }), /PANEL_PORT 必须在 1–65535 之间/);
   }],
 
-  ["代理层数与子路径", () => {
+  ["代理层数、子路径与外网地址", () => {
     assert.strictEqual(panelOptionsFromEnv({ PANEL_TRUST_PROXY: "true" }).trustProxy, 1);
     assert.strictEqual(panelOptionsFromEnv({ PANEL_TRUST_PROXY: "2" }).trustProxy, 2);
     assert.strictEqual(panelOptionsFromEnv({ PANEL_TRUST_PROXY: "false" }).trustProxy, false);
     rejects(() => panelOptionsFromEnv({ PANEL_TRUST_PROXY: "maybe" }), /PANEL_TRUST_PROXY 只能是/);
     assert.strictEqual(panelOptionsFromEnv({ PANEL_BASE_PATH: "weread" }).basePath, "/weread/");
     rejects(() => panelOptionsFromEnv({ PANEL_BASE_PATH: "/a b/" }), /PANEL_BASE_PATH 含有不支持的字符/);
+    assert.strictEqual(panelOptionsFromEnv({}).publicUrl, "");
+    assert.strictEqual(panelOptionsFromEnv({ PANEL_PUBLIC_URL: "https://example.com/weread" }).publicUrl, "https://example.com/weread/");
+    assert.strictEqual(panelOptionsFromEnv({ PANEL_PUBLIC_URL: " http://nas.local:26868/#/x " }).publicUrl, "http://nas.local:26868/");
+    rejects(() => panelOptionsFromEnv({ PANEL_PUBLIC_URL: "example.com" }), /PANEL_PUBLIC_URL 不是有效的地址/);
+    rejects(() => panelOptionsFromEnv({ PANEL_PUBLIC_URL: "ftp://example.com/" }), /PANEL_PUBLIC_URL 应为/);
+    rejects(() => panelOptionsFromEnv({ PANEL_PUBLIC_URL: "https://u:p@example.com/" }), /PANEL_PUBLIC_URL 应为/);
   }],
 
   ["CLI：未指定账号、非法配置与多余参数直接报错退出", () => {
