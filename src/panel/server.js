@@ -28,7 +28,7 @@ const {
 } = require("./history");
 const { acquirePanelLock } = require("./lock");
 const { createRunner } = require("./runner");
-const { markInterruptedRuns, runDir } = require("./runs");
+const { markInterruptedRuns, restrictRunDirs, runDir } = require("./runs");
 const { createScheduler } = require("./scheduler");
 const { nextRunAt, normalizeSchedules, publicSchedule } = require("./schedules");
 const { applySettingsPatch } = require("./settings");
@@ -585,6 +585,7 @@ async function startPanel(options) {
     });
     const auth = createAuth({ store, envPassword: options.password, limits: options.limits });
     const generatedPassword = await auth.init();
+    restrictRunDirs(options.dataDir);
     markInterruptedRuns(options.dataDir);
     // 按保留策略清理截图与日志；进行中的运行不清理
     const cleanup = () => {

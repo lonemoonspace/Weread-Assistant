@@ -67,6 +67,27 @@ async function findElementsWithin(driver, xpath, timeoutMs) {
   return driver.findElements(By.xpath(xpath));
 }
 
+// 第一个可见的匹配元素；没有时返回 null。元素在检查过程中被移除时视为不可见
+async function findVisible(driver, xpath) {
+  for (const element of await driver.findElements(By.xpath(xpath))) {
+    try {
+      if (await element.isDisplayed()) {
+        return element;
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+// 等到出现可见的匹配元素并返回它；超时返回 null
+async function waitForVisible(driver, xpath, timeoutMs) {
+  try {
+    return await driver.wait(() => findVisible(driver, xpath), timeoutMs);
+  } catch (_) {
+    return null;
+  }
+}
+
 // 轮询直到某个 XPath 出现，返回第一个出现的下标；超时返回 -1
 async function waitForAnyXpath(driver, xpaths, timeoutMs, pollMs = 500) {
   const deadline = Date.now() + timeoutMs;
@@ -82,10 +103,12 @@ async function waitForAnyXpath(driver, xpaths, timeoutMs, pollMs = 500) {
 module.exports = {
   RunStoppedError,
   findElementsWithin,
+  findVisible,
   randomBetween,
   sleep,
   throwIfStopped,
   toBy,
   waitForAnyXpath,
+  waitForVisible,
   xpathsExist,
 };

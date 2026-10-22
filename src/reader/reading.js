@@ -147,7 +147,8 @@ async function onReadingMinute(driver, ctx, minute) {
   }
 
   const screenshotPath = paths.screenshot(`screenshot-${minute}.png`);
-  fs.writeFileSync(screenshotPath, await driver.takeScreenshot(), "base64");
+  // 阅读截图属于阅读隐私，只允许属主读写
+  fs.writeFileSync(screenshotPath, await driver.takeScreenshot(), { encoding: "base64", mode: 0o600 });
   ctx.report("reading-minute", { ...progress, screenshot: path.basename(screenshotPath) });
   const size = fs.statSync(screenshotPath).size;
   console.debug("Screenshot size: ", size / 1024, " KB");

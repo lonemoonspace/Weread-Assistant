@@ -55,7 +55,9 @@ export const ConfigForm = {
       }
     }
     reset();
-    watch(() => props.values, reset);
+    // 运行状态变化时账号列表会整体刷新，values 换成内容相同的新对象；只有内容确实变了（例如保存后）才重置，
+    // 否则正在编辑、尚未保存的输入会被清掉
+    watch(() => JSON.stringify(props.values), reset);
 
     const groups = computed(() =>
       props.schema.groups.map((group) => ({

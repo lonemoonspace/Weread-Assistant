@@ -51,7 +51,11 @@ function initLogFile(filePath, options = {}) {
     return;
   }
 
-  logStream = fs.createWriteStream(filePath, { flags: "w" });
+  // 日志中有书名、错误信息等，只允许属主读写；mode 只对新文件生效，已有的文件再 chmod 一次
+  logStream = fs.createWriteStream(filePath, { flags: "w", mode: 0o600 });
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch (_) {}
   initConsole(options);
 }
 

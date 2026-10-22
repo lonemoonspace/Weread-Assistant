@@ -15,8 +15,18 @@ const ROUTES = [
   [/^\/settings$/, () => ({ name: "settings", params: {} })],
 ];
 
+// 手工输入的地址可能含有不完整的百分号编码（例如 #%），解码失败时按原样匹配，显示“页面不存在”
+function decodeHash() {
+  const raw = location.hash.replace(/^#/, "");
+  try {
+    return decodeURIComponent(raw) || "/";
+  } catch (_) {
+    return raw;
+  }
+}
+
 function parse() {
-  const hash = decodeURIComponent(location.hash.replace(/^#/, "")) || "/";
+  const hash = decodeHash();
   for (const [pattern, build] of ROUTES) {
     const m = hash.match(pattern);
     if (m) {

@@ -559,6 +559,14 @@ async function main() {
       assert.strictEqual((await panel.call("DELETE", "api/accounts/me", { deleteData: true })).status, 204);
       assert.ok(!fs.existsSync(path.join(accountsDir, "me")));
       assert.ok(fs.existsSync(path.join(accountsDir, "second")));
+
+      // 数据目录建不出来时接口失败且不保存账号，修正后可以重试
+      fs.writeFileSync(path.join(accountsDir, "blocked"), "not a directory");
+      const blocked = await panel.call("POST", "api/accounts", { id: "blocked" });
+      assert.deepStrictEqual([blocked.status, blocked.json.error], [500, "account_dir_failed"]);
+      assert.strictEqual((await panel.call("GET", "api/accounts/blocked")).status, 404);
+      fs.rmSync(path.join(accountsDir, "blocked"));
+      assert.strictEqual((await panel.call("POST", "api/accounts", { id: "blocked" })).status, 201);
     });
 
     await scenario("配置合并：账号覆盖 > 全局默认 > 内置默认，数据目录等由面板按账号设置", async () => {
@@ -699,6 +707,27 @@ async function main() {
       await assert.rejects(start({ dataDir, password: "correct-horse" }), /也没有可用的上一版/);
     });
 
+    await scenario("panel.json 结构不对（例如 accounts 不是数组）时视为损坏：从上一版恢复，不会清空账号", async () => {
+      const first = await startAuthed();
+      await first.call("POST", "api/accounts", { id: "keep-1" });
+      await first.call("POST", "api/accounts", { id: "keep-2" });
+      await first.close();
+      const { dataDir } = first.options;
+      const file = path.join(dataDir, "panel.json");
+      const good = JSON.parse(fs.readFileSync(file, "utf8"));
+      fs.writeFileSync(file, JSON.stringify({ ...good, accounts: { "keep-1": {} } }));
+      const restored = await startAuthed({ dataDir });
+      assert.deepStrictEqual((await restored.call("GET", "api/accounts")).json.accounts.map((account) => account.id), ["keep-1"]);
+      await restored.close();
+
+      for (const broken of [{ ...good, accounts: "me" }, { ...good, settings: "Asia/Shanghai" }, { ...good, accounts: [{ id: "x", schedules: {} }] }, { ...good, accounts: null }, { ...good, auth: null }, { ...good, settings: null }, []]) {
+        fs.writeFileSync(file, JSON.stringify(broken));
+        fs.writeFileSync(`${file}.bak`, JSON.stringify(broken));
+        await assert.rejects(start({ dataDir, password: "correct-horse" }), /也没有可用的上一版/, JSON.stringify(broken));
+        assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, "utf8")), broken, "结构不对的文件不应被改写");
+      }
+    });
+
     await scenario("panel.json 中手工写入的无效账号 ID 在启动时拒绝", async () => {
       const dataDir = tempDir();
       fs.writeFileSync(path.join(dataDir, "panel.json"), JSON.stringify({ version: 1, auth: { passwordHash: "" }, accounts: [{ id: "../x" }] }), { mode: 0o600 });
@@ -774,6 +803,12 @@ async function main() {
         const files = runFiles(panel, "ok-1", run.id);
         const log = await files.log();
         const meta = files.meta();
+        // 运行日志与阅读截图属于阅读隐私，只允许属主访问
+        assert.strictEqual(fs.statSync(files.dir).mode & 0o777, 0o700);
+        assert.strictEqual(fs.statSync(path.dirname(files.dir)).mode & 0o777, 0o700);
+        for (const name of ["output.log", "meta.json"]) {
+          assert.strictEqual(fs.statSync(path.join(files.dir, name)).mode & 0o777, 0o600, name);
+        }
         assert.strictEqual(meta.status, "success");
         assert.strictEqual(meta.exitCode, 0);
         assert.strictEqual(meta.minutes, 2);
@@ -984,6 +1019,12 @@ async function main() {
       assert.strictEqual(image.headers.get("cache-control"), "no-store");
       assert.strictEqual((await panel.request("api/accounts/qrimg-1/login-qr")).status, 401);
       assert.strictEqual((await panel.call("GET", "api/accounts/nobody/login-qr")).status, 404);
+      // 之后只更新了整页截图（例如刷新后二维码图片还没加载）：不再返回旧的二维码区域截图
+      const later = new Date(Date.now() + 5000);
+      fs.writeFileSync(stale, "page");
+      fs.utimesSync(stale, later, later);
+      const pageImage = await panel.call("GET", "api/accounts/qrimg-1/login-qr");
+      assert.strictEqual(pageImage.text, "page");
       const finished = nextRun(panel, ended("qrimg-1"));
       await panel.call("POST", "api/accounts/qrimg-1/stop");
       await finished;
@@ -1354,6 +1395,47 @@ async function main() {
       assert.strictEqual((await panel.call("DELETE", "api/accounts/slow-1", { deleteData: true })).status, 204);
       assert.ok(!fs.existsSync(runsDir));
       assert.ok(!fs.existsSync(path.join(panel.options.dataDir, "accounts", "slow-1")));
+      // 移开第二个目录（运行记录）失败时，已移开的账号目录改回原名，账号与数据都保留，可以重试
+      await panel.call("POST", "api/accounts", { id: "slow-2" });
+      await panel.call("POST", "api/accounts/slow-2/runs");
+      const stopped = nextRun(panel, ended("slow-2"));
+      await panel.call("POST", "api/accounts/slow-2/stop");
+      await stopped;
+      const rename = fs.renameSync;
+      fs.renameSync = (from, to) => {
+        if (from === path.join(panel.options.dataDir, "runs", "slow-2")) {
+          throw Object.assign(new Error("EIO: simulated"), { code: "EIO" });
+        }
+        return rename(from, to);
+      };
+      let failed;
+      try {
+        failed = await panel.call("DELETE", "api/accounts/slow-2", { deleteData: true });
+      } finally {
+        fs.renameSync = rename;
+      }
+      assert.deepStrictEqual([failed.status, failed.json.error], [500, "delete_data_failed"]);
+      assert.strictEqual((await panel.call("GET", "api/accounts/slow-2")).status, 200);
+      assert.ok(fs.existsSync(path.join(panel.options.dataDir, "accounts", "slow-2")), "账号目录应改回原名");
+      assert.ok(fs.existsSync(path.join(panel.options.dataDir, "runs", "slow-2")));
+      assert.strictEqual((await panel.call("DELETE", "api/accounts/slow-2", { deleteData: true })).status, 204);
+      // 数据目录先移开、写入后再删除，不留下临时目录
+      for (const dir of ["accounts", "runs"]) {
+        assert.deepStrictEqual(fs.readdirSync(path.join(panel.options.dataDir, dir)).filter((name) => name.startsWith(".deleting-")), [], dir);
+      }
+    });
+
+    await scenario("升级前创建的运行记录目录在启动时收紧为 0700", async () => {
+      const dataDir = tempDir();
+      const oldRun = path.join(dataDir, "runs", "old-1", "20261001T000000Z-abcd");
+      fs.mkdirSync(oldRun, { recursive: true, mode: 0o755 });
+      fs.chmodSync(path.join(dataDir, "runs"), 0o755);
+      fs.chmodSync(path.join(dataDir, "runs", "old-1"), 0o755);
+      fs.writeFileSync(path.join(oldRun, "output.log"), "old\n", { mode: 0o644 });
+      await start({ dataDir, password: "correct-horse" });
+      for (const dir of ["runs", path.join("runs", "old-1")]) {
+        assert.strictEqual(fs.statSync(path.join(dataDir, dir)).mode & 0o777, 0o700, dir);
+      }
     });
 
     await scenario("调度规则：换算为 cron 表达式，按面板时区计算接下来的触发时间（含夏令时）", async () => {
@@ -1516,6 +1598,7 @@ async function main() {
               schedules: [
                 { id: "tick", type: "cron", expression: "* * * * * *", enabled: true },
                 { id: "broken", type: "cron", expression: "not a cron", enabled: true },
+                { id: "notimes", type: "daily", enabled: true },
               ],
             },
           ],
@@ -1535,9 +1618,13 @@ async function main() {
       assert.ok(logs.some((line) => line.startsWith(`定时触发：账号 slow-1，规则 tick（cron * * * * * *），运行 ${started.id}`)));
       assert.strictEqual(panel.runner.list().length, 1, "同一账号只有一个运行");
 
-      // 无效规则在接口中没有触发时间，不影响读取
+      // 无效规则在接口中没有触发时间，不影响读取；缺少字段的规则说明为“无效规则”，账号列表照常返回
       const account = await panel.request("api/accounts/slow-1", { cookie });
       assert.deepStrictEqual(account.json.account.schedules.find((rule) => rule.id === "broken").nextRuns, []);
+      const notimes = account.json.account.schedules.find((rule) => rule.id === "notimes");
+      assert.deepStrictEqual([notimes.description, notimes.nextRuns], ["无效规则（daily）", []]);
+      assert.strictEqual((await panel.request("api/accounts", { cookie })).status, 200);
+      assert.strictEqual((await panel.request("api/accounts/slow-1/schedules", { cookie })).status, 200);
 
       const ended = nextRun(panel, (run) => run.id === started.id && Boolean(run.endedAt));
       await panel.request("api/accounts/slow-1/schedules", { method: "PUT", cookie, headers: CSRF, body: { schedules: [] } });
@@ -1717,7 +1804,7 @@ async function main() {
 
       const panel = await startAuthed();
       await panel.call("POST", "api/accounts", { id: "me" });
-      for (const challenge of [{ type: "week", startDate: "2026-04-01" }, { type: "month", startDate: "2026-02-30" }, { type: "month", startDate: "2026/04/01" }, { type: "month", startDate: "2026-04-01", x: 1 }, "month"]) {
+      for (const challenge of [{ type: "week", startDate: "2026-04-01" }, { type: "constructor", startDate: "2026-04-01" }, { type: "__proto__", startDate: "2026-04-01" }, { type: "toString", startDate: "2026-04-01" }, { type: "month", startDate: "2026-02-30" }, { type: "month", startDate: "2026/04/01" }, { type: "month", startDate: "2026-04-01", x: 1 }, "month"]) {
         assert.strictEqual((await panel.call("PATCH", "api/accounts/me", { challenge })).status, 400, JSON.stringify(challenge));
       }
       const today = dateInZone(new Date(), "Asia/Shanghai");
@@ -1728,6 +1815,8 @@ async function main() {
       assert.strictEqual((await panel.call("GET", "api/accounts/me/calendar")).json.challenge.startDate, today);
       await panel.call("PATCH", "api/accounts/me", { challenge: null });
       assert.strictEqual((await panel.call("GET", "api/accounts/me")).json.challengeProgress, null);
+      // 旧版本保存下来的继承属性类型：没有进度，不让账号详情与打卡日历出错
+      assert.strictEqual(challengeProgress(dataDir, { id: "ch", challenge: { type: "constructor", startDate: "2026-04-01" } }, { timezone }), null);
     });
 
     await scenario("保留策略：截图只保留最近 N 次有截图的运行，日志超过天数后删除，运行记录永久保留；进行中的运行不清理；运行结束后自动清理", async () => {

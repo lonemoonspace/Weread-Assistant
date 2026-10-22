@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { ACCOUNT_ID_PATTERN } = require("./accounts");
-const { CHALLENGES, isValidDate } = require("./challenge");
+const { CHALLENGES, isChallengeType, isValidDate } = require("./challenge");
 const { PanelError, badRequest } = require("./errors");
 const { RUN_ID_PATTERN, readRunMeta } = require("./runs");
 
@@ -251,7 +251,7 @@ function todayStats(panelDataDir, accountId, { timezone, now = new Date() }) {
 // 本轮挑战进度：第几天、已打卡天数、累计分钟、已漏打卡天数（不含今天）
 function challengeProgress(panelDataDir, account, { timezone, now = new Date() }) {
   const { challenge } = account;
-  if (!challenge || !CHALLENGES[challenge.type] || !isValidDate(challenge.startDate)) {
+  if (!challenge || !isChallengeType(challenge.type) || !isValidDate(challenge.startDate)) {
     return null;
   }
   const spec = CHALLENGES[challenge.type];

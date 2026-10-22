@@ -1,7 +1,16 @@
 const fs = require("fs");
-const { By, until } = require("selenium-webdriver");
+const { until } = require("selenium-webdriver");
 const { ensurePrivateDir, writeFileAtomic } = require("../shared/files");
-const { findElementsWithin, sleep, throwIfStopped, toBy, waitForAnyXpath, xpathsExist } = require("./dom");
+const {
+  findElementsWithin,
+  findVisible,
+  sleep,
+  throwIfStopped,
+  toBy,
+  waitForAnyXpath,
+  waitForVisible,
+  xpathsExist,
+} = require("./dom");
 const { formatDuration } = require("./timing");
 const {
   HOME_TITLE,
@@ -57,24 +66,21 @@ async function loadCookies(driver, filePath) {
   return loaded > 0;
 }
 
+// 只认可见的元素：弹窗没有打开时，页面中隐藏的同名元素不代表二维码已出现
 async function findQRCodeElement(driver) {
-  try {
-    console.info("正在查找二维码登录元素...");
-    // 优先查找二维码图片
-    await driver.wait(until.elementLocated(By.xpath(XPATH.qrImage)), 3000);
+  console.info("正在查找二维码登录元素...");
+  // 优先查找二维码图片
+  if (await waitForVisible(driver, XPATH.qrImage, 3000)) {
     console.info("找到二维码图片元素");
     return true;
-  } catch (e) {
-    try {
-      // 备选方案：查找包含"扫码"或"二维码"文本的元素
-      await driver.wait(until.elementLocated(By.xpath(XPATH.qrHint)), 3000);
-      console.info("找到包含'扫码'或'二维码'文本的元素");
-      return true;
-    } catch (e) {
-      console.info("未找到二维码相关元素，可能已经登录");
-      return false;
-    }
   }
+  // 备选方案：查找登录弹窗中的扫码提示文字
+  if (await waitForVisible(driver, XPATH.qrHint, 3000)) {
+    console.info("找到登录弹窗中的扫码提示文字");
+    return true;
+  }
+  console.info("未找到二维码相关元素，可能已经登录");
+  return false;
 }
 
 // 从页面二维码图片中解码登录链接并推送，命令行运行时在终端显示；返回登录链接，解析失败时返回 null。
@@ -82,7 +88,12 @@ async function findQRCodeElement(driver) {
 async function extractAndDisplayQRCode(driver, ctx) {
   let qrSaved = false;
   try {
-    const qrImg = await driver.findElement(By.xpath(XPATH.qrImage));
+    const qrImg = await findVisible(driver, XPATH.qrImage);
+    if (!qrImg) {
+      // 二维码图片还没加载出来：删掉之前保存的二维码截图，面板改为显示这次的整页截图
+      fs.rmSync(ctx.paths.loginQrImage, { force: true });
+      throw new Error("登录弹窗中没有可见的二维码图片");
+    }
     const base64Png = await qrImg.takeScreenshot();
     writeFileAtomic(ctx.paths.loginQrImage, Buffer.from(base64Png, "base64"), { mode: 0o600 });
     qrSaved = true;

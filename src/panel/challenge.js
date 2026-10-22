@@ -6,6 +6,11 @@ const CHALLENGES = {
   year: { label: "年卡", days: 365, requiredDays: 360, requiredMinutes: 300 * 60 },
 };
 
+// 只认规则表自身的类型：constructor、toString 等继承属性不是挑战类型
+function isChallengeType(type) {
+  return typeof type === "string" && Object.hasOwn(CHALLENGES, type);
+}
+
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 // YYYY-MM-DD 且是日历上存在的日期
@@ -29,7 +34,7 @@ function normalizeChallenge(raw) {
   if (unknown.length > 0) {
     throw badRequest(`challenge 包含不支持的字段：${unknown.join(", ")}`);
   }
-  if (!CHALLENGES[raw.type]) {
+  if (!isChallengeType(raw.type)) {
     throw badRequest(`挑战类型只能是 ${Object.keys(CHALLENGES).join("、")}：${raw.type}`);
   }
   if (!isValidDate(raw.startDate)) {
@@ -40,6 +45,7 @@ function normalizeChallenge(raw) {
 
 module.exports = {
   CHALLENGES,
+  isChallengeType,
   isValidDate,
   normalizeChallenge,
 };
