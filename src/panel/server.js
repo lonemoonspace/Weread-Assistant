@@ -213,7 +213,8 @@ function createPanelApp(options, { auth, store, runner }) {
     next();
   });
   api.use(csrfGuard);
-  api.use(express.json({ limit: "10kb" }));
+  // 面板前端不发送压缩的请求体；不解压可以避免未登录的请求进入 gzip/Brotli 解码（Node.js 的解码器漏洞，如 CVE-2026-111497）
+  api.use(express.json({ limit: "10kb", inflate: false }));
 
   api.post("/auth/login", async (req, res) => {
     const result = await auth.login(req.ip, req.body && req.body.password);
