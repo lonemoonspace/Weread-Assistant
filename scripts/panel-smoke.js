@@ -12,6 +12,7 @@ const http = require("http");
 const net = require("net");
 const os = require("os");
 const path = require("path");
+const zlib = require("zlib");
 
 const { startPanel } = require(path.resolve(__dirname, "..", "src", "panel", "server"));
 const { SESSION_TTL_MS, createAuth, hashPassword } = require(path.resolve(__dirname, "..", "src", "panel", "auth"));
@@ -147,7 +148,7 @@ function client(port, basePath = "/") {
     }
     if (body !== undefined) {
       init.headers["Content-Type"] = init.headers["Content-Type"] || "application/json";
-      init.body = typeof body === "string" ? body : JSON.stringify(body);
+      init.body = typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body);
     }
     const url = urlPath.startsWith("/") ? urlPath : `${basePath}${urlPath}`;
     const res = await fetch(`http://127.0.0.1:${port}${url}`, init);
@@ -289,6 +290,14 @@ async function main() {
       assert.strictEqual(form.status, 415);
       const badJson = await panel.request("api/auth/login", { method: "POST", body: "{oops", headers: CSRF });
       assert.strictEqual(badJson.status, 400);
+      for (const [encoding, compress] of [["br", zlib.brotliCompressSync], ["gzip", zlib.gzipSync]]) {
+        const compressed = await panel.request("api/auth/login", {
+          method: "POST",
+          body: compress(Buffer.from(JSON.stringify({ password: "correct-horse" }))),
+          headers: { ...CSRF, "Content-Encoding": encoding },
+        });
+        assert.strictEqual(compressed.status, 415, `${encoding} 压缩的请求体应被拒绝`);
+      }
     });
 
     await scenario("同一 IP 连续失败 5 次后锁定，锁定期间正确密码也返回 429，解锁后可登录", async () => {
