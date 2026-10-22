@@ -52,7 +52,7 @@ docker compose logs app | grep 面板初始密码
 | 从局域网其他设备打开 | 把 `docker-compose.yml` 中的端口改为 `"26868:26868"`，再执行 `docker compose up -d`，访问 `http://<设备 IP>:26868/`。面板是 HTTP，只在可信的局域网中这样用 |
 | 从外网打开 | 经自己的反向代理（Nginx、Caddy 等）提供 HTTPS，端口保持只映射到本机，见 [docs/panel.md](docs/panel.md#反向代理) |
 
-想固定版本时，在 `docker-compose.yml` 同目录的 `.env` 中写入 `WEREAD_ASSISTANT_TAG=0.1.1`（默认 `latest`；`dev` 为 main 分支的最新构建）。
+想固定版本时，在 `docker-compose.yml` 同目录的 `.env` 中写入 `WEREAD_ASSISTANT_TAG=0.1.2`（默认 `latest`；`dev` 为 main 分支的最新构建）。
 
 ### 开始使用
 
