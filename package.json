@@ -1,6 +1,6 @@
 {
   "name": "weread-assistant",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Unofficial auto-reading assistant for WeRead with a web management panel",
   "main": "src/cli.js",
