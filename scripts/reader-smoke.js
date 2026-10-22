@@ -8,7 +8,7 @@
  * 检查经 IPC 上报的事件，以及收到 SIGTERM 后关闭浏览器。不访问微信读书。
  *
  * 用法: SELENIUM_URL=http://localhost:4444 node scripts/reader-smoke.js
- *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / timeout / no-entry / no-qr / corrupt / reading / single / worker / worker-stop）。
+ *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / timeout / no-entry / no-qr / qr-late / corrupt / reading / single / worker / worker-stop）。
  *   SELENIUM_URL 默认 http://localhost:4444，也可以直接指向 chromedriver（如 http://localhost:9515）。
  *   浏览器需要能访问本机的模拟服务；Selenium 跑在容器里时用 --network host 启动，
  *   或通过 MOCK_HOST 指定浏览器访问本机时使用的地址。
@@ -203,6 +203,21 @@ async function main() {
         assert.strictEqual(result.status, "error");
         assert.match(result.error, /未能打开扫码登录弹窗/);
         assert.strictEqual(countEvents(events, "login-click"), 2, "应刷新页面后再点击一次登录");
+      },
+    });
+
+    await scenario("弹窗打开后二维码图片迟迟不出现：保存整页截图，删除之前的二维码截图，不把书籍封面当作二维码", {
+      name: "qr-late",
+      site: { qrLoadMs: 60000 },
+      mode: "login",
+      timing: { loginTimeoutMs: 3000 },
+      prepare(dataDir) {
+        fs.writeFileSync(path.join(dataDir, "login-qr.png"), "old");
+      },
+      check({ result, dataDir }) {
+        assert.strictEqual(result.status, "login-timeout");
+        assert.ok(fs.existsSync(path.join(dataDir, "login.png")));
+        assert.ok(!fs.existsSync(path.join(dataDir, "login-qr.png")), "没有二维码图片时不应留下二维码截图");
       },
     });
 

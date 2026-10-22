@@ -7,9 +7,13 @@ const TITLE_SUFFIX = " - 微信读书";
 const XPATH = {
   loginLink: "//a[contains(text(), '登录')]",
   shelfLink: "//div[contains(text(), '我的书架') and @class='wr_index_page_top_section_header_action_link']",
-  qrImage: "//img[contains(@class, 'qr') or contains(@src, 'qr') or contains(@alt, '二维码')]",
-  // 排除脚本与样式：页面脚本中常含有这些字，不代表二维码弹窗已出现
-  qrHint: "//*[not(self::script) and not(self::style) and (contains(text(), '扫码') or contains(text(), '二维码'))]",
+  // 只在登录弹窗中查找：首页书籍封面的图片地址（wfqqreader-*.myqcloud.com）也含有“qr”
+  qrImage:
+    "//img[contains(@class, 'wr_login_modal_qr_img') or " +
+    "(ancestor::*[contains(@class, 'wr_login_modal')] and (contains(@class, 'qr') or contains(@alt, '二维码')))]",
+  // 弹窗中的提示文字（“使用微信扫一扫登录”），二维码图片还没加载出来时据此判断弹窗已打开
+  qrHint:
+    "//*[contains(@class, 'wr_login_modal')]//*[contains(text(), '扫一扫') or contains(text(), '扫码') or contains(text(), '二维码')]",
   qrExpiredOverlay: "//div[contains(text(), '点击刷新二维码') and @class='wr_login_modal_qr_overlay_text']",
   qrExpiredText: "//*[contains(text(), '二维码已失效')]",
   // 书架加载完成前首页先显示 4 个不含链接的占位卡片，点击无效；公众号文章打开的是另一种阅读页，没有目录按钮

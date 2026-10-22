@@ -165,11 +165,18 @@ function nextRunAt(account, timezone, from = new Date()) {
   return candidates[0] || null;
 }
 
-// 接口中返回的规则：附带说明与接下来的触发时间
+// 接口中返回的规则：附带说明与接下来的触发时间。手工写入 panel.json 的无效规则（调度器会跳过）
+// 说明为“无效规则”，没有触发时间，不影响账号列表等接口
 function publicSchedule(rule, timezone, from = new Date()) {
+  let description;
+  try {
+    description = describeSchedule(rule);
+  } catch (_) {
+    description = `无效规则（${rule.type}）`;
+  }
   return {
     ...rule,
-    description: describeSchedule(rule),
+    description,
     nextRuns: rule.enabled ? nextRuns(rule, { timezone, from }) : [],
   };
 }

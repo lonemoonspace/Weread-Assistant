@@ -5,6 +5,7 @@
 //   loggedIn       首页直接显示“我的书架”（否则需要扫码，扫码成功后写入 wr_vid cookie）
 //   noEntry        首页既没有“登录”入口也没有书架（页面没加载出来或已改版）
 //   noQr           点击“登录”后不出现二维码弹窗
+//   qrLoadMs       二维码图片在弹窗打开多久后才加载出来
 //   qrExpireMs     二维码多久后显示“点击刷新二维码”
 //   scanOnQr       第几张二维码出现后视为扫码成功；不设置则永远不扫码
 //   scanDelayMs    该二维码出现多久后完成扫码
@@ -46,6 +47,16 @@ function qrPng(text, scale = 6, margin = 4) {
     }
   }
   return PNG.sync.write(png);
+}
+
+function coverPng() {
+  const png = new PNG({ width: 60, height: 80 });
+  png.data.fill(0x99);
+  return PNG.sync.write(png);
+}
+
+function coversHtml(base) {
+  return Array.from({ length: 3 }, (_, i) => `<img class="wr_bookCover_img" alt="书籍封面" src="${base}/wfqqreader/cover/${i + 1}.png">`).join("");
 }
 
 function loginUrlFor(name, n) {
@@ -96,7 +107,15 @@ function homePage(name, scenario, loggedIn) {
     let n = 0;
     function showQr() {
       n += 1;
-      document.getElementById("qr").src = "${base}/qr.png?n=" + n;
+      const qr = document.getElementById("qr");
+      const src = "${base}/qr.png?n=" + n;
+      if (cfg.qrLoadMs) {
+        // 图片加载出来之前弹窗中只有提示文字
+        qr.hidden = true;
+        setTimeout(() => { qr.src = src; qr.hidden = false; }, cfg.qrLoadMs);
+      } else {
+        qr.src = src;
+      }
       const overlay = document.getElementById("overlay");
       overlay.innerHTML = "";
       if (cfg.scanOnQr === n) {
@@ -118,10 +137,11 @@ function homePage(name, scenario, loggedIn) {
     };`;
   return page(
     "微信读书",
-    `<a id="login" href="javascript:void(0)">登录</a>${
+    // 与真实页面一致：未登录首页也有书籍封面，图片地址（wfqqreader-*.myqcloud.com）含有“qr”
+    `<a id="login" href="javascript:void(0)">登录</a>${coversHtml(base)}${
       scenario.noQr
         ? ""
-        : `<div id="modal" style="display:none"><img id="qr" class="wr_login_modal_qr_img" alt="二维码"><div id="overlay"></div></div>`
+        : `<div id="modal" class="wr_login_modal_wrapper" style="display:none"><img id="qr" class="wr_login_modal_qr_img" alt="登录二维码"><div class="wr_login_modal_lang">使用微信扫一扫登录</div><div id="overlay"></div></div>`
     }`,
     script
   );
@@ -199,6 +219,8 @@ function startMockWeread() {
       send("text/html; charset=utf-8", homePage(name, scenario, loggedIn));
     } else if (rest === "qr.png") {
       send("image/png", qrPng(loginUrlFor(name, url.searchParams.get("n"))));
+    } else if (rest.startsWith("wfqqreader/cover/")) {
+      send("image/png", coverPng());
     } else if (rest === "reader") {
       send("text/html; charset=utf-8", readerPage(name, scenario, url.searchParams.get("book"), Number(url.searchParams.get("ch"))));
     } else if (rest === "__event") {

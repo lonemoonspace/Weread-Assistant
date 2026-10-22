@@ -513,8 +513,10 @@ function createRunner({
       run.closed = new Promise((resolve) => {
         run.resolveClosed = resolve;
       });
-      fs.mkdirSync(run.dir, { recursive: true });
-      run.logStream = fs.createWriteStream(path.join(run.dir, "output.log"), { flags: "a" });
+      // 运行日志与阅读截图只允许属主访问，与账号数据目录一致
+      ensurePrivateDir(path.dirname(run.dir));
+      ensurePrivateDir(run.dir);
+      run.logStream = fs.createWriteStream(path.join(run.dir, "output.log"), { flags: "a", mode: 0o600 });
       run.logStream.on("error", (e) => console.error("写入运行日志失败:", run.dir, e.message));
       active.set(accountId, run);
       queue.push(run);
@@ -550,7 +552,7 @@ function createRunner({
       return publicRun(run);
     },
 
-    // 正在等待扫码的运行这一次保存的二维码截图（只含二维码的优先，没有时用整页截图）；没有时返回 null。
+    // 正在等待扫码的运行这一次保存的二维码截图（只含二维码的优先，没有或比整页截图旧时用整页截图）；没有时返回 null。
     // 二维码解析不出登录链接时由页面显示，之前运行留下的截图不会返回
     loginQrImage(accountId) {
       const run = active.get(accountId);
@@ -558,14 +560,21 @@ function createRunner({
         return null;
       }
       const dir = accountDataDir(panelDataDir, accountId);
-      for (const name of ["login-qr.png", "login.png"]) {
+      const mtime = (name) => {
         try {
-          if (fs.statSync(path.join(dir, name)).mtimeMs >= Date.parse(run.startedAt)) {
-            return { dir, name };
-          }
-        } catch (_) {}
+          return fs.statSync(path.join(dir, name)).mtimeMs;
+        } catch (_) {
+          return -1;
+        }
+      };
+      // 每次截图先写整页再写二维码区域：二维码截图早于整页截图时是之前某次截下的，不再代表当前页面
+      const startedAt = Date.parse(run.startedAt);
+      const qrAt = mtime("login-qr.png");
+      const pageAt = mtime("login.png");
+      if (qrAt >= startedAt && qrAt >= pageAt) {
+        return { dir, name: "login-qr.png" };
       }
-      return null;
+      return pageAt >= startedAt ? { dir, name: "login.png" } : null;
     },
 
     isActive(accountId) {

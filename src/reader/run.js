@@ -10,7 +10,7 @@ const { formatDuration, resolveTiming } = require("./timing");
 const MAX_ERROR_LENGTH_IN_NOTIFICATION = 100;
 
 async function saveScreenshot(driver, filePath) {
-  fs.writeFileSync(filePath, await driver.takeScreenshot(), "base64");
+  fs.writeFileSync(filePath, await driver.takeScreenshot(), { encoding: "base64", mode: 0o600 });
 }
 
 // 发送事件通知；需要为该事件发邮件时截图作为附件，发送后删除（不混入运行目录中的阅读截图）

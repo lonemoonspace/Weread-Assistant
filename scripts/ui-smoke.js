@@ -362,14 +362,26 @@ async function desktop(env, h, driver, results) {
   const duration = await h.field("阅读时长（分钟）");
   await h.waitText(".config-form", "继承：10");
   await h.click(await duration.findElement(By.css(".override-toggle input")));
-  await h.type(await duration.findElement(By.css("input[type=number]")), "30");
+  const durationInput = await duration.findElement(By.css("input[type=number]"));
+  await h.type(durationInput, "30");
+  // 尚未保存时其他账号的运行状态变化会刷新账号列表，不应清掉正在编辑的输入
+  await call("POST", "api/accounts/slow-1/runs", {});
+  await driver.sleep(1000);
+  await call("POST", "api/accounts/slow-1/stop");
+  await driver.sleep(1000);
+  assert.strictEqual(await durationInput.getAttribute("value"), "30", "账号列表刷新后应保留未保存的输入");
   await h.clickButton("保存配置");
   await h.waitText(".notice", "运行配置已保存");
   assert.strictEqual((await call("GET", "api/accounts/ok-1")).account.overrides.duration, 30);
   await h.clickButton("发送测试通知");
   await h.waitText(".test-notification", "没有配置任何通知渠道");
   await h.shot("11-config");
-  step("配置：单独设置阅读时长并保存；发送测试通知显示结果");
+  step("配置：单独设置阅读时长，其他账号运行时未保存的输入不丢失；保存后发送测试通知显示结果");
+
+  // 手工输入不完整的百分号编码时显示“页面不存在”，不是空白页
+  await h.open(base, "#%");
+  await h.waitText("main", "页面不存在");
+  step("地址中含有不完整的百分号编码时显示“页面不存在”");
 
   await h.go("#/settings");
   const concurrency = await h.waitText(".settings-grid label", "同时运行的账号数");

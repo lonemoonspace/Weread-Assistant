@@ -14,6 +14,32 @@ function checkAccountIds(accounts) {
   }
 }
 
+const isPlainObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+// 解析 panel.json 并检查顶层结构。结构不对（例如手工编辑把 accounts 写成了对象）与无法解析一样当作损坏，
+// 不能补成空值后写回，否则账号与设置会被静默清空
+function parseData(text) {
+  const raw = JSON.parse(text);
+  if (!isPlainObject(raw)) {
+    throw new Error("内容不是 JSON 对象");
+  }
+  for (const key of ["auth", "settings", "defaults"]) {
+    if (raw[key] != null && !isPlainObject(raw[key])) {
+      throw new Error(`${key} 必须是对象`);
+    }
+  }
+  if (raw.accounts != null && !(Array.isArray(raw.accounts) && raw.accounts.every(isPlainObject))) {
+    throw new Error("accounts 必须是由对象组成的数组");
+  }
+  for (const account of raw.accounts || []) {
+    // 单条规则的内容不在这里校验：无效规则由调度器跳过、接口照常返回
+    if (account.schedules != null && !(Array.isArray(account.schedules) && account.schedules.every(isPlainObject))) {
+      throw new Error(`账号 ${account.id} 的 schedules 必须是由对象组成的数组`);
+    }
+  }
+  return raw;
+}
+
 // 补齐各部分的结构。defaults 不存在时（首次启动，或由只有 auth 的旧文件升级）用 seedDefaults 初始化
 function normalizeData(raw, seedDefaults) {
   return {
@@ -21,13 +47,11 @@ function normalizeData(raw, seedDefaults) {
     auth: { passwordHash: "", ...(raw.auth || {}) },
     settings: { ...DEFAULT_SETTINGS, ...(raw.settings || {}) },
     defaults: raw.defaults || { ...seedDefaults },
-    accounts: Array.isArray(raw.accounts)
-      ? raw.accounts.map((account) => ({
-          ...account,
-          schedules: Array.isArray(account.schedules) ? account.schedules : [],
-          challenge: account.challenge && typeof account.challenge === "object" ? account.challenge : null,
-        }))
-      : [],
+    accounts: (raw.accounts || []).map((account) => ({
+      ...account,
+      schedules: account.schedules || [],
+      challenge: account.challenge && typeof account.challenge === "object" ? account.challenge : null,
+    })),
   };
 }
 
@@ -51,7 +75,7 @@ const MAX_CORRUPT_COPIES = 3;
 // panel.json 无法解析或不见了时读取上一版；上一版也没有或也损坏时拒绝启动
 function readBackup(backupPath, reason) {
   try {
-    return JSON.parse(fs.readFileSync(backupPath, "utf8"));
+    return parseData(fs.readFileSync(backupPath, "utf8"));
   } catch (_) {
     throw new Error(
       `${reason}，也没有可用的上一版 ${backupPath}。请修复 panel.json；或删除 panel.json 与 panel.json.bak 后重新启动面板（会清空全部账号与设置）`
@@ -91,7 +115,7 @@ function createStore(dataDir, { seedDefaults = {}, readOnly = false } = {}) {
       restrictPermissions(filePath);
     }
     try {
-      raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      raw = parseData(fs.readFileSync(filePath, "utf8"));
     } catch (e) {
       raw = readBackup(backupPath, `无法解析 ${filePath}：${e.message}`);
       restored = true;

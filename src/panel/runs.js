@@ -39,7 +39,7 @@ function runDir(panelDataDir, accountId, runId) {
 }
 
 function writeRunMeta(dir, meta) {
-  writeFileAtomic(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+  writeFileAtomic(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2), { mode: 0o600 });
 }
 
 function readRunMeta(dir) {

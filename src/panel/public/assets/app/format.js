@@ -77,8 +77,9 @@ export function formatMinutes(minutes) {
   return rest ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
 }
 
+// 向下取整到 0.1 小时：1799 分钟显示为 29.9 小时，不会在未达标时显示成要求的 30 小时
 export function formatHours(minutes) {
-  return `${Math.round(((minutes || 0) / 60) * 10) / 10} 小时`;
+  return `${Math.floor(Math.max(0, minutes || 0) / 6) / 10} 小时`;
 }
 
 export function durationBetween(start, end) {
