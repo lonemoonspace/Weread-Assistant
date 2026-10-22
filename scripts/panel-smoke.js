@@ -720,7 +720,7 @@ async function main() {
       assert.deepStrictEqual((await restored.call("GET", "api/accounts")).json.accounts.map((account) => account.id), ["keep-1"]);
       await restored.close();
 
-      for (const broken of [{ ...good, accounts: "me" }, { ...good, settings: "Asia/Shanghai" }, { ...good, accounts: [{ id: "x", schedules: {} }] }, []]) {
+      for (const broken of [{ ...good, accounts: "me" }, { ...good, settings: "Asia/Shanghai" }, { ...good, accounts: [{ id: "x", schedules: {} }] }, { ...good, accounts: null }, { ...good, auth: null }, { ...good, settings: null }, []]) {
         fs.writeFileSync(file, JSON.stringify(broken));
         fs.writeFileSync(`${file}.bak`, JSON.stringify(broken));
         await assert.rejects(start({ dataDir, password: "correct-horse" }), /也没有可用的上一版/, JSON.stringify(broken));
@@ -1395,6 +1395,47 @@ async function main() {
       assert.strictEqual((await panel.call("DELETE", "api/accounts/slow-1", { deleteData: true })).status, 204);
       assert.ok(!fs.existsSync(runsDir));
       assert.ok(!fs.existsSync(path.join(panel.options.dataDir, "accounts", "slow-1")));
+      // 移开第二个目录（运行记录）失败时，已移开的账号目录改回原名，账号与数据都保留，可以重试
+      await panel.call("POST", "api/accounts", { id: "slow-2" });
+      await panel.call("POST", "api/accounts/slow-2/runs");
+      const stopped = nextRun(panel, ended("slow-2"));
+      await panel.call("POST", "api/accounts/slow-2/stop");
+      await stopped;
+      const rename = fs.renameSync;
+      fs.renameSync = (from, to) => {
+        if (from === path.join(panel.options.dataDir, "runs", "slow-2")) {
+          throw Object.assign(new Error("EIO: simulated"), { code: "EIO" });
+        }
+        return rename(from, to);
+      };
+      let failed;
+      try {
+        failed = await panel.call("DELETE", "api/accounts/slow-2", { deleteData: true });
+      } finally {
+        fs.renameSync = rename;
+      }
+      assert.deepStrictEqual([failed.status, failed.json.error], [500, "delete_data_failed"]);
+      assert.strictEqual((await panel.call("GET", "api/accounts/slow-2")).status, 200);
+      assert.ok(fs.existsSync(path.join(panel.options.dataDir, "accounts", "slow-2")), "账号目录应改回原名");
+      assert.ok(fs.existsSync(path.join(panel.options.dataDir, "runs", "slow-2")));
+      assert.strictEqual((await panel.call("DELETE", "api/accounts/slow-2", { deleteData: true })).status, 204);
+      // 数据目录先移开、写入后再删除，不留下临时目录
+      for (const dir of ["accounts", "runs"]) {
+        assert.deepStrictEqual(fs.readdirSync(path.join(panel.options.dataDir, dir)).filter((name) => name.startsWith(".deleting-")), [], dir);
+      }
+    });
+
+    await scenario("升级前创建的运行记录目录在启动时收紧为 0700", async () => {
+      const dataDir = tempDir();
+      const oldRun = path.join(dataDir, "runs", "old-1", "20261001T000000Z-abcd");
+      fs.mkdirSync(oldRun, { recursive: true, mode: 0o755 });
+      fs.chmodSync(path.join(dataDir, "runs"), 0o755);
+      fs.chmodSync(path.join(dataDir, "runs", "old-1"), 0o755);
+      fs.writeFileSync(path.join(oldRun, "output.log"), "old\n", { mode: 0o644 });
+      await start({ dataDir, password: "correct-horse" });
+      for (const dir of ["runs", path.join("runs", "old-1")]) {
+        assert.strictEqual(fs.statSync(path.join(dataDir, dir)).mode & 0o777, 0o700, dir);
+      }
     });
 
     await scenario("调度规则：换算为 cron 表达式，按面板时区计算接下来的触发时间（含夏令时）", async () => {

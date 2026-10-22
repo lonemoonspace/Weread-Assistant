@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { writeFileAtomic } = require("../shared/files");
+const { ensurePrivateDir, writeFileAtomic } = require("../shared/files");
 const { formatLocalTimestamp } = require("../shared/log");
 const { ACCOUNT_ID_PATTERN } = require("./accounts");
 
@@ -57,6 +57,19 @@ function listDirs(dir) {
   }
 }
 
+// 面板启动时调用：把运行记录目录收紧为只有属主可访问（0700）。升级前创建的运行目录与日志是 0755 / 0644，
+// 上一级目录收紧后其他用户就无法再进入读取，不需要逐个修改其中的文件
+function restrictRunDirs(panelDataDir) {
+  const root = runsRoot(panelDataDir);
+  if (!fs.existsSync(root)) {
+    return;
+  }
+  ensurePrivateDir(root);
+  for (const accountId of listDirs(root)) {
+    ensurePrivateDir(path.join(root, accountId));
+  }
+}
+
 // 面板启动时调用：上次面板停止（或崩溃、断电）时仍在进行中的运行标为“中断”，结束时间取最后一次写入的时间
 function markInterruptedRuns(panelDataDir) {
   const marked = [];
@@ -91,7 +104,8 @@ function markInterruptedRuns(panelDataDir) {
       writeRunMeta(dir, meta);
       fs.appendFileSync(
         path.join(dir, "output.log"),
-        `[PANEL][${formatLocalTimestamp()}]: 面板重新启动，上次未结束的运行标记为中断\n`
+        `[PANEL][${formatLocalTimestamp()}]: 面板重新启动，上次未结束的运行标记为中断\n`,
+        { mode: 0o600 }
       );
       marked.push({ accountId, runId });
     }
@@ -108,6 +122,7 @@ module.exports = {
   RUN_ID_PATTERN,
   accountRunsDir,
   markInterruptedRuns,
+  restrictRunDirs,
   newRunId,
   readRunMeta,
   runDir,

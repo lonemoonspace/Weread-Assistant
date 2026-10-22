@@ -23,17 +23,18 @@ function parseData(text) {
   if (!isPlainObject(raw)) {
     throw new Error("内容不是 JSON 对象");
   }
+  // 字段可以不存在（旧版本的文件、首次启动），存在时类型必须正确：null 也算损坏，例如 accounts: null 不能当作没有账号
   for (const key of ["auth", "settings", "defaults"]) {
-    if (raw[key] != null && !isPlainObject(raw[key])) {
+    if (Object.hasOwn(raw, key) && !isPlainObject(raw[key])) {
       throw new Error(`${key} 必须是对象`);
     }
   }
-  if (raw.accounts != null && !(Array.isArray(raw.accounts) && raw.accounts.every(isPlainObject))) {
+  if (Object.hasOwn(raw, "accounts") && !(Array.isArray(raw.accounts) && raw.accounts.every(isPlainObject))) {
     throw new Error("accounts 必须是由对象组成的数组");
   }
   for (const account of raw.accounts || []) {
     // 单条规则的内容不在这里校验：无效规则由调度器跳过、接口照常返回
-    if (account.schedules != null && !(Array.isArray(account.schedules) && account.schedules.every(isPlainObject))) {
+    if (Object.hasOwn(account, "schedules") && !(Array.isArray(account.schedules) && account.schedules.every(isPlainObject))) {
       throw new Error(`账号 ${account.id} 的 schedules 必须是由对象组成的数组`);
     }
   }
