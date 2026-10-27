@@ -2,7 +2,13 @@
 
 版本号与 `package.json` 一致；推送 `v<版本号>` tag 时，发布流程把对应一节作为 GitHub Release 的说明。
 
-## 未发布
+## 0.1.3
+
+依赖安全更新，并修复最新一轮代码审查中核实的问题。
+
+升级说明：
+
+- 执行 `docker compose pull && docker compose up -d` 即可，`docker-compose.yml` 与数据目录无需改动
 
 安全：
 

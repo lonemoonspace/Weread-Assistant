@@ -2,7 +2,7 @@ services:
   # Web 面板：docker compose up -d 启动，浏览器访问 http://127.0.0.1:26868/
   # 首次启动的初始密码：docker compose logs app | grep 面板初始密码
   app:
-    # 固定版本时在同目录的 .env 中写 WEREAD_ASSISTANT_TAG=0.1.2；dev 为 main 分支的最新构建
+    # 固定版本时在同目录的 .env 中写 WEREAD_ASSISTANT_TAG=0.1.3；dev 为 main 分支的最新构建
     image: lonemoonspace/weread-assistant:${WEREAD_ASSISTANT_TAG:-latest}
     restart: unless-stopped
     # 停止时面板先结束进行中的阅读（关闭浏览器，最长 15 秒）
