@@ -99,8 +99,9 @@ function runPanelSmoke(imageTag) {
     if (user !== 'node') {
       throw new Error(`Panel process runs as ${user}, expected node`);
     }
+    // QEMU 中运行 arm64 镜像时，命令行以 /usr/bin/qemu-aarch64 开头
     const init = runCommand('docker', ['exec', container, 'cat', '/proc/1/cmdline'], { quiet: true });
-    if (!init.startsWith('/sbin/tini')) {
+    if (!init.split('\0').slice(0, 2).includes('/sbin/tini')) {
       throw new Error(`PID 1 is ${JSON.stringify(init)}, expected tini`);
     }
     // 内置浏览器：镜像中的 Chromium 与 chromedriver 能运行
