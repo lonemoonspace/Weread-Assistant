@@ -56,7 +56,8 @@ async function startMockSelenium({ mode = "grid", maxSessions = 1, used = 0 } = 
       return;
     }
     if (state.mode === "cut") {
-      res.writeHead(200, { "Content-Type": "application/json", "Content-Length": "100" });
+      // 分块编码，不声明长度：写出一部分后直接断开
+      res.writeHead(200, { "Content-Type": "application/json" });
       res.write('{"value":');
       setTimeout(() => req.socket.destroy(), 50);
       return;

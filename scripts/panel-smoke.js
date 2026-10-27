@@ -968,6 +968,7 @@ async function main() {
         assert.match(log, /忽略 SIGTERM/);
         assert.match(log, /秒内未退出，强制结束/);
         assert.match(log, /已请求 Selenium 删除会话 stub-session-stubborn-1/);
+        // 顺序是确定的：面板删除会话后才把 slow-1 记为结束，上面等到它结束后才停止 stubborn-1
         assert.deepStrictEqual(selenium.requests, ["DELETE /session/stub-session-slow-1", "DELETE /session/stub-session-stubborn-1"]);
         assert.strictEqual(selenium.state.sessionAuthorization, "");
 
