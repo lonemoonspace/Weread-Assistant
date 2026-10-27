@@ -331,8 +331,9 @@ function createRunner({
     const exitText = signal ? `信号 ${signal}` : code === null ? "未能启动" : `退出码 ${code}`;
     panelLog(run, `阅读子进程已退出（${exitText}）`);
 
-    // 子进程没能正常关闭浏览器时，删除它留在 Selenium 中的会话，避免一直占用会话槽位
-    if (run.sessionId && (signal || code !== 0)) {
+    // 删除子进程可能留在 Selenium 中的会话，避免一直占用会话槽位。正常退出时浏览器通常已经关闭（会话已不存在），
+    // 但子进程关闭浏览器失败时只记录日志、仍以退出码 0 退出，所以只要建立过会话就请求删除一次
+    if (run.sessionId) {
       try {
         const status = await deleteSeleniumSession(run.seleniumUrl, run.sessionId);
         panelLog(run, `已请求 Selenium 删除会话 ${run.sessionId}（HTTP ${status}）`);

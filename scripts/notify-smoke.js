@@ -16,6 +16,7 @@ const { PNG } = require("pngjs");
 
 const { createNotifier, notify, sendBark, sendNtfy, sendTestNotification } = require(path.resolve(__dirname, "..", "src", "notify"));
 const { resolveConfig } = require(path.resolve(__dirname, "..", "src", "config", "resolve"));
+const { postJson } = require(path.resolve(__dirname, "..", "src", "shared", "http"));
 
 function startMockServer() {
   const requests = [];
@@ -354,6 +355,39 @@ async function main() {
         { channel: "bark", ok: false },
         { channel: "ntfy", ok: true },
       ]);
+    });
+
+    await scenario("推送接口持续缓慢返回、响应中途断开或响应过大时按时返回失败", async () => {
+      const server = http.createServer((req, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        if (req.url === "/drip") {
+          // 每 50ms 发送一个字节，连接一直不空闲
+          const timer = setInterval(() => res.write(" "), 50);
+          res.on("close", () => clearInterval(timer));
+        } else if (req.url === "/cut") {
+          res.write("{");
+          setTimeout(() => req.socket.destroy(), 50);
+        } else {
+          res.end(" ".repeat(2 * 1024 * 1024));
+        }
+      });
+      await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const base = `http://127.0.0.1:${server.address().port}`;
+      try {
+        const startedAt = Date.now();
+        const drip = await postJson(`${base}/drip`, {}, {}, 300);
+        assert.deepStrictEqual([drip.ok, drip.error], [false, "request timeout after 300ms"]);
+        assert.ok(Date.now() - startedAt < 3000, "持续收到数据时也应按时返回");
+        const cut = await postJson(`${base}/cut`, {}, {}, 3000);
+        assert.strictEqual(cut.ok, false);
+        assert.match(cut.error, /aborted/);
+        const big = await postJson(`${base}/big`, {}, {}, 3000);
+        assert.strictEqual(big.ok, false);
+        assert.match(big.error, /response larger than/);
+      } finally {
+        server.closeAllConnections();
+        await new Promise((resolve) => server.close(resolve));
+      }
     });
 
     await scenario("登录链接推送附带按钮且同一链接只推送一次", async () => {
