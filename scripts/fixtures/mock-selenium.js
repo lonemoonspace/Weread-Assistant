@@ -6,6 +6,8 @@
 //   legacy  /status 返回 404，只有 /wd/hub/status 可用
 //   html    不是 Selenium（返回网页）
 //   hang    不响应
+//   drip    返回响应头后每 50ms 发送一个字节，从不结束（连接一直不空闲）
+//   cut     返回一部分响应体后断开连接
 // state.delayMs 大于 0 时延迟这么久再响应状态请求。stop() 后连接被拒绝，start() 在原端口重新监听
 const http = require("http");
 
@@ -44,6 +46,20 @@ async function startMockSelenium({ mode = "grid", maxSessions = 1, used = 0 } = 
       return;
     }
     if (state.mode === "hang") {
+      return;
+    }
+    if (state.mode === "drip") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write('{"value":');
+      const timer = setInterval(() => res.write(" "), 50);
+      res.on("close", () => clearInterval(timer));
+      return;
+    }
+    if (state.mode === "cut") {
+      // 分块编码，不声明长度：写出一部分后直接断开
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write('{"value":');
+      setTimeout(() => req.socket.destroy(), 50);
       return;
     }
     if (state.delayMs > 0) {

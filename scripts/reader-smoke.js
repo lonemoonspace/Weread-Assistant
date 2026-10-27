@@ -20,6 +20,7 @@ const fs = require("fs");
 const http = require("http");
 const os = require("os");
 const path = require("path");
+const { PNG } = require("pngjs");
 
 const { resolveConfig } = require(path.resolve(__dirname, "..", "src", "config", "resolve"));
 const { runOnce } = require(path.resolve(__dirname, "..", "src", "reader", "run"));
@@ -331,7 +332,12 @@ async function main() {
         assert.ok(minutes.length >= 2 && minutes.every((data, i) => data.minute === i + 1), "阅读进度应逐分钟上报");
         assert.ok(minutes.every((data) => data.total === 3));
         assert.strictEqual(minutes[0].screenshot, "screenshot-1.png");
-        assert.ok(fs.existsSync(path.join(dataDir, "run", "screenshot-1.png")), "截图写入指定的运行目录");
+        const shotPath = path.join(dataDir, "run", "screenshot-1.png");
+        assert.ok(fs.existsSync(shotPath), "截图写入指定的运行目录");
+        // 写入的是浏览器返回的完整截图（base64 解码后的 PNG），不是空文件
+        const shot = PNG.sync.read(fs.readFileSync(shotPath));
+        assert.ok(shot.width > 0 && shot.height > 0, "截图应为可解码的 PNG");
+        assert.strictEqual(fs.statSync(shotPath).mode & 0o777, 0o600, "阅读截图只允许属主读写");
         assert.ok(!fs.existsSync(path.join(dataDir, "screenshot-1.png")));
         assert.ok(fs.existsSync(path.join(dataDir, "cookies.json")), "cookies 仍写入账号数据目录");
         assert.ok(await sessionClosed(byName("session").sessionId), "运行结束后应关闭浏览器会话");

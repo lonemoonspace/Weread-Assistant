@@ -930,7 +930,7 @@ async function main() {
       assert.strictEqual(runFiles(panel, "crash-1", crash.id).meta().exitCode, 3);
     });
 
-    await scenario("停止：子进程收到 SIGTERM 后退出记为已停止；不响应时超时强制结束并删除 Selenium 会话", async () => {
+    await scenario("停止：子进程收到 SIGTERM 后退出记为已停止；不响应时超时强制结束；两种情况都删除 Selenium 会话", async () => {
       const selenium = await startMockSelenium();
       try {
         const panel = await startAuthed();
@@ -953,7 +953,10 @@ async function main() {
         assert.strictEqual(stopping.json.run.stopRequested, true);
         const slow = await slowEnded;
         assert.strictEqual(slow.status, "stopped");
-        assert.match(await runFiles(panel, "slow-1", slow.id).log(), /收到 SIGTERM，关闭浏览器/);
+        const slowLog = await runFiles(panel, "slow-1", slow.id).log();
+        assert.match(slowLog, /收到 SIGTERM，关闭浏览器/);
+        // 正常退出的子进程通常已经关闭了浏览器，仍请求删除一次会话：关闭浏览器失败时会话也不会残留
+        assert.match(slowLog, /已请求 Selenium 删除会话 stub-session-slow-1（HTTP 200）/);
 
         const stubbornEnded = nextRun(panel, ended("stubborn-1"));
         await panel.call("POST", "api/accounts/stubborn-1/stop");
@@ -965,8 +968,8 @@ async function main() {
         assert.match(log, /忽略 SIGTERM/);
         assert.match(log, /秒内未退出，强制结束/);
         assert.match(log, /已请求 Selenium 删除会话 stub-session-stubborn-1/);
-        // 正常退出的子进程自己关闭了浏览器，不需要删除会话
-        assert.deepStrictEqual(selenium.requests, ["DELETE /session/stub-session-stubborn-1"]);
+        // 顺序是确定的：面板删除会话后才把 slow-1 记为结束，上面等到它结束后才停止 stubborn-1
+        assert.deepStrictEqual(selenium.requests, ["DELETE /session/stub-session-slow-1", "DELETE /session/stub-session-stubborn-1"]);
         assert.strictEqual(selenium.state.sessionAuthorization, "");
 
         // Selenium 地址带用户名与密码时，删除会话改用 Authorization 请求头
@@ -1305,7 +1308,7 @@ async function main() {
       }
     });
 
-    await scenario("Selenium 状态：停止、不是 Selenium、超时都返回 unreachable 与原因；旧版地址回退到 /wd/hub/status", async () => {
+    await scenario("Selenium 状态：停止、不是 Selenium、超时（含持续缓慢发送数据）、响应中途断开都返回 unreachable 与原因；旧版地址回退到 /wd/hub/status", async () => {
       const selenium = await startMockSelenium();
       try {
         const panel = await startAuthed({ seleniumTimeoutMs: 300 });
@@ -1331,6 +1334,22 @@ async function main() {
         assert.match(server.error, /0\.3 秒内没有响应/);
         assert.ok(Date.now() - startedAt < 3000, "超时后应及时返回");
         assert.deepStrictEqual(selenium.requests, ["GET /status"], "超时后不再尝试下一个地址");
+
+        // 超时是整个请求的时限：对端不停缓慢发送数据（连接从不空闲）时同样按时返回
+        selenium.state.mode = "drip";
+        selenium.requests.length = 0;
+        const dripStartedAt = Date.now();
+        server = await check();
+        assert.strictEqual(server.state, "unreachable");
+        assert.match(server.error, /0\.3 秒内没有响应/);
+        assert.ok(Date.now() - dripStartedAt < 3000, "持续收到数据时也应按时返回");
+        assert.deepStrictEqual(selenium.requests, ["GET /status"]);
+
+        // 响应中途断开时不会一直等待
+        selenium.state.mode = "cut";
+        server = await check();
+        assert.strictEqual(server.state, "unreachable");
+        assert.match(server.error, /连接被重置（ECONNRESET）/);
 
         selenium.state.mode = "legacy";
         selenium.requests.length = 0;
@@ -1669,6 +1688,16 @@ async function main() {
       assert.ok(!("minuteMarks" in latest), "列表不返回逐分钟时间");
       const page2 = await panel.call("GET", `api/accounts/ok-1/runs?limit=2&before=${second}`);
       assert.deepStrictEqual([page2.json.runs.map((run) => run.id), page2.json.nextBefore], [[first], null]);
+      // 更早的记录读不出来（meta.json 损坏）时，最后一页不再提供下一页
+      const corruptId = writeRun(panel.options.dataDir, "ok-1", { queuedAt: "2020-01-01T00:00:00.000Z" });
+      const corruptDir = path.join(panel.options.dataDir, "runs", "ok-1", corruptId);
+      fs.writeFileSync(path.join(corruptDir, "meta.json"), "{");
+      const whole = await panel.call("GET", "api/accounts/ok-1/runs?limit=3");
+      assert.deepStrictEqual([whole.json.runs.map((run) => run.id), whole.json.nextBefore], [[third, second, first], null]);
+      const lastPage = await panel.call("GET", `api/accounts/ok-1/runs?limit=2&before=${second}`);
+      assert.deepStrictEqual([lastPage.json.runs.map((run) => run.id), lastPage.json.nextBefore], [[first], null]);
+      assert.strictEqual((await panel.call("GET", "api/accounts/ok-1/runs?limit=2")).json.nextBefore, second);
+      fs.rmSync(corruptDir, { recursive: true });
       for (const query of ["limit=0", "limit=101", "limit=x", "before=bad"]) {
         assert.strictEqual((await panel.call("GET", `api/accounts/ok-1/runs?${query}`)).status, 400, query);
       }

@@ -163,20 +163,18 @@ function listRuns(panelDataDir, accountId, { limit = 20, before = "" } = {}) {
     ids = ids.filter((id) => id < before);
   }
   const runs = [];
-  let last = "";
-  for (const id of ids) {
-    if (runs.length >= size) {
-      break;
-    }
-    last = id;
-    const dir = path.join(runsRoot(panelDataDir), accountId, id);
+  let next = 0;
+  for (; next < ids.length && runs.length < size; next += 1) {
+    const dir = path.join(runsRoot(panelDataDir), accountId, ids[next]);
     const meta = readMeta(dir);
     if (meta) {
       runs.push(runSummary(meta, dir));
     }
   }
-  const more = ids.length > 0 && last && ids[ids.length - 1] !== last;
-  return { runs, nextBefore: more ? last : null };
+  // 剩下的都是读不出来的记录时没有下一页。通常只需读取下一条（已缓存，下一页直接使用）；
+  // 剩下的记录都读不出来时会逐条读完，读不出来的不缓存，每次请求都会重新读取
+  const more = ids.slice(next).some((id) => readMeta(path.join(runsRoot(panelDataDir), accountId, id)));
+  return { runs, nextBefore: more ? ids[next - 1] : null };
 }
 
 // 单次运行：运行记录、截图列表，以及按天拆分的阅读分钟数
