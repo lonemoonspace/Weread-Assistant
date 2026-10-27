@@ -65,6 +65,9 @@ const CHILD_ENV_KEYS = new Set([
   "http_proxy",
   "https_proxy",
   "no_proxy",
+  // 内置浏览器的路径
+  "CHROME_BIN",
+  "CHROMEDRIVER_PATH",
 ]);
 
 function childEnv() {
@@ -137,6 +140,17 @@ async function deleteSeleniumSession(seleniumUrl, sessionId) {
   }
   const res = await fetch(url, { method: "DELETE", headers, signal: AbortSignal.timeout(SESSION_DELETE_TIMEOUT_MS) });
   return res.status;
+}
+
+function killProcessGroup(child) {
+  if (!child || !child.pid) {
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch (_) {
+    // 组内已没有进程
+  }
 }
 
 /**
@@ -331,9 +345,13 @@ function createRunner({
     const exitText = signal ? `信号 ${signal}` : code === null ? "未能启动" : `退出码 ${code}`;
     panelLog(run, `阅读子进程已退出（${exitText}）`);
 
+    // 子进程是进程组的组长，内置浏览器（chromedriver 与 Chromium）在同一进程组中。子进程被强制结束时
+    // 它们不会随之退出，这里结束组内剩下的进程；正常退出时组内已没有进程
+    killProcessGroup(run.child);
+
     // 删除子进程可能留在 Selenium 中的会话，避免一直占用会话槽位。正常退出时浏览器通常已经关闭（会话已不存在），
     // 但子进程关闭浏览器失败时只记录日志、仍以退出码 0 退出，所以只要建立过会话就请求删除一次
-    if (run.sessionId) {
+    if (run.sessionId && run.seleniumUrl) {
       try {
         const status = await deleteSeleniumSession(run.seleniumUrl, run.sessionId);
         panelLog(run, `已请求 Selenium 删除会话 ${run.sessionId}（HTTP ${status}）`);
@@ -393,6 +411,8 @@ function createRunner({
     let child;
     try {
       child = fork(workerPath, [], {
+        // 单独的进程组，退出后可以结束它留下的浏览器进程
+        detached: true,
         stdio: ["ignore", "pipe", "pipe", "ipc"],
         env: childEnv(),
         serialization: "json",

@@ -677,6 +677,38 @@ async function main() {
       assert.deepStrictEqual(upgraded.accounts, []);
     });
 
+    await scenario("没有设置 SELENIUM_URL 时，把旧版写入的 http://selenium:4444 清空，改用内置浏览器；其他地址与设置了 SELENIUM_URL 时不变", async () => {
+      const dataDir = tempDir();
+      const file = path.join(dataDir, "panel.json");
+      const legacy = {
+        version: 1,
+        auth: { passwordHash: await hashPassword("old-password") },
+        defaults: { seleniumUrl: "http://selenium:4444/", duration: "30" },
+        accounts: [
+          { id: "legacy", name: "旧地址", overrides: { seleniumUrl: "selenium:4444" } },
+          { id: "custom", name: "自定义", overrides: { seleniumUrl: "http://grid.lan:4444" } },
+          { id: "plain", name: "未覆盖" },
+        ],
+      };
+      fs.writeFileSync(file, JSON.stringify(legacy), { mode: 0o600 });
+      const kept = await start({ dataDir, seleniumUrl: "http://selenium:4444" });
+      await kept.close();
+      assert.strictEqual(JSON.parse(fs.readFileSync(file, "utf8")).defaults.seleniumUrl, "http://selenium:4444/", "设置了 SELENIUM_URL 时不迁移");
+
+      const panel = await start({ dataDir });
+      const migrated = JSON.parse(fs.readFileSync(file, "utf8"));
+      assert.deepStrictEqual(migrated.defaults, { duration: "30" });
+      assert.deepStrictEqual(
+        migrated.accounts.map((account) => [account.id, account.overrides]),
+        [
+          ["legacy", {}],
+          ["custom", { seleniumUrl: "http://grid.lan:4444" }],
+          ["plain", undefined],
+        ]
+      );
+      await panel.close();
+    });
+
     await scenario("panel.json 修改前保存上一版；损坏时备份损坏文件并从上一版恢复，上一版也不可用时拒绝启动", async () => {
       const first = await startAuthed();
       await first.call("POST", "api/accounts", { id: "keep-1" });
@@ -1229,6 +1261,7 @@ async function main() {
         assert.strictEqual(res.json.servers.length, 2);
         assert.deepStrictEqual(defaultServer, {
           url: grid.url,
+          builtin: false,
           isDefault: true,
           accounts: [
             { id: "slow-1", name: "账号slow-1" },
@@ -1246,6 +1279,7 @@ async function main() {
           driverServer,
           {
             url: driver.url,
+            builtin: false,
             isDefault: false,
             accounts: [{ id: "ok-2", name: "账号ok-2" }],
             panelRuns: 0,
@@ -1305,6 +1339,56 @@ async function main() {
       } finally {
         await grid.stop();
         await driver.stop();
+      }
+    });
+
+    await scenario("Selenium 状态：地址为空时检查内置浏览器，显示浏览器版本；找不到或无法运行时为 unreachable 并附带原因", async () => {
+      const binDir = tempDir();
+      const fake = (name, output) => {
+        const file = path.join(binDir, name);
+        fs.writeFileSync(file, `#!/bin/sh\necho "${output}"\n`, { mode: 0o755 });
+        return file;
+      };
+      const saved = { PATH: process.env.PATH, CHROME_BIN: process.env.CHROME_BIN, CHROMEDRIVER_PATH: process.env.CHROMEDRIVER_PATH };
+      const restore = () => {
+        for (const [key, value] of Object.entries(saved)) {
+          if (value === undefined) {
+            delete process.env[key];
+          } else {
+            process.env[key] = value;
+          }
+        }
+      };
+      try {
+        delete process.env.CHROME_BIN;
+        delete process.env.CHROMEDRIVER_PATH;
+        process.env.PATH = binDir;
+        const panel = await startAuthed();
+        await panel.call("POST", "api/accounts", { id: "local-1", name: "本机" });
+        const check = async () => (await panel.call("GET", "api/selenium/status")).json.servers;
+
+        let servers = await check();
+        assert.strictEqual(servers.length, 1);
+        assert.deepStrictEqual(
+          [servers[0].url, servers[0].builtin, servers[0].isDefault, servers[0].state, servers[0].error],
+          ["", true, true, "unreachable", "找不到 chromedriver 与 Chromium"]
+        );
+
+        fake("chromedriver", "ChromeDriver 155.0.8059.84");
+        fake("chromium-browser", "Chromium 155.0.8059.84 Alpine Linux");
+        servers = await check();
+        assert.deepStrictEqual(
+          [servers[0].state, servers[0].ready, servers[0].message, servers[0].sessions, servers[0].accounts],
+          ["ready", true, "Chromium 155.0.8059.84 Alpine Linux", null, [{ id: "local-1", name: "本机" }]]
+        );
+
+        // 用环境变量指定的浏览器无法运行
+        process.env.CHROME_BIN = path.join(binDir, "missing-chrome");
+        servers = await check();
+        assert.strictEqual(servers[0].state, "unreachable");
+        assert.match(servers[0].error, /无法读取浏览器版本/);
+      } finally {
+        restore();
       }
     });
 

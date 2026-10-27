@@ -100,6 +100,25 @@ jobs:
         if: failure()
         run: docker logs selenium
 
+  # 镜像中的内置浏览器（Alpine 的 Chromium 与 chromedriver）：在本机架构（amd64）构建镜像，在容器中用内置浏览器跑阅读流程 smoke。
+  # arm64 镜像在 QEMU 中运行浏览器太慢，阅读节奏的断言不可靠，下面的 image 任务只检查 Chromium 与 chromedriver 能运行
+  builtin-browser:
+    name: 阅读流程（镜像内置浏览器）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 构建镜像
+        run: docker build -t weread-assistant:builtin-browser .
+      # 测试脚本不在镜像中，只读挂载；以 node 用户运行，tini 回收浏览器进程
+      - name: 阅读流程 smoke（内置浏览器）
+        run: >-
+          docker run --rm --user node --entrypoint /sbin/tini
+          -v "$PWD/scripts:/app/scripts:ro" -e SELENIUM_URL=
+          weread-assistant:builtin-browser -- node scripts/reader-smoke.js
+
   # 只发布 linux/arm64：在 QEMU 模拟的 arm64 环境中构建并运行与发布相同的镜像
   image:
     name: arm64 镜像构建与运行检查

@@ -18,6 +18,7 @@
 | 收紧已有文件权限 | 启动前 `panel.json` 权限为 0644 | 启动后权限为 0600，日志提示已修改 |
 | 全局设置与默认配置 | 修改时区、并发数与默认阅读时长；提交非法时区、并发数 0、阅读时长 0 或 400 位数字、选书方式 9、未知项、`dataDir` | 合法值生效；非法值返回 400，`message` 指出字段名称与原因；一项非法时整个请求不生效；`null` 恢复默认 |
 | SELENIUM_URL 只写入一次 | 首次启动设置 `SELENIUM_URL`，在面板中改为其他地址后用新的 `SELENIUM_URL` 重启 | 全局默认中的 Selenium 地址保持面板中的设置 |
+| 旧版 Selenium 地址迁移 | `panel.json` 的全局默认为 `http://selenium:4444/`，账号 `legacy` 覆盖为 `selenium:4444`，`custom` 覆盖为 `http://grid.lan:4444`，`plain` 没有覆盖；先设置 `SELENIUM_URL` 启动，再不设置启动 | 设置了 `SELENIUM_URL` 时不变；不设置时全局默认与 `legacy` 中的地址被删除（改用内置浏览器），`custom` 保留，`plain` 不变 |
 | 账号增删改查 | 新建、重复新建、非法 ID（`Bad_ID`、`-x`、`x-`、33 位、`../etc`）、修改名称与启用状态、修改 ID、删除 | 新建 201 并创建数据目录；重复 409；非法 ID 400；不能修改 ID；不存在的账号 404；不带请求体也能删除，默认保留数据目录，重新添加时沿用 cookies；`deleteData: true` 时删除目录；缺少 `X-WA-Request` 时 403 |
 | 单实例 | 同一数据目录先后启动两个面板 | 第二个报错 `另一个面板实例…正在使用数据目录`；第一个关闭后删除 `panel.lock`，可以重新启动 |
 | 遗留的锁文件 | `panel.lock` 指向本机已不存在的进程、其他主机且 60 秒未更新、内容损坏；另有其他主机且刚更新 | 前三种情况接管并正常启动；其他主机刚更新时报错，提示该主机名与进程号 |
@@ -46,6 +47,7 @@
 | 保留策略 | 写入 5 次有截图的运行（最早两次 3 天前结束）与 1 次没有截图的仅登录运行；把截图保留改为 2 次、日志保留改为 1 天；再以进行中的运行调用清理（保留 0 次）；之后保留 1 次并运行两次 | 修改设置后立即清理：只有最近 2 次有截图的运行保留截图，仅登录运行不占名额；3 天前的两份日志被删除、日志接口 404；运行记录全部保留；进行中的运行的截图不清理；运行结束后自动删除上一次的截图，记录仍在 |
 | 测试通知 | 未配置渠道时发送；账号覆盖 ntfy（指向模拟服务）并开启邮件但不填 SMTP，关闭完成与失败事件后按账号发送；全局默认配置 ntfy 后不带账号发送；账号不存在；缺少 `X-WA-Request` | 未配置时 `results` 为空；按账号发送时 ntfy 成功、邮件失败，标题为 `WeReadAssistant · 小明 · 测试通知`，不受事件开关影响；按全局发送时只有 ntfy、标题不含账号名称、主题为全局配置；账号不存在 404；缺少请求头 403 |
 | Selenium 状态：分组与会话数 | 两个模拟 Selenium：Grid 格式（1 个会话）与 chromedriver 格式；全局默认为 Grid 地址（带末尾斜杠），`ok-2` 覆盖为不带协议、带用户名与密码的 chromedriver 地址；并发数 3；未登录访问；`slow-1` 阅读中且 Grid 的会话被占用；之后会话增加到 3 个、节点改为 DOWN；最后所有账号都改用其他地址 | 未登录 401；登录后返回 `checkedAt`、`maxConcurrentRuns` 与两个地址：Grid 为全局默认、账号 `slow-1`、`ok-1`，`ready`、已用 0/1、1 个节点；chromedriver 地址只有 `ok-2`，`ready`、会话数为 null；返回内容中没有用户名与密码，查询时带了对应的 Basic 认证；阅读中且会话占满时 Grid 为 `busy`、`ready` 为 false、已用 1/1、`panelRuns` 为 1，结束后 `panelRuns` 为 0；3 个会话时为 `ready`、已用 1/3；节点 DOWN 时为 `not-ready`、总数 0；所有账号改用其他地址后全局默认地址仍列出（`accounts` 为空），其他地址按账号顺序列出 |
+| Selenium 状态：内置浏览器 | 全局默认没有 Selenium 地址；`PATH` 中先没有 chromedriver 与 Chromium，再放入输出版本号的假 `chromedriver` 与 `chromium-browser`；最后用 `CHROME_BIN` 指向不存在的文件 | 只有一项，`url` 为空、`builtin` 为 true、全局默认；先为 `unreachable`，原因为“找不到 chromedriver 与 Chromium”；之后为 `ready`，`message` 为浏览器版本，会话数为 null，列出使用它的账号；最后为 `unreachable`，原因含“无法读取浏览器版本” |
 | Selenium 状态：故障 | 查询超时设为 0.3 秒；模拟 Selenium 停止、返回网页、不响应、返回响应头后每 50ms 发送一个字节且从不结束、返回一部分后断开连接、`/status` 返回 404 只有 `/wd/hub/status` 可用；同时发出 3 个查询（Selenium 延迟 0.2 秒响应） | 停止时为 `unreachable`，原因为“连接被拒绝（ECONNREFUSED）”；返回网页时原因含“返回的不是 Selenium 状态”；不响应时 3 秒内返回“0.3 秒内没有响应”，且只请求了 `/status`；持续缓慢发送数据时同样 3 秒内返回“0.3 秒内没有响应”；中途断开时原因为“连接被重置（ECONNRESET）”；`/status` 404 时再请求 `/wd/hub/status`，结果为 `ready`；同时的 3 个查询只向 Selenium 发出 1 个请求 |
 | 端口被占用 | 端口已被其他进程监听 | 报错 `端口 <端口> 已被占用，请通过 PANEL_PORT 更换端口` |
 | 镜像 | 执行 `npm run test:runtime` | 容器健康检查通过；面板进程以 `node` 用户运行；`panel.json` 属于 `node` 且权限 600；`docker logs` 中有初始密码；`docker stop` 在 5 秒内完成 |

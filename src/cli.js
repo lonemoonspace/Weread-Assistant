@@ -29,7 +29,10 @@ Environment variables:
   PANEL_TRUST_PROXY        Trust X-Forwarded-* headers: true or the number of proxy hops (default: false)
   PANEL_PUBLIC_URL         Public URL of the panel, used in notification links
   PANEL_DATA_DIR           Panel data directory (default: data)
-  SELENIUM_URL             Selenium address written to the panel's global settings on first start`);
+  SELENIUM_URL             Selenium address written to the panel's global settings on first start;
+                           leave unset to use the built-in browser (Chromium + chromedriver in the image)
+  CHROME_BIN               Built-in browser binary (default: chromium-browser or chromium on PATH)
+  CHROMEDRIVER_PATH        Built-in chromedriver binary (default: chromedriver on PATH)`);
 }
 
 async function startPanelCommand(args) {

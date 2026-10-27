@@ -14,7 +14,7 @@ const SETTINGS_FIELDS = [
     key: "maxConcurrentRuns",
     type: "integer",
     label: "同时运行的账号数",
-    description: "应与 Selenium 的 SE_NODE_MAX_SESSIONS 一致。",
+    description: "使用内置浏览器时每个账号单独启动一个浏览器（各约占 600MB 内存）；使用 Selenium 时应与它的 SE_NODE_MAX_SESSIONS 一致。",
     min: 1,
     max: 10,
     default: 1,
@@ -40,7 +40,7 @@ const SETTINGS_FIELDS = [
     key: "vncUrl",
     type: "string",
     label: "noVNC 地址",
-    description: "填写后在总览与实时页面显示查看浏览器画面的链接，留空则不显示。",
+    description: "使用 Selenium 并开启了它的 noVNC 时填写，在总览与实时页面显示查看浏览器画面的链接；内置浏览器没有画面，留空即可。",
     default: "",
   },
 ];

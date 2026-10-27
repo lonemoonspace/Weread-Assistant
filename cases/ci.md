@@ -6,7 +6,7 @@ CI 见 `.github/workflows/ci.yml`，镜像发布见 `.github/workflows/release.y
 | --- | --- | --- |
 | 自查 | 执行 `npm run check` | 输出语法检查、第三方文件校验值、页面约定 3 项并退出码 0 |
 | 自查发现问题 | 分别：面板页面的 ES 模块中写入语法错误；模板中加 `style="..."` 或 `v-html`；`index.html` 中加内联脚本；`login.html` 引用不存在的脚本；改动 `assets/vendor/README.md` 中的校验值；CommonJS 脚本中写入语法错误 | 每种情况都退出码 1，并指出文件与问题（ES 模块按模块方式检查，不会因 `import` 语句被跳过） |
-| Pull Request 检查 | 向 `main` 发起 Pull Request | 运行 4 个任务并全部通过：自查与 smoke（`npm run check`、`docker compose config`、通知、配置、面板）；依赖安全检查（`npm audit --omit=dev --audit-level=high`）；阅读流程与页面（主机网络的 `selenium/standalone-chromium`，页面截图作为 artifact 保存 7 天）；arm64 镜像构建与运行检查（QEMU，`RUNTIME_SMOKE_ARCH=arm64`） |
+| Pull Request 检查 | 向 `main` 发起 Pull Request | 运行 4 个任务并全部通过：自查与 smoke（`npm run check`、`docker compose config`、通知、配置、面板）；依赖安全检查（`npm audit --omit=dev --audit-level=high`）；阅读流程与页面（主机网络的 `selenium/standalone-chromium`，页面截图作为 artifact 保存 7 天；另在本机构建的 amd64 镜像中用内置浏览器运行阅读流程 smoke）；arm64 镜像构建与运行检查（QEMU，`RUNTIME_SMOKE_ARCH=arm64`） |
 | 同一分支再次推送 | Pull Request 的 CI 运行中再次推送 | 旧的运行被取消 |
 | 第三方 Action | 查看工作流文件 | 每个 Action 都按提交 SHA 固定，注释中写明版本；`actions/checkout` 不保留凭据 |
 | main 发布 dev | 合并到 `main` 后 CI 通过 | “发布镜像”工作流运行，构建并检查 arm64 镜像后推送 `docker.io/lonemoonspace/weread-assistant:dev`；`docker buildx imagetools inspect lonemoonspace/weread-assistant:dev` 只有 `linux/arm64`，镜像标签中的 revision 为该提交 |

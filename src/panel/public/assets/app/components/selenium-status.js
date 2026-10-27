@@ -19,7 +19,7 @@ export const VncLink = {
   template: `<a v-if="url" class="vnc-link" :href="url" target="_blank" rel="noopener noreferrer">查看浏览器画面（noVNC）</a>`,
 };
 
-// 总览顶部的 Selenium 状态：是否就绪、已用/总会话数；连不上时给出明确提示
+// 总览顶部的浏览器状态：内置浏览器是否可用；Selenium 是否就绪、已用/总会话数；连不上时给出明确提示
 export const SeleniumStatus = {
   components: { VncLink },
   setup() {
@@ -109,7 +109,7 @@ export const SeleniumStatus = {
   template: `
     <article class="selenium-card" :class="data ? 'selenium-' + overall : ''">
       <header class="selenium-head">
-        <strong>Selenium</strong>
+        <strong>浏览器</strong>
         <span v-if="data" class="badge" :class="'selenium-state-' + overall">{{ STATE_LABELS[overall] }}</span>
         <span v-else-if="!loadError" class="muted" aria-busy="true">正在检查…</span>
         <span class="selenium-actions">
@@ -117,20 +117,26 @@ export const SeleniumStatus = {
           <button type="button" class="secondary small" :aria-busy="loading" :disabled="loading" @click="refresh">刷新</button>
         </span>
       </header>
-      <p v-if="loadError" class="error-text">无法获取 Selenium 状态：{{ loadError }}</p>
+      <p v-if="loadError" class="error-text">无法获取浏览器状态：{{ loadError }}</p>
       <div v-for="(server, index) in servers" :key="index" class="selenium-server">
         <p class="selenium-line">
-          <code>{{ server.url }}</code>
+          <span v-if="server.builtin">内置浏览器</span>
+          <code v-else>{{ server.url }}</code>
           <span v-if="servers.length > 1" class="badge" :class="'selenium-state-' + server.state">{{ server.label }}</span>
           <span v-if="server.sessions">已用 <strong>{{ server.sessions.used }}/{{ server.sessions.total }}</strong> 个会话</span>
+          <span v-else-if="server.builtin && server.state === 'ready'" class="muted">{{ server.message }}</span>
           <span v-else-if="server.state !== 'unreachable'" class="muted">不提供会话数</span>
           <small v-if="servers.length > 1" class="muted">
             {{ server.isDefault ? "全局默认" : "" }}{{ server.isDefault && server.accountNames ? " · " : "" }}{{ server.accountNames ? "账号：" + server.accountNames : "" }}
           </small>
         </p>
-        <div v-if="server.state === 'unreachable'" class="selenium-alert alert-error" role="alert">
+        <div v-if="server.builtin && server.state === 'unreachable'" class="selenium-alert alert-error" role="alert">
+          <p><strong>内置浏览器不可用：{{ server.error }}。</strong>阅读和扫码登录都无法开始。</p>
+          <p>Docker 镜像中已包含浏览器；不使用镜像运行面板时，请安装 Chromium 与 chromedriver，或在<a href="#/settings">设置</a>中填写 Selenium 地址。</p>
+        </div>
+        <div v-else-if="server.state === 'unreachable'" class="selenium-alert alert-error" role="alert">
           <p><strong>无法连接 Selenium：{{ server.error }}。</strong>阅读和扫码登录都无法开始。</p>
-          <p>请确认 Selenium 容器正在运行（使用 docker compose 部署时执行 <code>docker compose up -d selenium</code>），并检查设置中的 Selenium 地址。</p>
+          <p>请确认 Selenium 正在运行，并检查设置中的 Selenium 地址；改用内置浏览器时把该地址清空。</p>
         </div>
         <p v-else-if="server.state === 'not-ready'" class="selenium-alert alert-warn">
           Selenium 未就绪：{{ server.messageText || "没有可用的浏览器节点" }}。刚启动时需要几秒钟；一直未就绪时请查看 Selenium 容器的日志。

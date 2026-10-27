@@ -23,7 +23,7 @@
 | --- | --- |
 | 按环境变量运行（`node src/cli.js run`、`app.js`、`schedule` 子命令） | 删除。账号与配置在面板中创建，由面板调度运行；命令行只保留 `run --account <id>` |
 | `WEREAD_*`、`BARK_*`、`NTFY_*`、`EMAIL_*` 等环境变量 | 改为面板中的运行配置（全局默认 + 账号覆盖），配置项名称见 `src/config/schema.js` |
-| `WEREAD_REMOTE_BROWSER` | 改为面板中的 Selenium 地址；首次启动面板时取 `SELENIUM_URL` |
+| `WEREAD_REMOTE_BROWSER` | 改为面板中的 Selenium 地址（留空时使用镜像内置的浏览器）；首次启动面板时取 `SELENIUM_URL` |
 | `WEREAD_BROWSER` | 删除，只支持 Chromium |
 | `WEREAD_AGREE_TERMS` | 删除，不再上报使用统计 |
 | `WEREAD_DATA_DIR` | 由面板数据目录（`PANEL_DATA_DIR`，默认 `data`）取代，每个账号的数据在 `accounts/<id>/` |
@@ -51,7 +51,7 @@ flowchart TD
 
 | 约束 | 说明 |
 | --- | --- |
-| 只用远程浏览器 | 不在本机启动浏览器；本地开发同样需要一个 Selenium 服务或 chromedriver |
+| 浏览器 | Selenium 地址留空时在本机启动 chromedriver 与无界面的 Chromium（镜像中已安装；本地需要自行安装，或用 `CHROMEDRIVER_PATH`、`CHROME_BIN` 指定）；填写时连接该地址的 Selenium 或 chromedriver |
 | 退出码 | `run` 成功时为 0；等待扫码超时、运行出错、被停止、命令或参数错误、未指定账号、账号不存在或已停用、面板数据不存在时为 1 |
 | 停止信号 | `run` 收到 SIGTERM（`docker stop`）或 SIGINT（Ctrl+C）时先关闭浏览器再退出，不发送失败通知；在容器中作为 1 号进程运行时也能及时响应 |
 | 日志完整 | 退出前等待日志文件写入完成，`output.log` 包含最后的 `Run finished` 行 |

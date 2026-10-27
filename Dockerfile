@@ -1,4 +1,5 @@
-FROM node:24-alpine
+# Alpine 只在最新的稳定分支更新 Chromium：升级 Alpine 版本时一并修改，旧分支中的 Chromium 不再获得安全更新
+FROM node:24-alpine3.24
 
 LABEL org.opencontainers.image.title="WeReadAssistant" \
       org.opencontainers.image.description="非官方的微信读书自动阅读助手，带 Web 管理面板（与腾讯无关）" \
@@ -6,7 +7,9 @@ LABEL org.opencontainers.image.title="WeReadAssistant" \
       org.opencontainers.image.licenses="MIT"
 
 # su-exec：入口脚本修正数据目录属主后，以 node 用户运行
-RUN apk add --no-cache su-exec
+# tini：作为 1 号进程转发信号、回收浏览器退出后留下的进程
+# chromium、chromium-chromedriver：内置浏览器，面板设置中的 Selenium 地址留空时使用；font-wqy-zenhei：中文字体
+RUN apk add --no-cache su-exec tini chromium chromium-chromedriver font-wqy-zenhei
 
 WORKDIR /app
 COPY package.json package-lock.json ./

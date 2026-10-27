@@ -9,7 +9,8 @@
  *
  * 用法: SELENIUM_URL=http://localhost:4444 node scripts/reader-smoke.js
  *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / timeout / no-entry / no-qr / qr-late / corrupt / reading / single / worker / worker-stop）。
- *   SELENIUM_URL 默认 http://localhost:4444，也可以直接指向 chromedriver（如 http://localhost:9515）。
+ *   SELENIUM_URL 默认 http://localhost:4444，也可以直接指向 chromedriver（如 http://localhost:9515）；
+ *   设为空（SELENIUM_URL= node scripts/reader-smoke.js）时使用内置浏览器，即本机的 chromedriver 与 Chromium。
  *   浏览器需要能访问本机的模拟服务；Selenium 跑在容器里时用 --network host 启动，
  *   或通过 MOCK_HOST 指定浏览器访问本机时使用的地址。
  */
@@ -27,7 +28,8 @@ const { runOnce } = require(path.resolve(__dirname, "..", "src", "reader", "run"
 const { startMockWeread } = require("./fixtures/mock-weread");
 
 const WORKER_PATH = path.resolve(__dirname, "..", "src", "reader", "worker.js");
-const SELENIUM_URL = process.env.SELENIUM_URL || "http://localhost:4444";
+const SELENIUM_URL = process.env.SELENIUM_URL ?? "http://localhost:4444";
+const BUILTIN = SELENIUM_URL === "";
 const ONLY = process.env.READER_SMOKE_ONLY || "";
 
 // 所有场景共用的缩短版时间参数
@@ -101,8 +103,29 @@ function startWorker(message) {
   return { child, reported, exited, output: () => output };
 }
 
-// 会话被删除后，WebDriver 对该会话的请求返回 invalid session id
+// 内置浏览器的 chromedriver 与 Chromium 进程（无界面模式）
+function builtinProcesses() {
+  return fs
+    .readdirSync("/proc")
+    .filter((pid) => /^\d+$/.test(pid))
+    .filter((pid) => {
+      try {
+        const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+        return /chromedriver/.test(cmdline) || cmdline.includes("--headless=new");
+      } catch (_) {
+        return false;
+      }
+    });
+}
+
+// 会话被删除后，WebDriver 对该会话的请求返回 invalid session id；内置浏览器时 chromedriver 与浏览器进程都已退出
 async function sessionClosed(sessionId) {
+  if (BUILTIN) {
+    for (let i = 0; i < 50 && builtinProcesses().length > 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return builtinProcesses().length === 0;
+  }
   const res = await fetch(`${SELENIUM_URL.replace(/\/+$/, "")}/session/${sessionId}/url`);
   const body = await res.json().catch(() => ({}));
   return res.status === 404 && body.value && body.value.error === "invalid session id";
@@ -343,7 +366,7 @@ async function main() {
         assert.ok(await sessionClosed(byName("session").sessionId), "运行结束后应关闭浏览器会话");
         const output = worker.output();
         assert.match(output, /^\[INFO\]\[[^\]]+\]: /m, "日志应带级别与时间");
-        assert.match(output, /Selenium 状态（[^）]+）：就绪/, "连接浏览器前记录 Selenium 状态");
+        assert.match(output, BUILTIN ? /内置浏览器：\S+ \d+\./ : /Selenium 状态（[^）]+）：就绪/, "连接浏览器前记录 Selenium 状态");
         assert.match(output, /Run finished: success/);
         assert.ok(!/[▄▀█]/.test(output), "由面板运行时不在日志中打印二维码");
         // 登录链接只经事件交给面板，不写入日志

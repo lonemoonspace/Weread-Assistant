@@ -7,9 +7,22 @@ const {
   displaySeleniumUrl,
   normalizeSeleniumUrl,
 } = require("../shared/selenium");
+const { browserPath, checkLocalBrowser, chromedriverPath, majorVersion, readVersion } = require("../shared/local-browser");
 
-// 把 Selenium 的状态与会话数写入运行日志，连接浏览器前与出错时各查询一次
+const LOCAL_DRIVER_START_TIMEOUT_MS = 30000;
+
+// 把 Selenium 的状态与会话数写入运行日志，连接浏览器前与出错时各查询一次；使用内置浏览器时记录其版本
 async function logSeleniumStatus(seleniumUrl) {
+  if (!seleniumUrl) {
+    const status = await checkLocalBrowser();
+    const text = `内置浏览器：${status.ready ? status.message : status.error}`;
+    if (status.ready) {
+      console.info(text);
+    } else {
+      console.warn(text);
+    }
+    return status;
+  }
   const status = await checkSelenium(seleniumUrl);
   const text = `Selenium 状态（${displaySeleniumUrl(normalizeSeleniumUrl(seleniumUrl))}）：${describeSeleniumStatus(status)}`;
   if (status.state === "ready") {
@@ -26,6 +39,60 @@ async function collectDiagnostics(config, reason) {
     await logSeleniumStatus(config.seleniumUrl);
   } catch (_) {
     // 忽略诊断过程错误
+  }
+}
+
+// 在本机启动 chromedriver 并以无界面模式运行 Chromium；关闭浏览器时一并结束 chromedriver
+async function createLocalDriver(capabilities, options) {
+  const driverPath = chromedriverPath();
+  const binary = browserPath();
+  if (!driverPath || !binary) {
+    const missing = [!driverPath && "chromedriver", !binary && "Chromium"].filter(Boolean).join("、");
+    throw new Error(`找不到内置浏览器（${missing}），请使用 Docker 镜像部署，或在设置中填写 Selenium 地址`);
+  }
+  options.setChromeBinaryPath(binary);
+  options.addArguments("--headless=new");
+  // 无界面模式的 UA 带有 HeadlessChrome，改为与有界面时相同
+  const major = majorVersion(await readVersion(binary).catch(() => ""));
+  if (major) {
+    const platform = process.arch === "arm64" ? "aarch64" : "x86_64";
+    options.addArguments(
+      `--user-agent=Mozilla/5.0 (X11; Linux ${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`
+    );
+  }
+
+  const service = new chrome.ServiceBuilder(driverPath).build();
+  const serverUrl = await service.start(LOCAL_DRIVER_START_TIMEOUT_MS);
+  console.info("chromedriver: ", serverUrl);
+  let driver;
+  try {
+    driver = await new Builder().usingServer(serverUrl).withCapabilities(capabilities).setChromeOptions(options).build();
+  } catch (e) {
+    await service.kill();
+    throw e;
+  }
+  const quit = driver.quit.bind(driver);
+  driver.quit = () => quit().finally(() => service.kill());
+  return driver;
+}
+
+async function connectRemoteDriver(config, capabilities, options) {
+  const remoteBrowserUrl = normalizeSeleniumUrl(config.seleniumUrl);
+  const shownUrl = displaySeleniumUrl(remoteBrowserUrl);
+  console.info("SELENIUM_URL: ", shownUrl);
+  try {
+    return await new Builder()
+      .usingServer(remoteBrowserUrl)
+      .forBrowser(Browser.CHROME)
+      .withCapabilities(capabilities)
+      .setChromeOptions(options)
+      .build();
+  } catch (e) {
+    const code = e.code || String(e.message || "").split(" ")[0];
+    if (CONNECTION_ERRORS[code]) {
+      throw new Error(`无法连接 Selenium（${shownUrl}）：${CONNECTION_ERRORS[code]}（${code}），请确认 Selenium 正在运行、地址正确`);
+    }
+    throw e;
   }
 }
 
@@ -47,42 +114,33 @@ async function createDriver(config) {
 
   // 连接前查询一次 Selenium 状态；地址中可能带有用户名与密码，日志中只显示去掉它们的地址
   await logSeleniumStatus(config.seleniumUrl);
-  const remoteBrowserUrl = normalizeSeleniumUrl(config.seleniumUrl);
-  const shownUrl = displaySeleniumUrl(remoteBrowserUrl);
-  console.info("SELENIUM_URL: ", shownUrl);
-  let driver;
+  const driver = config.seleniumUrl
+    ? await connectRemoteDriver(config, capabilities, options)
+    : await createLocalDriver(capabilities, options);
+
+  // 连接后的设置失败时关闭浏览器，避免留下会话（内置浏览器时还有 chromedriver 与浏览器进程）
   try {
-    driver = await new Builder()
-      .usingServer(remoteBrowserUrl)
-      .forBrowser(Browser.CHROME)
-      .withCapabilities(capabilities)
-      .setChromeOptions(options)
-      .build();
+    // 全局超时配置，避免单次命令长时间挂起。
+    // 隐式等待设为 0：元素不存在时立即返回，需要等待的地方使用显式等待
+    await driver.manage().setTimeouts({
+      implicit: 0,
+      pageLoad: 60000,
+      script: 30000,
+    });
+
+    console.info("Browser launched successfully.");
+
+    // 随机窗口尺寸
+    const randomWidth = Math.floor(Math.random() * 1000) + 800;
+    const randomHeight = Math.floor(Math.random() * 800) + 700;
+    await driver
+      .manage()
+      .window()
+      .setRect({ width: randomWidth, height: randomHeight });
   } catch (e) {
-    const code = e.code || String(e.message || "").split(" ")[0];
-    if (CONNECTION_ERRORS[code]) {
-      throw new Error(`无法连接 Selenium（${shownUrl}）：${CONNECTION_ERRORS[code]}（${code}），请确认 Selenium 正在运行、地址正确`);
-    }
+    await driver.quit().catch(() => {});
     throw e;
   }
-
-  // 全局超时配置，避免单次命令长时间挂起。
-  // 隐式等待设为 0：元素不存在时立即返回，需要等待的地方使用显式等待
-  await driver.manage().setTimeouts({
-    implicit: 0,
-    pageLoad: 60000,
-    script: 30000,
-  });
-
-  console.info("Browser launched successfully.");
-
-  // 随机窗口尺寸
-  const randomWidth = Math.floor(Math.random() * 1000) + 800;
-  const randomHeight = Math.floor(Math.random() * 800) + 700;
-  await driver
-    .manage()
-    .window()
-    .setRect({ width: randomWidth, height: randomHeight });
 
   return driver;
 }

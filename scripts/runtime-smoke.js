@@ -16,7 +16,7 @@ Usage:
 
 Commands:
   docker  Build the local Docker image and verify the CLI, the panel health check,
-          the non-root user and the data directory ownership.
+          the non-root user, the built-in browser and the data directory ownership.
   help    Show this help text.
 
 Environment:
@@ -99,6 +99,18 @@ function runPanelSmoke(imageTag) {
     if (user !== 'node') {
       throw new Error(`Panel process runs as ${user}, expected node`);
     }
+    const init = runCommand('docker', ['exec', container, 'cat', '/proc/1/cmdline'], { quiet: true });
+    if (!init.startsWith('/sbin/tini')) {
+      throw new Error(`PID 1 is ${JSON.stringify(init)}, expected tini`);
+    }
+    // 内置浏览器：镜像中的 Chromium 与 chromedriver 能运行
+    const browser = runCommand('docker', [
+      'exec', container, 'node', '-e',
+      'require("/app/src/shared/local-browser").checkLocalBrowser().then((s) => { console.log(s.ready ? s.message : s.error); process.exit(s.ready ? 0 : 1); })',
+    ], { quiet: true });
+    if (!/^Chromium \d+\./.test(browser)) {
+      throw new Error(`Built-in browser is not usable: ${browser}`);
+    }
     const owner = runCommand('docker', ['exec', container, 'stat', '-c', '%U %a', '/app/data/panel.json'], { quiet: true });
     if (owner !== 'node 600') {
       throw new Error(`panel.json owner/mode is "${owner}", expected "node 600"`);
@@ -114,7 +126,7 @@ function runPanelSmoke(imageTag) {
     if (stopMs > STOP_TIMEOUT_MS) {
       throw new Error(`docker stop took ${stopMs}ms; the panel should exit on SIGTERM`);
     }
-    console.log(`Smoke passed: panel is healthy, runs as node, owns its data and stops in ${stopMs}ms.`);
+    console.log(`Smoke passed: panel is healthy, runs as node under tini, has the built-in browser (${browser}), owns its data and stops in ${stopMs}ms.`);
   } finally {
     spawnSync('docker', ['rm', '-f', container], { stdio: 'pipe' });
     // 入口脚本把数据目录及其中的文件改为容器内 node 用户所有；以非 root 用户运行时（如 CI）

@@ -260,7 +260,7 @@ async function desktop(env, h, driver, results) {
   await selenium.stop();
   await h.clickButton("刷新", await h.waitFor(".selenium-card"));
   await h.waitText(".selenium-card .alert-error", "无法连接 Selenium：连接被拒绝");
-  await h.waitText(".selenium-card .alert-error", "docker compose up -d selenium");
+  await h.waitText(".selenium-card .alert-error", "改用内置浏览器时把该地址清空");
   await h.waitText(".selenium-card .badge", "无法连接");
   await h.shot("02b-overview-selenium-down");
   await selenium.start();

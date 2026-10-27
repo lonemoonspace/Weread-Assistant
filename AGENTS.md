@@ -10,10 +10,10 @@
 
 ## 构建、测试与开发命令
 - `npm install`：安装依赖，依赖升级时记录 package-lock 差异。
-- `SELENIUM_URL=http://localhost:4444 npm start`（同 `npm run panel`）：本地启动面板（默认端口 26868，首次启动在输出中打印初始密码）。阅读配置、通知与调度都在面板中设置，不支持按环境变量运行阅读。浏览器只在 Selenium 中运行，不支持在本机启动浏览器。
+- `npm start`（同 `npm run panel`）：本地启动面板（默认端口 26868，首次启动在输出中打印初始密码）。阅读配置、通知与调度都在面板中设置，不支持按环境变量运行阅读。面板设置中的 Selenium 地址留空时使用内置浏览器（阅读子进程在本机启动 chromedriver 与无界面的 Chromium，见 `src/shared/local-browser.js`）；填写时连接该地址的 Selenium，首次启动可用 `SELENIUM_URL` 写入。
 - `node src/cli.js run --account <id>`：按面板中的账号配置在命令行运行一次，用于调试。
 - `node src/cli.js help`：查看命令与面板环境变量。
-- `docker compose up -d`：拉起面板（`app`）与 `selenium`；结束后执行 `docker compose down` 清理资源。
+- `docker compose up -d`：拉起面板（`app`，镜像中带 Chromium 与 chromedriver）；结束后执行 `docker compose down` 清理资源。
 
 ## 编码风格与命名约定
 - 统一采用 2 space 缩进；CommonJS `require` / `module.exports`；异步流程优先 async/await。
@@ -22,7 +22,7 @@
 - 日志通过 `console.info|warn|error` 输出，由 `src/shared/log.js` 统一加前缀并写入日志文件。
 
 ## 测试指南
-- 提交前至少执行 `npm run check`、`npm run test:notify`、`npm run test:panel` 与 `npm run test:config`；改动阅读流程或阅读子进程时执行 `SELENIUM_URL=... npm run test:reader`（本地模拟页面）；改动镜像时执行 `npm run test:runtime`。
+- 提交前至少执行 `npm run check`、`npm run test:notify`、`npm run test:panel` 与 `npm run test:config`；改动阅读流程或阅读子进程时执行 `SELENIUM_URL=... npm run test:reader`（本地模拟页面；`SELENIUM_URL=` 为空时用内置浏览器）；改动镜像时执行 `npm run test:runtime`。
 - 改动阅读流程或定位器时，再连接 Selenium 对真实站点运行一次，确认登录、翻页链路；验收用例见 `cases/`。
 
 ## 提交与 Pull Request 指南
@@ -37,5 +37,5 @@
 - 所有敏感凭据通过配置传递，严禁在仓库中硬编码邮箱密码、Bark key、ntfy topic/token；本地可用 `.env.local`（已在 `.gitignore` 中）。
 - 面板页面不得使用内联脚本或内联样式（CSP 只允许同源资源）；修改类接口需校验 `X-WA-Request` 请求头。
 - 面板前端免构建：页面代码是 `src/panel/public/assets/app/` 下的 ES 模块，模板写在组件的 `template` 字符串中；不要使用 DOM 模板、`v-html` 或 `:style` 字符串，样式写在 `assets/panel.css`。第三方文件放在 `assets/vendor/`，升级时同步更新其中的 README（版本与 SHA-256）。改动页面时执行 `SELENIUM_URL=... npm run test:ui` 并查看截图。
-- 部署 Selenium 时保证 `--shm-size 2gb` 以避免 Chrome crash；远程运行后及时清理 `login.png` 并注意 cookies 等同于登录态。
-- noVNC 画面就是已登录的浏览器：不要在文档或配置示例中建议经反向代理或公网暴露 7900 端口；开启时修改 Selenium 默认 VNC 密码，建议只读模式。
+- 部署 Selenium 时保证 `--shm-size 2gb` 以避免 Chrome crash（内置浏览器以 `--disable-dev-shm-usage` 启动，不需要）；远程运行后及时清理 `login.png` 并注意 cookies 等同于登录态。
+- noVNC 只在连接 Selenium 时可用，画面就是已登录的浏览器：不要在文档或配置示例中建议经反向代理或公网暴露 7900 端口；开启时修改 Selenium 默认 VNC 密码，建议只读模式。
