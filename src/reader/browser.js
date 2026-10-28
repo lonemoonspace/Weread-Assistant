@@ -54,12 +54,12 @@ async function createLocalDriver(capabilities, options, status) {
   const driverPath = chromedriverPath();
   options.setChromeBinaryPath(browserPath());
   options.addArguments("--headless=new");
-  // 无界面模式的 UA 带有 HeadlessChrome，改为与有界面时相同
+  // 无界面模式的 UA 带有 HeadlessChrome，改为与有界面时相同。Chrome 精简后的 UA 在 Linux 上
+  // 不区分架构，arm64 上也是 "X11; Linux x86_64"
   const major = majorVersion(status.message);
   if (major) {
-    const platform = process.arch === "arm64" ? "aarch64" : "x86_64";
     options.addArguments(
-      `--user-agent=Mozilla/5.0 (X11; Linux ${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`
+      `--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`
     );
   }
 
