@@ -44,7 +44,7 @@ node src/cli.js run --account <id> --login-only   # 只登录并保存 cookies
 
 面板前端免构建，直接修改 `src/panel/public/assets/app/` 下的文件后刷新页面即可。
 
-Pull Request 上的 CI 运行以上全部检查（阅读流程与页面 smoke 使用主机网络的 Selenium 容器，阅读流程 smoke 还在 amd64 镜像中用内置浏览器运行一次；镜像在 QEMU 中按 arm64 构建并运行）；合并到 `main` 后发布 `dev` 镜像，推送版本 tag 时发布正式版本，见 `docs/docker-image-publish.md`“自动发布”与 `cases/ci.md`。
+Pull Request 上的 CI 运行以上全部检查（阅读流程与页面 smoke 使用主机网络的 Selenium 容器，阅读流程 smoke 还在 amd64 镜像中用内置浏览器运行一次；镜像在 QEMU 中按 arm64 构建并运行）；合并到 `main` 后发布 `dev` 镜像，合并改版本号的提交（或推送版本 tag）时发布正式版本，见 `docs/docker-image-publish.md`“自动发布”与 `cases/ci.md`。
 
 ### 代码结构
 
