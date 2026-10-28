@@ -1,6 +1,7 @@
 # 发布 linux/arm64 镜像到 Docker Hub（docker.io/lonemoonspace/weread-assistant）：
-# - main 分支的 CI 通过后发布 dev
-# - 推送版本 tag（如 v0.1.0，须与 package.json 的 version 一致）时发布 0.1.0 与 latest，并创建 GitHub Release
+# - main 分支的 CI 通过后发布 dev；package.json 的版本还没有对应的 tag（如 v0.1.0）时，同时发布 0.1.0 与 latest，
+#   并在该提交上创建 tag 与 GitHub Release（合并改版本号的 Pull Request 即发布，不需要手动推送 tag）
+# - 推送版本 tag（须与 package.json 的 version 一致）时发布 0.1.0 与 latest，并创建 GitHub Release
 # 每次发布前先在 QEMU 模拟的 arm64 环境中构建并运行镜像检查。
 # 需要在仓库 Settings → Secrets and variables → Actions 中添加 DOCKERHUB_USERNAME 与 DOCKERHUB_TOKEN
 # （Docker Hub 的 Personal access token，权限 Read & Write）
@@ -49,24 +50,52 @@ jobs:
       - name: 确定镜像 tag
         id: meta
         env:
+          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           version="$(node -p "require('./package.json').version")"
+          release=false
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             if [ "$GITHUB_REF_NAME" != "v$version" ]; then
               echo "::error::tag $GITHUB_REF_NAME 与 package.json 的版本 $version 不一致，应为 v$version"
               exit 1
             fi
             tag="$version"
+            release=true
           elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
-            tag="dev"
+            # 版本号还没有 tag：这个提交就是新版本，发布正式版本并创建 tag；dev 一并更新
+            if out="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$version" 2>&1)"; then
+              tag="dev"
+            elif printf '%s' "$out" | grep -q "HTTP 404"; then
+              tag="$version"
+              release=true
+            else
+              echo "::error::无法查询 tag v$version：$out"
+              exit 1
+            fi
           else
             echo "::error::只从 main 分支发布 dev，或从版本 tag 发布正式版本（当前为 $GITHUB_REF）"
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
           echo "发布 docker.io/lonemoonspace/weread-assistant:$tag（提交 $HEAD_SHA）" >> "$GITHUB_STEP_SUMMARY"
+
+      # 发布说明取 CHANGELOG.md 中该版本的一节；没有时在构建前失败，不推送镜像
+      - name: 读取发布说明
+        if: steps.meta.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          awk -v version="$VERSION" '
+            /^## / { if (found) exit; if (index($0, "## " version " ") == 1 || $0 == "## " version) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md 中没有 $VERSION 的说明"
+            exit 1
+          fi
 
       - name: 检查 Docker Hub 凭据
         env:
@@ -95,27 +124,26 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      # 版本 tag 同时推送 latest（见 scripts/docker-image.js）
+      # 版本 tag 同时推送 latest（见 scripts/docker-image.js）；从 main 发布版本时 dev 也指向同一个镜像
       - name: 推送镜像
-        run: node scripts/docker-image.js push --tag "${{ steps.meta.outputs.tag }}"
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          DOCKER_EXTRA_TAGS: ${{ github.ref_type != 'tag' && steps.meta.outputs.release == 'true' && 'dev' || '' }}
+        run: node scripts/docker-image.js push --tag "$TAG"
 
+      # 从 main 发布时由 Release 在该提交上创建 tag。用 GITHUB_TOKEN 创建的 tag 不会再触发本工作流
       - name: 创建 GitHub Release
-        if: github.ref_type == 'tag'
+        if: steps.meta.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           VERSION: ${{ steps.meta.outputs.version }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
-          # 发布说明取 CHANGELOG.md 中该版本的一节
-          awk -v version="$VERSION" '
-            /^## / { if (found) exit; if (index($0, "## " version " ") == 1 || $0 == "## " version) { found = 1; next } }
-            found { print }
-          ' CHANGELOG.md > release-notes.md
-          if [ ! -s release-notes.md ]; then
-            echo "::error::CHANGELOG.md 中没有 $VERSION 的说明"
-            exit 1
-          fi
-          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            echo "GitHub Release $GITHUB_REF_NAME 已存在，跳过"
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "GitHub Release v$VERSION 已存在，跳过"
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            gh release create "v$VERSION" --verify-tag --title "WeReadAssistant $VERSION" --notes-file release-notes.md
           else
-            gh release create "$GITHUB_REF_NAME" --verify-tag --title "WeReadAssistant $VERSION" --notes-file release-notes.md
+            gh release create "v$VERSION" --target "$HEAD_SHA" --title "WeReadAssistant $VERSION" --notes-file release-notes.md
           fi

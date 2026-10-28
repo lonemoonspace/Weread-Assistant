@@ -13,6 +13,8 @@ CI 见 `.github/workflows/ci.yml`，镜像发布见 `.github/workflows/release.y
 | main 的 CI 失败 | CI 中任一任务失败 | 不发布 |
 | Pull Request 的 CI | Pull Request 触发的 CI 完成 | “发布镜像”工作流不发布（跳过） |
 | 缺少凭据 | 仓库中没有 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | 在构建前失败，提示在 Settings → Secrets and variables → Actions 中添加 |
+| 合并即发布 | `package.json` 版本改为还没有 tag 的 `0.1.0`，`CHANGELOG.md` 有 `## 0.1.0`，合并到 `main` 后 CI 通过 | 推送 `0.1.0`、`latest` 与 `dev`（同一个镜像）；在该提交上创建 tag `v0.1.0` 与 GitHub Release `v0.1.0`，标题 `WeReadAssistant 0.1.0`，说明为 `CHANGELOG.md` 中 0.1.0 一节；之后 main 上的提交只发布 `dev` |
+| 合并即发布但缺少说明 | 同上，但 `CHANGELOG.md` 中没有 `## 0.1.0` | 在构建前失败，提示 CHANGELOG 中没有该版本的说明，不推送镜像、不创建 tag |
 | 发布版本 | `package.json` 版本为 `0.1.0`，`CHANGELOG.md` 有 `## 0.1.0`，推送 tag `v0.1.0` | 推送 `0.1.0` 与 `latest`（同一个镜像）；创建 GitHub Release `v0.1.0`，标题 `WeReadAssistant 0.1.0`，说明为 `CHANGELOG.md` 中 0.1.0 一节 |
 | tag 与版本不一致 | `package.json` 版本为 `0.1.0` 时推送 `v0.2.0` | 失败并提示应为 `v0.1.0`，不构建、不推送 |
 | 其他分支手动运行 | 在非 `main` 分支上手动运行“发布镜像” | 失败并提示只从 main 发布 dev 或从版本 tag 发布 |

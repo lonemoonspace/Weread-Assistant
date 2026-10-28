@@ -28,7 +28,7 @@
 ## 提交与 Pull Request 指南
 - Git 历史遵循 Conventional Commits，格式为 `type(scope?): subject`，例如 `feat(panel): add login page`、`fix(reader): ...`。
 - Pull Request 描述需包含：背景、变更要点、运行命令、环境变量配置、截图或 `output.log` 片段；若关联 issue 请在描述结尾附 `Closes #id`。
-- 发布版本：修改 `package.json` 的 `version`（同步 lockfile）并在 `CHANGELOG.md` 中加一节，合并到 `main` 后推送 `v<版本号>` tag，由 GitHub Actions 构建、检查并推送 arm64 镜像；不要从本机手动推送正式版本。
+- 发布版本：修改 `package.json` 的 `version`（同步 lockfile）并在 `CHANGELOG.md` 中加一节，合并到 `main` 后 CI 通过时，由 GitHub Actions 构建、检查并推送 arm64 镜像，并创建 `v<版本号>` tag 与 GitHub Release（不需要手动推送 tag）；不要从本机手动推送正式版本。
 - GitHub Actions 中的第三方 Action 按提交 SHA 固定并在注释中写明版本；改动工作流后用 actionlint 检查。
 
 ## 配置与安全提示

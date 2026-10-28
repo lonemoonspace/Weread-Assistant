@@ -65,12 +65,13 @@ flowchart TD
 | 触发 | 发布的 tag | 说明 |
 | --- | --- | --- |
 | `main` 分支的 CI 通过 | `dev` | 只处理本仓库 main 分支推送后的 CI，Pull Request 触发的 CI 不发布；构建的是 CI 通过的那个提交 |
+| `main` 分支的 CI 通过，且 `package.json` 的版本还没有 tag | `0.1.0`、`latest`、`dev` | 即合并了改版本号的提交：在该提交上创建 tag `v0.1.0` 与 GitHub Release（说明为 `CHANGELOG.md` 中该版本的一节，没有时在构建前失败）；查询 tag 出错时失败，不当作新版本 |
 | 推送版本 tag，如 `v0.1.0` | `0.1.0`、`latest` | tag 必须与 `package.json` 的 `version` 一致；同时用 `CHANGELOG.md` 中该版本的一节创建 GitHub Release |
-| 手动运行（workflow_dispatch） | 在 `main` 上为 `dev`，在版本 tag 上为对应版本 | 其他分支拒绝发布 |
+| 手动运行（workflow_dispatch） | 在 `main` 上同 CI 通过时（版本已有 tag 时为 `dev`），在版本 tag 上为对应版本 | 其他分支拒绝发布 |
 
 每次发布前先用 QEMU 构建 `linux/arm64` 镜像并运行 `scripts/runtime-smoke.js`（`RUNTIME_SMOKE_ARCH=arm64`），通过后再登录 Docker Hub 推送。需要在仓库 Settings → Secrets and variables → Actions 中添加 `DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN`（Docker Hub 的 Personal access token，权限 Read & Write），缺少时发布在构建前失败并提示。
 
-发布新版本：修改 `package.json` 的 `version`（并 `npm install --package-lock-only` 同步 lockfile），在 `CHANGELOG.md` 中加一节 `## <版本号>`，合并到 `main` 后执行：
+发布新版本：修改 `package.json` 的 `version`（并 `npm install --package-lock-only` 同步 lockfile），在 `CHANGELOG.md` 中加一节 `## <版本号>`，合并到 `main` 即可：CI 通过后工作流发现该版本还没有 tag，发布镜像并创建 tag 与 GitHub Release。工作流用 `GITHUB_TOKEN` 创建的 tag 不会再次触发发布。也可以照旧手动推送 tag：
 
 ```bash
 git tag v0.1.0 origin/main
