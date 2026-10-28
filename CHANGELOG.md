@@ -2,7 +2,7 @@
 
 版本号与 `package.json` 一致；推送 `v<版本号>` tag 时，发布流程把对应一节作为 GitHub Release 的说明。
 
-## 未发布
+## 0.2.0
 
 镜像内置浏览器，不再需要单独的 Selenium 容器：部署体积从约 3.5GB 降到约 1GB，阅读时的内存占用减少约 300–450MB。
 
@@ -10,7 +10,7 @@
 
 - **先重新下载 `docker-compose.yml`**（其中已去掉 `selenium` 服务），再执行 `docker compose pull && docker compose up -d --remove-orphans`，旧的 `selenium` 容器随之删除。只拉取新镜像、保留旧的 `docker-compose.yml` 时，继续使用旧文件中的 Selenium，同样能运行
 - 没有设置 `SELENIUM_URL` 时，面板启动时把设置中的 `http://selenium:4444` 清空，改用内置浏览器；账号的登录状态不受影响，不需要重新扫码
-- 确认运行正常后，可以执行 `docker image rm selenium/standalone-chromium:4.51.0-20261010` 删除旧镜像，释放约 3GB 磁盘
+- 确认运行正常后，可以删除旧的 Selenium 镜像，例如 `docker image rm selenium/standalone-chromium:4.51.0-20261010`（标签以旧 `docker-compose.yml` 中的为准），释放约 3GB 磁盘
 - 想继续使用自己部署的 Selenium：在 `docker-compose.yml` 中设置 `SELENIUM_URL`，或在面板设置中填写 Selenium 地址
 
 变更：
