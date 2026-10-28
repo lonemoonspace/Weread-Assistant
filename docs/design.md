@@ -18,7 +18,7 @@
 | 产品名 | WeReadAssistant；仓库 `Weread-Assistant`，镜像名 `weread-assistant`（镜像名只能小写）；README 开头声明非官方、与腾讯无关 |
 | 仓库 | 私有仓库 `lonemoonspace/Weread-Assistant`，全新历史，第一版可用后公开；README 致谢上游，LICENSE 保留上游版权声明 |
 | 分发 | 只发布 `linux/arm64` Docker 镜像 `lonemoonspace/weread-assistant` |
-| 浏览器 | 只支持 Docker 中的 `selenium/standalone-chromium`，不支持在本机启动浏览器 |
+| 浏览器 | 默认使用镜像内置的 Chromium 与 chromedriver（无界面模式，阅读子进程在容器内启动）；也可以连接自己部署的 Selenium（如 `selenium/standalone-chromium`）。第 11 步之前只支持 Selenium |
 | 统计上报 | 删除，不向任何服务器发送使用数据 |
 | 兼容性 | 不保留上游的 CLI 命令名、`app.js` 入口、`schedule` 子命令和旧数据目录；不提供旧数据导入，账号首次运行时扫码登录 |
 | 调度 | 面板常驻并负责调度，不再使用宿主 crontab |
@@ -40,11 +40,12 @@ flowchart LR
   API --> Q
   Q -->|fork 阅读子进程, IPC 下发配置| R[阅读子进程]
   R -->|IPC 事件 + stdout 日志| Q
-  R -->|WebDriver| SE[selenium:4444]
+  R -->|WebDriver| CD[内置 chromedriver + Chromium]
+  R -.->|WebDriver，填写了 Selenium 地址时| SE[Selenium]
   P <-->|读写| D[(data/)]
 ```
 
-- 每次阅读都是一个独立的子进程（`child_process.fork`）。Selenium 卡死或崩溃不影响面板。
+- 每次阅读都是一个独立的子进程（`child_process.fork`，单独的进程组）。浏览器卡死或崩溃不影响面板；内置浏览器的进程在子进程的进程组中，子进程退出后由面板结束剩下的进程。
 - 子进程通过 IPC 接收本次运行的配置对象，不经环境变量传递，密钥不出现在进程环境中。
 - 子进程通过 IPC 事件上报状态，日志取自子进程 stdout。运行结果以事件为准：退出前未收到 `done` 即判定失败。
 - 面板启动时把上次遗留的"运行中"记录标为"中断"。
@@ -58,7 +59,7 @@ flowchart LR
 | `src/config/resolve.js` | 默认值 + 全局配置 + 账号覆盖 → 本次运行的配置对象 | 返回不可变对象，替代上游的模块级可变变量 |
 | `src/reader/worker.js` | 阅读子进程入口：接收配置、执行一次阅读、上报事件、处理停止信号 | 只由面板 fork；`run --account` 在进程内直接调用 `run.js` |
 | `src/reader/run.js` | 单次运行编排：连接浏览器、登录、选书、阅读，并在各阶段发送通知 | 由 `worker.js` 调用，不直接退出进程 |
-| `src/reader/browser.js` | 连接 Selenium、设置超时、退出时清理会话 | 只连远程 Chromium |
+| `src/reader/browser.js` | 启动内置浏览器或连接 Selenium、设置超时、退出时清理会话 | 只支持 Chromium |
 | `src/reader/login.js` | 登录检测、二维码解析与刷新、cookies 读写 | cookies 原子写入，损坏时转入扫码 |
 | `src/reader/reading.js` | 选书、切换滚动模式、阅读循环 | 每轮一次 WebDriver 往返汇总页面状态 |
 | `src/reader/selectors.js` | 集中管理页面定位器和关键文案 | 微信读书改版时只改这一个文件 |
@@ -174,9 +175,9 @@ data/
 | 时区 | 面板设置中的时区（默认 `Asia/Shanghai`），调度与按天统计都显式使用该时区 |
 | 每 N 小时 | N 取 24 的约数（1/2/3/4/6/8/12），从 0 点起算，可指定在第几分钟触发，换算为 cron 表达式 |
 | cron | 5 段表达式（分 时 日 月 周），不接受秒字段 |
-| 并发 | 默认 1，应与 Selenium `SE_NODE_MAX_SESSIONS` 一致 |
+| 并发 | 默认 1；内置浏览器时每个运行单独启动一个浏览器，按内存设置；使用 Selenium 时应与 `SE_NODE_MAX_SESSIONS` 一致 |
 | 重复触发 | 账号已在运行或排队时跳过本次触发并记录日志 |
-| 等待扫码 | 等待扫码期间持续占用 Selenium 槽位，其他账号排队；等待时长可配，默认 15 分钟 |
+| 等待扫码 | 等待扫码期间持续占用一个运行名额（浏览器），其他账号排队；等待时长可配，默认 15 分钟 |
 | 错过的调度 | 面板停机期间错过的调度不补跑；当天未达标在总览与日历中高亮 |
 | 仅登录 | 只完成登录并保存 cookies，不进入阅读，用于刷新登录态 |
 
@@ -218,7 +219,7 @@ sequenceDiagram
 
 | 内容 | 原因 |
 | --- | --- |
-| Edge / Firefox / Safari 与在本机启动浏览器 | 只支持 Docker 中的 Chromium。上游 Edge 分支的启动参数被 `setChromeOptions` 传入而被 Selenium 忽略，Firefox 分支忽略远程浏览器地址，一并消失 |
+| Edge / Firefox / Safari | 只支持 Chromium。上游 Edge 分支的启动参数被 `setChromeOptions` 传入而被 Selenium 忽略，Firefox 分支忽略远程浏览器地址，一并消失 |
 | 使用统计上报（`logEventToWereadLog`、`getUserInfo`、`WEREAD_AGREE_TERMS`） | 新产品不收集任何数据 |
 | `schedule` 子命令、旧命令名、`app.js` 入口、`data/` / `.weread` 目录兼容 | 由面板调度取代；不背兼容包袱 |
 | 通过 `docker logs` 抓取 Selenium 容器日志 | 应用容器内没有 Docker CLI，该功能在容器中永远跳过；保留 Selenium `/status` 健康检查 |
@@ -269,7 +270,7 @@ sequenceDiagram
 | `PANEL_TRUST_PROXY` | `false` | 设为 `true` 后信任 `X-Forwarded-For` / `X-Forwarded-Proto`，用于识别真实 IP 与 HTTPS |
 | `PANEL_PUBLIC_URL` | 空 | 面板的外网地址，扫码推送附带该账号实时页面的链接（解析不出登录链接时只推送面板链接）；与 `PANEL_BASE_PATH` 明显不一致时启动日志给出提示 |
 | `PANEL_PASSWORD` | 空 | 面板密码，至少 8 位（不足时拒绝启动） |
-| `SELENIUM_URL` | `http://selenium:4444` | 首次启动时写入全局配置 |
+| `SELENIUM_URL` | 空 | 首次启动时写入全局配置；为空时使用内置浏览器。没有设置时，面板启动时把配置中旧版的 `http://selenium:4444` 清空 |
 
 | 注意事项 | 说明 |
 | --- | --- |
@@ -282,52 +283,32 @@ sequenceDiagram
 
 ```yaml
 services:
-  assistant:
-    image: lonemoonspace/weread-assistant:latest
+  app:
+    image: lonemoonspace/weread-assistant:latest   # 已包含 Chromium 与 chromedriver
     restart: unless-stopped
     stop_grace_period: 30s     # 停止时先结束进行中的阅读
     ports:
       - "127.0.0.1:26868:26868"
     environment:
       - TZ=Asia/Shanghai
-      - SELENIUM_URL=http://selenium:4444
-      - PANEL_TRUST_PROXY=true
+      # - SELENIUM_URL=http://selenium:4444   # 改用自己部署的 Selenium 时设置
+      # - PANEL_TRUST_PROXY=true
       # - PANEL_PASSWORD=change-me
       # - PANEL_BASE_PATH=/weread/
       # - PANEL_PUBLIC_URL=https://example.com/weread/
     volumes:
       - ./data:/app/data
-    depends_on:
-      selenium:
-        condition: service_healthy
-  selenium:
-    image: selenium/standalone-chromium:4.51.0-20261010
-    restart: unless-stopped
-    shm_size: 2gb
-    environment:
-      - SE_NODE_MAX_SESSIONS=1   # 与面板并发数一致
-      - SE_ENABLE_TRACING=false
-      - SE_BIND_HOST=false
-      - SE_JAVA_DISABLE_HOSTNAME_VERIFICATION=false
-      # - SE_VNC_PASSWORD=change-me   # 开启 noVNC 时修改默认密码 secret
-      # - SE_VNC_VIEW_ONLY=1          # 只能看，不能操作
-    # ports:                          # noVNC，只映射到本机或可信局域网
-    #   - "127.0.0.1:7900:7900"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4444/status"]
-      interval: 5s
-      timeout: 60s
-      retries: 10
 ```
 
-本地开发：`docker run -d --name selenium -p 4444:4444 --shm-size 2g selenium/standalone-chromium`，再以 `SELENIUM_URL=http://localhost:4444 node src/cli.js panel` 直接运行面板。
+本地开发：本机装有 Chromium 与同版本的 chromedriver 时直接 `node src/cli.js panel`；或 `docker run -d --name selenium -p 4444:4444 --shm-size 2g selenium/standalone-chromium`，再以 `SELENIUM_URL=http://localhost:4444 node src/cli.js panel` 运行面板。
 
 ### 镜像
 
 | 项目 | 说明 |
 | --- | --- |
 | 依赖安装 | `npm ci --omit=dev`，按 lockfile 安装 |
-| 基础镜像 | `node:24-alpine`，固定 Node 主版本（LTS），不用浮动的 `lts` 标签；Dependabot 不提主版本升级，换到下一个 LTS 时手动修改 |
+| 基础镜像 | `node:24-alpine3.24`，固定 Node 主版本（LTS），不用浮动的 `lts` 标签；Dependabot 不提主版本升级，换到下一个 LTS 时手动修改。Alpine 版本也固定：Chromium 只在 Alpine 最新的稳定分支更新，Alpine 发布新版本后随之升级 |
+| 内置浏览器 | `chromium`、`chromium-chromedriver`（同一版本）与中文字体 `font-wqy-zenhei`；`tini` 作为 1 号进程转发信号、回收浏览器留下的进程 |
 | 启动命令 | `node src/cli.js panel` |
 | 健康检查 | 镜像内 `HEALTHCHECK` 运行 `src/panel/healthcheck.js` 请求面板健康接口；以 `run` 命令运行的容器需关闭健康检查 |
 | 运行用户 | 入口脚本 `docker-entrypoint.sh` 以 root 修正数据目录属主后，通过 `su-exec` 以 `node` 用户运行 |
@@ -360,6 +341,7 @@ services:
 | 8. 前端 | 登录、总览、账号（实时 / 历史 / 日历 / 配置 / 调度）、新建账号、全局设置；二维码本地生成；SSE 断线重连；手机布局 | 用浏览器自动化走通所有页面并截图检查 |
 | 9. Selenium 状态与 noVNC | `/status` 健康状态与会话数；noVNC 链接 | 总览页显示正确，Selenium 停止时有明确提示 |
 | 10. CI 与发布 | Pull Request 检查；arm64 镜像发布工作流；`cases/` 验收用例；README 部署说明；发布 `0.1.0` | CI 通过；树莓派真机验收通过 |
+| 11. 内置浏览器 | 镜像内置 Alpine 的 Chromium 与 chromedriver，Selenium 地址留空时以无界面模式在本机启动；`docker-compose.yml` 去掉 `selenium` 服务；旧配置中的 `http://selenium:4444` 自动清空；总览显示内置浏览器的版本。部署体积从约 3.5GB 降到约 1GB，运行内存减少约 300–450MB | `reader-smoke` 在镜像中用内置浏览器全部通过；树莓派真机扫码并完整阅读一次，阅读时长正常计入 |
 
 ### 验证
 
@@ -367,6 +349,6 @@ services:
 | --- | --- |
 | `scripts/notify-smoke.js` | 保留并适配新的通知模块，本地 mock 服务校验负载 |
 | `scripts/panel-smoke.js` | 用桩子进程按顺序发送事件，不需要浏览器即可验证鉴权、配置、队列、停止、调度、历史与统计 |
-| `scripts/reader-smoke.js` | 用本地模拟页面验证登录跳过、翻页、读完回到目录等分支和每轮耗时，不访问微信读书；Selenium 地址可指向 selenium 容器，也可直接指向 chromedriver |
+| `scripts/reader-smoke.js` | 用本地模拟页面验证登录跳过、翻页、读完回到目录等分支和每轮耗时，不访问微信读书；Selenium 地址可指向 selenium 容器，也可直接指向 chromedriver，为空时使用内置浏览器 |
 | CI | Pull Request 与 `main` 上运行自查（`scripts/check.js`）、上述 smoke、依赖安全检查，并在 QEMU 中构建、运行 arm64 镜像；`main` 的 CI 通过后发布 `dev` 镜像，推送版本 tag 时发布版本与 `latest` 并创建 GitHub Release（需在仓库中配置 Docker Hub 凭据），见 `cases/ci.md` |
 | 真机验收 | 需要在你的树莓派上执行：以 compose 部署，经反向代理访问，完成扫码、阅读、停止、调度触发各一次，见 `cases/deploy.md` |

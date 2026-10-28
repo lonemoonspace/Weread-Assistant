@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `src/reader/run.js` `runOnce(config, options)` | 编排一次运行：连接浏览器、登录、选书、阅读、通知 | 返回 `{ status, minutes, error }`，`status` 为 `success` / `login-timeout` / `error` / `stopped`；不退出进程 |
 | `src/reader/worker.js` | 阅读子进程入口：由面板 fork，经 IPC 接收配置、上报事件 | 收到 SIGTERM / SIGINT 或与面板断开时关闭浏览器后退出 |
-| `src/reader/browser.js` | 连接配置中 Selenium 地址上的 Chromium，设置超时与随机窗口尺寸 | 隐式等待为 0；连接前在日志中记录 Selenium 状态与会话数（`src/shared/selenium.js`）；连不上时报错 `无法连接 Selenium（<地址>）：<原因>`；日志中的地址去掉用户名与密码 |
+| `src/reader/browser.js` | Selenium 地址留空时启动内置浏览器：在本机启动 chromedriver（`src/shared/local-browser.js` 在 `PATH` 中查找，或用 `CHROMEDRIVER_PATH`、`CHROME_BIN` 指定）与无界面模式（`--headless=new`）的 Chromium；否则连接该地址上的 Chromium。设置超时与随机窗口尺寸 | 隐式等待为 0；内置浏览器找不到、无法运行或 chromedriver 与 Chromium 主版本不一致时不启动，报错 `内置浏览器不可用：<原因>`，chromedriver 启动失败时报错 `无法启动 chromedriver（<路径>）：<原因>`；内置浏览器的 UA 去掉 `HeadlessChrome`，关闭浏览器时一并结束 chromedriver，连接后设置失败时关闭浏览器；连接前在日志中记录 `内置浏览器：<版本>` 或 Selenium 状态与会话数（`src/shared/selenium.js`）；连不上时报错 `无法连接 Selenium（<地址>）：<原因>`；日志中的地址去掉用户名与密码 |
 | `src/reader/login.js` | 打开首页、加载 cookies、展示二维码、等待扫码、保存 cookies | 按总时长等待，期间二维码过期就刷新 |
 | `src/reader/reading.js` | 选书、切换上下滚动模式、阅读循环 | 每轮一次 `executeScript` 读取页面状态 |
 | `src/reader/selectors.js` | 页面地址、定位器与关键文案 | 微信读书改版时只改这里 |
@@ -51,7 +51,7 @@ flowchart TD
 | 事件 | 时机 | `data` |
 | --- | --- | --- |
 | `started` | 子进程收到配置 | `version` |
-| `session` | 浏览器会话建立 | `sessionId`，面板强制结束子进程时用它清理 Selenium 会话 |
+| `session` | 浏览器会话建立 | `sessionId`，子进程退出后面板用它清理 Selenium 会话（内置浏览器时改为结束子进程所在进程组中剩下的 chromedriver 与浏览器进程） |
 | `login-required` | 每次截取二维码（含二维码刷新后） | `url`：解析出的登录链接，解析失败时为空 |
 | `login-ok` | 登录成功（包括 cookies 仍然有效、不需要扫码时） | - |
 | `login-timeout` | 等待扫码超时 | - |

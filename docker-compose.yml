@@ -1,6 +1,7 @@
 services:
   # Web 面板：docker compose up -d 启动，浏览器访问 http://127.0.0.1:26868/
   # 首次启动的初始密码：docker compose logs app | grep 面板初始密码
+  # 镜像中已包含浏览器（Chromium 与 chromedriver，无界面模式），不需要单独的 Selenium 容器
   app:
     # 固定版本时在同目录的 .env 中写 WEREAD_ASSISTANT_TAG=0.1.3；dev 为 main 分支的最新构建
     image: lonemoonspace/weread-assistant:${WEREAD_ASSISTANT_TAG:-latest}
@@ -12,42 +13,14 @@ services:
       - "127.0.0.1:26868:26868"
     environment:
       - TZ=Asia/Shanghai
-      - SELENIUM_URL=http://selenium:4444 # 首次启动时写入面板的全局默认配置
+      # 改用自己部署的 Selenium 时取消注释（首次启动时写入面板的全局默认配置，之后在面板设置中修改）
+      # - SELENIUM_URL=http://selenium:4444
       # - PANEL_PASSWORD=change-me
       # - PANEL_TRUST_PROXY=true
       # - PANEL_BASE_PATH=/weread/
       # - PANEL_PUBLIC_URL=https://example.com/weread/ # 扫码推送中附带面板链接
     volumes:
       - ./data:/app/data
-    depends_on:
-      selenium:
-        condition: service_healthy
-    # 容器默认使用宿主机的 DNS。宿主机解析微信读书或通知服务较慢时，可以取消注释指定 DNS（两个服务都加）
+    # 容器默认使用宿主机的 DNS。宿主机解析微信读书或通知服务较慢时，可以取消注释指定 DNS
     # dns:
     #   - 223.5.5.5
-
-  selenium:
-    # 固定版本，与 CI 中测试的版本一致；升级时随本文件一起更新
-    image: selenium/standalone-chromium:4.51.0-20261010
-    restart: unless-stopped
-    shm_size: 2gb
-    environment:
-      - SE_NODE_MAX_SESSIONS=1 # 与面板设置中“同时运行的账号数”一致
-      - SE_ENABLE_TRACING=false
-      - SE_BIND_HOST=false
-      - SE_JAVA_DISABLE_HOSTNAME_VERIFICATION=false
-      # 开启下面的 noVNC 端口时务必修改 VNC 密码（默认为 secret），并建议只读（只能看，不能操作浏览器）
-      # - SE_VNC_PASSWORD=change-me
-      # - SE_VNC_VIEW_ONLY=1
-    # 查看浏览器实时画面（noVNC）：取消注释后在面板设置中填写 noVNC 地址，例如 http://127.0.0.1:7900/。
-    # 画面就是已登录微信读书的浏览器：只在本机或可信的局域网访问（需要局域网访问时把 127.0.0.1 换成主机的局域网 IP），
-    # 不要经反向代理或公网暴露 7900 端口
-    # ports:
-    #   - "127.0.0.1:7900:7900"
-    # dns:
-    #   - 223.5.5.5
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://selenium:4444/status"]
-      interval: 5s
-      timeout: 60s
-      retries: 10

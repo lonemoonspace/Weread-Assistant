@@ -77,7 +77,8 @@ const CONFIG_SCHEMA = [
     type: "string",
     group: "browser",
     label: "Selenium 地址",
-    default: "http://selenium:4444",
+    description: "留空时使用镜像内置的浏览器；填写时连接该地址的 Selenium（例如 http://selenium:4444）。",
+    default: "",
   },
   {
     key: "profileName",

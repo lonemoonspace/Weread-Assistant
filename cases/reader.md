@@ -1,10 +1,11 @@
 ## 自动阅读流程验收用例
 
-`scripts/reader-smoke.js` 用本地模拟页面驱动真实浏览器运行 `runOnce`，并以面板的方式启动阅读子进程，不访问微信读书（书架中找不到书时打开的默认阅读链接也指向模拟页面）。执行方式：`SELENIUM_URL=<Selenium 或 chromedriver 地址> npm run test:reader`。
+`scripts/reader-smoke.js` 用本地模拟页面驱动真实浏览器运行 `runOnce`，并以面板的方式启动阅读子进程，不访问微信读书（书架中找不到书时打开的默认阅读链接也指向模拟页面）。执行方式：`SELENIUM_URL=<Selenium 或 chromedriver 地址> npm run test:reader`；`SELENIUM_URL=` 为空时使用内置浏览器（本机的 chromedriver 与无界面的 Chromium），CI 在镜像中这样运行。
 
 | 场景 | 前置条件 / 输入 | 预期结果 |
 | --- | --- | --- |
 | smoke 自查 | 启动 Selenium（或 chromedriver）后执行 `npm run test:reader` | 11 个场景全部通过并退出码 0 |
+| smoke 自查（内置浏览器） | 在装有 Chromium 与 chromedriver 的环境（如镜像）中执行 `SELENIUM_URL= npm run test:reader` | 11 个场景全部通过；日志中连接浏览器前记录 `内置浏览器：<版本>`；运行结束与停止后没有残留的 chromedriver 与浏览器进程 |
 | 扫码登录 | 未登录；二维码 3 秒过期，第 2 张二维码出现 1.5 秒后扫码；仅登录模式 | 结果为 `success`；至少刷新一次二维码；推送一次「需要扫码」，`click` 为第 1 张二维码解析出的链接；生成 `login.png`、`login-qr.png`；`cookies.json` 含 `wr_vid` |
 | 等待扫码超时 | 未登录；二维码 1.5 秒过期且不扫码；等待时长 25 秒 | 结果为 `login-timeout`；二维码刷新不少于 3 次；推送「运行失败」，正文含“等待扫码超时” |
 | 二维码图片迟迟不出现 | 未登录，首页有 3 张图片地址含 `wfqqreader` 的书籍封面；弹窗打开 60 秒后才加载二维码图片；数据目录中有之前的 `login-qr.png`；等待时长 3 秒 | 结果为 `login-timeout`；生成整页 `login.png`；之前的 `login-qr.png` 已删除，书籍封面没有被当作二维码截图 |

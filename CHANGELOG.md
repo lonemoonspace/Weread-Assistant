@@ -2,6 +2,26 @@
 
 版本号与 `package.json` 一致；推送 `v<版本号>` tag 时，发布流程把对应一节作为 GitHub Release 的说明。
 
+## 未发布
+
+镜像内置浏览器，不再需要单独的 Selenium 容器：部署体积从约 3.5GB 降到约 1GB，阅读时的内存占用减少约 300–450MB。
+
+升级说明：
+
+- **先重新下载 `docker-compose.yml`**（其中已去掉 `selenium` 服务），再执行 `docker compose pull && docker compose up -d --remove-orphans`，旧的 `selenium` 容器随之删除。只拉取新镜像、保留旧的 `docker-compose.yml` 时，继续使用旧文件中的 Selenium，同样能运行
+- 没有设置 `SELENIUM_URL` 时，面板启动时把设置中的 `http://selenium:4444` 清空，改用内置浏览器；账号的登录状态不受影响，不需要重新扫码
+- 确认运行正常后，可以执行 `docker image rm selenium/standalone-chromium:4.51.0-20261010` 删除旧镜像，释放约 3GB 磁盘
+- 想继续使用自己部署的 Selenium：在 `docker-compose.yml` 中设置 `SELENIUM_URL`，或在面板设置中填写 Selenium 地址
+
+变更：
+
+- 镜像改为基于 `node:24-alpine3.24`，内置 Alpine 的 Chromium 155 与 chromedriver，以及中文字体；Selenium 地址留空时，阅读子进程在容器内以无界面模式启动浏览器，UA 与有界面时相同
+- `tini` 作为 1 号进程，转发停止信号并回收浏览器留下的进程；阅读子进程被强制结束时，面板结束它留下的浏览器进程
+- 总览的浏览器状态显示内置浏览器的版本，不可用时给出原因与处理办法
+- 内置浏览器没有画面，不提供 noVNC，运行中的状况看实时页面中的截图与日志；连接自己部署的 Selenium 时 noVNC 照旧可用
+- 内置浏览器找不到、无法运行或 chromedriver 与 Chromium 的主版本不一致时，总览直接显示原因，运行不会启动浏览器
+- 设置中“同时运行的账号数”：使用内置浏览器时每个账号单独启动一个浏览器（各约占 600MB 内存），请按设备内存设置
+
 ## 0.1.3
 
 依赖安全更新，并修复最新一轮代码审查中核实的问题。

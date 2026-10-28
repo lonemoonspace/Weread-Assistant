@@ -56,7 +56,7 @@ async function main() {
     }
   };
   process.on("SIGTERM", () => stop("收到 SIGTERM"));
-  // 在终端按 Ctrl+C 时面板与子进程都会收到 SIGINT，由面板统一停止
+  // 面板以单独的进程组启动子进程，在终端按 Ctrl+C 时只有面板收到 SIGINT，由面板统一停止
   process.on("SIGINT", () => stop("收到 SIGINT"));
   process.on("disconnect", () => stop("与面板的连接已断开"));
 

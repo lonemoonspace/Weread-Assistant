@@ -5,7 +5,7 @@
 ### 启动
 
 ```bash
-docker compose up -d                 # 启动面板（app）与 Selenium，面板映射到 127.0.0.1:26868
+docker compose up -d                 # 启动面板（app，镜像中带浏览器），面板映射到 127.0.0.1:26868
 node src/cli.js                      # 本地开发：不带参数即启动面板
 PANEL_PORT=30000 node src/cli.js panel
 ```
@@ -29,7 +29,8 @@ docker compose logs app | grep 面板初始密码
 | `PANEL_TRUST_PROXY` | `false` | `true` 表示信任 1 层代理，也可填信任的代理层数 |
 | `PANEL_PUBLIC_URL` | 空 | 面板的外网地址（不含用户名与密码的 http(s) 地址，例如 `https://example.com/weread/`）：扫码推送附带该账号实时页面的链接；二维码解析不出登录链接时改为推送面板链接，在面板中扫二维码截图。地址无效时拒绝启动；设置了 `PANEL_BASE_PATH` 而外网地址的路径不以它结尾时，启动日志给出提示（反向代理去掉前缀、`PANEL_BASE_PATH` 为 `/` 时外网地址带路径是正常的）；`run --account` 不读取它 |
 | `PANEL_DATA_DIR` | `data` | 面板数据目录，保存 `panel.json`、`panel.log` 与各账号的数据 |
-| `SELENIUM_URL` | 空 | 首次初始化全局默认配置时写入 Selenium 地址；之后以面板中的设置为准 |
+| `SELENIUM_URL` | 空 | 首次初始化全局默认配置时写入 Selenium 地址；之后以面板中的设置为准。没有设置时使用内置浏览器，并在启动时把全局默认配置与账号配置中旧版的 `http://selenium:4444` 清空 |
+| `CHROME_BIN` / `CHROMEDRIVER_PATH` | 空 | 内置浏览器的 Chromium 与 chromedriver 路径；为空时在 `PATH` 中查找（`chromium-browser`、`chromium` 等与 `chromedriver`），镜像中不需要设置 |
 
 ### 职责
 
@@ -45,6 +46,7 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
 | `src/panel/history.js` | 运行历史、按天统计、打卡日历与挑战进度、按保留策略清理 | 按面板时区统计；口径为本工具的运行记录，非微信读书官方数据 |
 | `src/panel/challenge.js` | 阅读挑战（月卡、年卡）的规则与设置校验 | |
+| `src/shared/local-browser.js` | 查找内置浏览器（Chromium 与 chromedriver），读取版本 | 返回值与 Selenium 状态格式相同；找不到或无法运行时为 `unreachable` 并附带原因 |
 | `src/shared/selenium.js` | 查询 Selenium 的 `/status`：是否就绪、已用/总会话数；面板总览与阅读子进程的运行日志共用 | 先 `/status`，不是 Selenium 状态时再试 `/wd/hub/status`；3 秒超时（整个请求的时限，含读取响应体，响应体不超过 1 MB）；展示的地址去掉其中的用户名与密码 |
 | `src/reader/worker.js` | 阅读子进程入口：经 IPC 接收配置、上报事件，收到 SIGTERM 时关闭浏览器后退出 | 只由面板启动，见 `docs/reader.md` |
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入、先写临时文件并刷到磁盘再重命名、权限 0600；每次修改前把上一版保存为 `panel.json.bak`；启动时把已有文件的权限收紧为 0600，改不了时拒绝启动；文件无法解析或结构不对（例如 `accounts` 不是数组、`settings` 不是对象）时视为损坏，另存为 `panel.json.corrupt-<时间>`（只保留最近 3 份）并从上一版恢复，`panel.json` 不见了而上一版还在时同样从上一版恢复，上一版也不可用时拒绝启动（重置面板需同时删除 `panel.json` 与 `panel.json.bak`）；补齐缺少的部分（旧文件自动升级） |
@@ -79,7 +81,7 @@ docker compose logs app | grep 面板初始密码
 | `POST api/accounts/:id/stop` | 是 | 停止账号当前的运行：排队中的直接取消，进行中的结束子进程；返回 202 与运行状态；没有运行时 404 `run_not_active` |
 | `POST api/notifications/test` | 是 | `{ accountId? }`：按账号的实际配置（不提供时按全局默认配置）向已配置的 Bark、ntfy、邮件各发送一条测试通知，不受事件开关影响；返回 `{ results: [{ channel, ok }] }`，没有配置任何渠道时为空数组 |
 | `GET api/runs` | 是 | 排队中与进行中的运行，按加入队列的顺序，每个运行带最近 200 行日志 |
-| `GET api/selenium/status` | 是 | 全局默认配置与各账号实际使用的每个 Selenium 地址的状态与会话数，见下文“Selenium 状态与 noVNC” |
+| `GET api/selenium/status` | 是 | 全局默认配置与各账号实际使用的内置浏览器或每个 Selenium 地址的状态与会话数，见下文“Selenium 状态与 noVNC” |
 | `GET api/accounts/:id/runs` | 是 | 运行历史，最新的在前：`{ runs, nextBefore }`；`?limit=`（1–100，默认 20）、`?before=<nextBefore>` 翻页；后面没有记录或只剩读不出来的记录时 `nextBefore` 为 null。每条为运行记录加 `hasLog` 与截图文件名 `screenshots` |
 | `GET api/accounts/:id/runs/:runId` | 是 | `{ run }`：运行记录、截图文件名与按天拆分的阅读分钟数 `minutesByDate` |
 | `GET api/accounts/:id/runs/:runId/screenshots/:name` | 是 | 截图（`image/png`），运行中也可读取最新的截图；文件名只接受 `screenshot-<分钟>.png`（0.1.0 的旧记录中还可能有发邮件时留下的 `screenshot.png`，同样可读取） |
@@ -97,7 +99,7 @@ docker compose logs app | grep 面板初始密码
 | 页面 | 地址 | 内容 |
 | --- | --- | --- |
 | 登录 | `login` | 面板密码登录 |
-| 总览 | `#/` | 顶部 Selenium 状态（就绪、已用/总会话数，连不上时的提示与处理办法）与 noVNC 链接；需要扫码的账号置顶并直接显示二维码；运行队列；每个账号一张卡片：运行状态或上次运行结果、今天的阅读分钟与是否打卡、下次运行时间、立即运行 / 仅登录 / 停止 |
+| 总览 | `#/` | 顶部浏览器状态（内置浏览器的版本，或 Selenium 是否就绪、已用/总会话数；不可用时的提示与处理办法）与 noVNC 链接；需要扫码的账号置顶并直接显示二维码；运行队列；每个账号一张卡片：运行状态或上次运行结果、今天的阅读分钟与是否打卡、下次运行时间、立即运行 / 仅登录 / 停止 |
 | 账号 · 实时 | `#/accounts/<id>/live` | 状态、“正在读《书名》第 23/68 分钟”与进度条、二维码与“复制登录链接”、最新截图、实时日志；运行进行中且设置了 noVNC 地址时显示查看浏览器画面的链接 |
 | 账号 · 历史 | `#/accounts/<id>/history` | 运行列表（开始时间、时长、触发方式、结果、阅读分钟），展开查看日志与截图，下载日志，加载更多 |
 | 账号 · 打卡日历 | `#/accounts/<id>/calendar` | 按月显示每天的阅读分钟与打卡状态（已打卡、不足 5 分钟、今天未打卡高亮），本月合计；挑战进度与设置 |
@@ -135,10 +137,10 @@ docker compose logs app | grep 面板初始密码
 | 规则 | 说明 |
 | --- | --- |
 | 同一账号 | 同时只有一个排队中或进行中的运行，重复触发返回 409 |
-| 并发 | 同时运行的数量取面板设置 `maxConcurrentRuns`（应与 Selenium 的 `SE_NODE_MAX_SESSIONS` 一致），调大后立即启动排队中的运行；先到先运行 |
+| 并发 | 同时运行的数量取面板设置 `maxConcurrentRuns`（内置浏览器时每个运行单独启动一个浏览器；使用 Selenium 时应与它的 `SE_NODE_MAX_SESSIONS` 一致），调大后立即启动排队中的运行；先到先运行 |
 | 等待扫码 | 等待扫码期间一直占用并发槽位 |
-| 停止 | 先发 SIGTERM，子进程关闭浏览器后退出；15 秒内没有退出则 SIGKILL，并请求 Selenium `DELETE /session/<会话 ID>` 清理会话 |
-| 退出后清理会话 | 子进程退出后，只要建立过会话就请求 Selenium 删除：被信号结束、退出码不为 0 时会话还在；正常退出时浏览器通常已经关闭（Selenium 返回 404），但关闭浏览器失败时子进程同样以退出码 0 退出。删除完成后才启动下一个排队的运行 |
+| 停止 | 先发 SIGTERM，子进程关闭浏览器后退出；15 秒内没有退出则 SIGKILL，并清理浏览器（见下一行） |
+| 退出后清理浏览器 | 子进程以单独的进程组启动，内置浏览器的 chromedriver 与 Chromium 都在这个进程组中：子进程退出后向该进程组发送 SIGKILL，结束被强制结束时留下的浏览器进程（正常退出时组内已没有进程）。使用 Selenium 时，只要建立过会话就请求 Selenium 删除：被信号结束、退出码不为 0 时会话还在；正常退出时浏览器通常已经关闭（Selenium 返回 404），但关闭浏览器失败时子进程同样以退出码 0 退出。删除完成后才启动下一个排队的运行 |
 | 运行时长上限 | 等待扫码时长 + 阅读时长 + 30 分钟，超过后按停止流程结束子进程并记为失败，防止 Selenium 卡住时一直占用槽位 |
 | 上报结果后 | 子进程上报结果后 3 分钟内仍未退出（关闭浏览器或发送通知卡住）时结束它，结果保持不变 |
 | 面板停止 | 取消排队，结束所有子进程并等待退出（最长 15 秒），这些运行记为中断；`docker-compose.yml` 中 `stop_grace_period` 设为 30 秒，留出关闭浏览器的时间 |
@@ -224,7 +226,7 @@ docker compose logs app | grep 面板初始密码
 
 ### Selenium 状态与 noVNC
 
-`GET api/selenium/status` 对全局默认配置与各账号实际生效配置中的每个 Selenium 地址查询一次 `/status`（同一地址同时只发一个请求）：
+`GET api/selenium/status` 对全局默认配置与各账号实际生效配置中的每个 Selenium 地址查询一次 `/status`（同一地址同时只发一个请求）；地址为空的配置使用内置浏览器，合为一项（`builtin` 为 true、`url` 为空），由 `chromium-browser --version` 与 `chromedriver --version` 判断是否可用（两者主版本不一致时同样为 `unreachable`；同时只检查一次，多个页面同时刷新时共用结果），`message` 为浏览器版本（如 `Chromium 155.0.8059.84 Alpine Linux`），`sessions` 为 null：
 
 ```json
 {
@@ -233,6 +235,7 @@ docker compose logs app | grep 面板初始密码
   "servers": [
     {
       "url": "http://selenium:4444",
+      "builtin": false,
       "isDefault": true,
       "accounts": [{ "id": "me", "name": "我" }],
       "panelRuns": 1,
@@ -259,14 +262,16 @@ docker compose logs app | grep 面板初始密码
 | 页面行为 | 说明 |
 | --- | --- |
 | 刷新 | 打开总览时查询，之后每 30 秒（页面在后台时跳过）、运行开始或结束 3 秒后各刷新一次，也可点“刷新” |
-| 无法连接 | 卡片变红并提示“阅读和扫码登录都无法开始”，给出处理办法：确认 Selenium 容器在运行（`docker compose up -d selenium`）、检查设置中的 Selenium 地址 |
+| 无法连接 | 卡片变红并提示“阅读和扫码登录都无法开始”，给出处理办法：内置浏览器不可用时说明镜像中已包含浏览器，不用镜像时安装 Chromium 与 chromedriver 或填写 Selenium 地址；Selenium 连不上时确认它在运行、检查地址，改用内置浏览器时把地址清空 |
 | 不属于面板的会话 | 已用会话数多于面板自己的运行时提示：可能是其他程序在用，或没有正常关闭的会话（Selenium 会在会话空闲超时后回收） |
 | 并发数超过会话数 | 设置中的“同时运行的账号数”（不超过使用该地址的账号数）大于该 Selenium 的会话数时提示：多出的运行会在 Selenium 中等待，超时后失败；应调低设置或调大 `SE_NODE_MAX_SESSIONS` |
 | 多个地址 | 每个地址一行，标出是否为全局默认与使用它的账号；整体状态取最差的一个 |
 
 阅读子进程连接浏览器前也会查询一次，在运行日志中记录 `Selenium 状态（<地址>）：就绪，已用 0/1 个会话：Selenium Grid ready.`；连不上时运行失败，错误为 `无法连接 Selenium（<地址>）：连接被拒绝（ECONNREFUSED），请确认 Selenium 正在运行、地址正确`。日志中的地址同样去掉用户名与密码。
 
-noVNC 默认关闭：只有在设置中填写“noVNC 地址”后，总览与进行中运行的实时页面才显示“查看浏览器画面（noVNC）”链接（新窗口打开，`rel="noopener noreferrer"`）。`selenium/standalone-*` 镜像在容器内 7900 端口提供 noVNC，`docker-compose.yml` 中有注释掉的端口映射与 VNC 环境变量示例。地址后可加 noVNC 参数，如 `http://192.168.1.10:7900/?autoconnect=1&resize=scale&view_only=1`。
+阅读子进程使用内置浏览器时，在运行日志中记录 `内置浏览器：<浏览器版本>`。
+
+noVNC 默认关闭，只在使用 Selenium 时可用（内置浏览器以无界面模式运行，没有画面，可以看运行中的截图）：只有在设置中填写“noVNC 地址”后，总览与进行中运行的实时页面才显示“查看浏览器画面（noVNC）”链接（新窗口打开，`rel="noopener noreferrer"`）。`selenium/standalone-*` 镜像在容器内 7900 端口提供 noVNC。地址后可加 noVNC 参数，如 `http://192.168.1.10:7900/?autoconnect=1&resize=scale&view_only=1`。
 
 | 安全 | 说明 |
 | --- | --- |
@@ -301,7 +306,7 @@ data/
     "screenshotRetentionRuns": 3,
     "vncUrl": ""
   },
-  "defaults": { "seleniumUrl": "http://selenium:4444", "duration": 68 },
+  "defaults": { "duration": 68 },
   "accounts": [
     {
       "id": "me",

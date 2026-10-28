@@ -4,6 +4,7 @@ const path = require("path");
 const express = require("express");
 const { resolveConfig } = require("../config/resolve");
 const { sendTestNotification } = require("../notify");
+const { createLocalBrowserChecker } = require("../shared/local-browser");
 const { createSeleniumChecker, displaySeleniumUrl, normalizeSeleniumUrl } = require("../shared/selenium");
 const { VERSION } = require("../shared/version");
 const { createAccount, deleteAccount, findAccount, publicAccount, updateAccount } = require("./accounts");
@@ -135,6 +136,7 @@ function createPanelApp(options, { auth, store, runner }) {
     return normalizeSchedules(body.schedules);
   };
   const checkSelenium = createSeleniumChecker({ timeoutMs: options.seleniumTimeoutMs });
+  const checkLocalBrowser = createLocalBrowserChecker();
 
   const app = express();
   app.disable("x-powered-by");
@@ -409,15 +411,15 @@ function createPanelApp(options, { auth, store, runner }) {
     res.json({ results: await sendTestNotification(config) });
   });
 
-  // Selenium 的状态与会话数：全局默认配置与各账号实际使用的 Selenium 地址各查询一次。
+  // Selenium 的状态与会话数：全局默认配置与各账号实际使用的 Selenium 地址各查询一次；地址为空表示内置浏览器（builtin）。
   // accounts 为使用该地址的账号，panelRuns 为面板在该地址上已启动的运行数（每个占用一个会话）
   api.get("/selenium/status", async (req, res) => {
     const data = store.get();
     const servers = new Map();
     const serverFor = (url) => {
-      const key = normalizeSeleniumUrl(url);
+      const key = url ? normalizeSeleniumUrl(url) : "";
       if (!servers.has(key)) {
-        servers.set(key, { key, url: displaySeleniumUrl(key), isDefault: false, accounts: [], panelRuns: 0 });
+        servers.set(key, { key, url: key && displaySeleniumUrl(key), builtin: !key, isDefault: false, accounts: [], panelRuns: 0 });
       }
       return servers.get(key);
     };
@@ -437,12 +439,13 @@ function createPanelApp(options, { auth, store, runner }) {
       serverFor(config.seleniumUrl).accounts.push({ id: account.id, name: account.name });
     }
     for (const url of runner.seleniumUrls()) {
-      if (url) {
-        serverFor(url).panelRuns += 1;
-      }
+      serverFor(url).panelRuns += 1;
     }
     const results = await Promise.all(
-      [...servers.values()].map(async ({ key, ...server }) => ({ ...server, ...(await checkSelenium(key)) }))
+      [...servers.values()].map(async ({ key, ...server }) => ({
+        ...server,
+        ...(await (key ? checkSelenium(key) : checkLocalBrowser())),
+      }))
     );
     res.json({
       checkedAt: new Date().toISOString(),
@@ -572,6 +575,26 @@ function createPanelApp(options, { auth, store, runner }) {
   return app;
 }
 
+// 0.1.x 的 docker-compose.yml 经 SELENIUM_URL 把这个地址写入了全局默认配置。新版改用内置浏览器、去掉了 selenium 服务，
+// 没有设置 SELENIUM_URL 时把全局默认配置与账号配置中的这个地址清空，改用内置浏览器
+const LEGACY_SELENIUM_URL = "http://selenium:4444";
+
+async function migrateLegacySeleniumUrl(store) {
+  const isLegacy = (config) => Boolean(config && config.seleniumUrl) && normalizeSeleniumUrl(config.seleniumUrl) === LEGACY_SELENIUM_URL;
+  const data = store.get();
+  if (!isLegacy(data.defaults) && !data.accounts.some((account) => isLegacy(account.overrides))) {
+    return;
+  }
+  await store.update((next) => {
+    for (const config of [next.defaults, ...next.accounts.map((account) => account.overrides)]) {
+      if (isLegacy(config)) {
+        delete config.seleniumUrl;
+      }
+    }
+  });
+  console.warn(`没有设置 SELENIUM_URL，已把配置中的 Selenium 地址 ${LEGACY_SELENIUM_URL} 清空，改用内置浏览器`);
+}
+
 // 启动面板。返回 { server, port, generatedPassword, close }；generatedPassword 只在首次生成密码时非空
 async function startPanel(options) {
   // 先拿到数据目录的锁，再读写 panel.json
@@ -584,6 +607,9 @@ async function startPanel(options) {
     const store = createStore(path.resolve(options.dataDir), {
       seedDefaults: options.seleniumUrl ? { seleniumUrl: options.seleniumUrl } : {},
     });
+    if (!options.seleniumUrl) {
+      await migrateLegacySeleniumUrl(store);
+    }
     const auth = createAuth({ store, envPassword: options.password, limits: options.limits });
     const generatedPassword = await auth.init();
     restrictRunDirs(options.dataDir);
