@@ -132,7 +132,7 @@ export const SeleniumStatus = {
         </p>
         <div v-if="server.builtin && server.state === 'unreachable'" class="selenium-alert alert-error" role="alert">
           <p><strong>内置浏览器不可用：{{ server.error }}。</strong>阅读和扫码登录都无法开始。</p>
-          <p>Docker 镜像中已包含浏览器；不使用镜像运行面板时，请安装 Chromium 与 chromedriver，或在<a href="#/settings">设置</a>中填写 Selenium 地址。</p>
+          <p>Docker 镜像中已包含浏览器；不使用镜像运行面板时，请安装 Chromium 与同一版本的 chromedriver，或在<a href="#/settings">设置</a>中填写 Selenium 地址。</p>
         </div>
         <div v-else-if="server.state === 'unreachable'" class="selenium-alert alert-error" role="alert">
           <p><strong>无法连接 Selenium：{{ server.error }}。</strong>阅读和扫码登录都无法开始。</p>

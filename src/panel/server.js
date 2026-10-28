@@ -4,7 +4,7 @@ const path = require("path");
 const express = require("express");
 const { resolveConfig } = require("../config/resolve");
 const { sendTestNotification } = require("../notify");
-const { checkLocalBrowser } = require("../shared/local-browser");
+const { createLocalBrowserChecker } = require("../shared/local-browser");
 const { createSeleniumChecker, displaySeleniumUrl, normalizeSeleniumUrl } = require("../shared/selenium");
 const { VERSION } = require("../shared/version");
 const { createAccount, deleteAccount, findAccount, publicAccount, updateAccount } = require("./accounts");
@@ -136,6 +136,7 @@ function createPanelApp(options, { auth, store, runner }) {
     return normalizeSchedules(body.schedules);
   };
   const checkSelenium = createSeleniumChecker({ timeoutMs: options.seleniumTimeoutMs });
+  const checkLocalBrowser = createLocalBrowserChecker();
 
   const app = express();
   app.disable("x-powered-by");

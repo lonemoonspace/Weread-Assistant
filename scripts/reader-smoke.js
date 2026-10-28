@@ -103,11 +103,14 @@ function startWorker(message) {
   return { child, reported, exited, output: () => output };
 }
 
-// 内置浏览器的 chromedriver 与 Chromium 进程（无界面模式）
+// 内置浏览器的 chromedriver 与 Chromium 进程（无界面模式）。只看本次 smoke 开始之后出现的进程，
+// 机器上原有的浏览器不算在内；同时运行的其他程序新启动的同类进程仍会被算进来
+let preexistingProcesses = new Set();
+
 function builtinProcesses() {
   return fs
     .readdirSync("/proc")
-    .filter((pid) => /^\d+$/.test(pid))
+    .filter((pid) => /^\d+$/.test(pid) && !preexistingProcesses.has(pid))
     .filter((pid) => {
       try {
         const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
@@ -132,6 +135,9 @@ async function sessionClosed(sessionId) {
 }
 
 async function main() {
+  if (BUILTIN) {
+    preexistingProcesses = new Set(builtinProcesses());
+  }
   const mock = await startMockWeread();
   const ntfy = await startNtfyMock();
   const results = [];

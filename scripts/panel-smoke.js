@@ -1342,7 +1342,7 @@ async function main() {
       }
     });
 
-    await scenario("Selenium 状态：地址为空时检查内置浏览器，显示浏览器版本；找不到或无法运行时为 unreachable 并附带原因", async () => {
+    await scenario("Selenium 状态：地址为空时检查内置浏览器，显示浏览器版本；找不到、无法运行或 chromedriver 与浏览器主版本不一致时为 unreachable 并附带原因", async () => {
       const binDir = tempDir();
       const fake = (name, output) => {
         const file = path.join(binDir, name);
@@ -1380,6 +1380,14 @@ async function main() {
         assert.deepStrictEqual(
           [servers[0].state, servers[0].ready, servers[0].message, servers[0].sessions, servers[0].accounts],
           ["ready", true, "Chromium 155.0.8059.84 Alpine Linux", null, [{ id: "local-1", name: "本机" }]]
+        );
+
+        // chromedriver 与浏览器的主版本不一致
+        fake("chromedriver", "ChromeDriver 154.0.7999.1");
+        servers = await check();
+        assert.deepStrictEqual(
+          [servers[0].state, servers[0].error],
+          ["unreachable", "chromedriver 与 Chromium 的主版本不一致（chromedriver 154，Chromium 155）"]
         );
 
         // 用环境变量指定的浏览器无法运行

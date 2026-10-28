@@ -226,7 +226,7 @@ docker compose logs app | grep 面板初始密码
 
 ### Selenium 状态与 noVNC
 
-`GET api/selenium/status` 对全局默认配置与各账号实际生效配置中的每个 Selenium 地址查询一次 `/status`（同一地址同时只发一个请求）；地址为空的配置使用内置浏览器，合为一项（`builtin` 为 true、`url` 为空），由 `chromium-browser --version` 与 `chromedriver --version` 判断是否可用，`message` 为浏览器版本（如 `Chromium 155.0.8059.84 Alpine Linux`），`sessions` 为 null：
+`GET api/selenium/status` 对全局默认配置与各账号实际生效配置中的每个 Selenium 地址查询一次 `/status`（同一地址同时只发一个请求）；地址为空的配置使用内置浏览器，合为一项（`builtin` 为 true、`url` 为空），由 `chromium-browser --version` 与 `chromedriver --version` 判断是否可用（两者主版本不一致时同样为 `unreachable`；同时只检查一次，多个页面同时刷新时共用结果），`message` 为浏览器版本（如 `Chromium 155.0.8059.84 Alpine Linux`），`sessions` 为 null：
 
 ```json
 {

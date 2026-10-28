@@ -104,6 +104,11 @@ function runPanelSmoke(imageTag) {
     if (!init.split('\0').slice(0, 2).includes('/sbin/tini')) {
       throw new Error(`PID 1 is ${JSON.stringify(init)}, expected tini`);
     }
+    // 以非 root 用户启动（docker run --user）时入口脚本不降权，同样由 tini 作为 1 号进程
+    const nonRootInit = runCommand('docker', ['run', '--rm', '--user', 'node', imageTag, 'cat', '/proc/1/cmdline'], { quiet: true });
+    if (!nonRootInit.split('\0').slice(0, 2).includes('/sbin/tini')) {
+      throw new Error(`PID 1 with --user node is ${JSON.stringify(nonRootInit)}, expected tini`);
+    }
     // 内置浏览器：镜像中的 Chromium 与 chromedriver 能运行
     const browser = runCommand('docker', [
       'exec', container, 'node', '-e',

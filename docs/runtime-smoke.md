@@ -31,6 +31,6 @@ flowchart TD
 | 架构 | 设置 `RUNTIME_SMOKE_ARCH`（如 `arm64`）时，镜像的架构与容器内 Node.js 报告的架构都必须与之一致（Node.js 把 amd64 报告为 `x64`）；CI 在 QEMU 中运行 arm64 镜像时用它确认检查的确实是发布的架构 |
 | 校验关键字 | 帮助输出需包含 `src/cli.js run`、`help`、`SELENIUM_URL` 与 `PANEL_PORT` |
 | 健康检查 | 运行时把检查间隔缩短为 2 秒，60 秒内需变为 `healthy` |
-| 运行用户 | 1 号进程是 tini 且属于 `node`；`/app/data/panel.json` 属于 `node` 且权限为 600 |
-| 内置浏览器 | 在容器中运行 `chromium-browser --version` 与 `chromedriver --version`（经 `src/shared/local-browser.js`），输出以 `Chromium <版本>` 开头 |
+| 运行用户 | 1 号进程是 tini 且属于 `node`，以 `--user node` 启动时 1 号进程同样是 tini；`/app/data/panel.json` 属于 `node` 且权限为 600 |
+| 内置浏览器 | 在容器中运行 `chromium-browser --version` 与 `chromedriver --version`（经 `src/shared/local-browser.js`），两者主版本一致，输出以 `Chromium <版本>` 开头 |
 | 停止耗时 | `docker stop` 需在 5 秒内完成，说明面板正确处理了 SIGTERM |

@@ -60,19 +60,40 @@ async function checkLocalBrowser(env = process.env) {
     result.error = `找不到 ${[!driver && "chromedriver", !browser && "Chromium"].filter(Boolean).join(" 与 ")}`;
     return result;
   }
+  let versions;
   try {
-    const versions = await Promise.all([readVersion(browser), readVersion(driver)]);
-    return { ...result, state: "ready", ready: true, message: versions[0], error: "" };
+    versions = await Promise.all([readVersion(browser), readVersion(driver)]);
   } catch (e) {
     result.error = `无法读取浏览器版本：${e.message}`;
     return result;
   }
+  // chromedriver 只能驱动同一主版本的浏览器，不一致时要到启动浏览器才会失败，这里提前报出
+  const [browserMajor, driverMajor] = versions.map(majorVersion);
+  if (browserMajor !== driverMajor) {
+    result.error = `chromedriver 与 Chromium 的主版本不一致（chromedriver ${driverMajor || "未知"}，Chromium ${browserMajor || "未知"}）`;
+    return result;
+  }
+  return { ...result, state: "ready", ready: true, message: versions[0], error: "" };
+}
+
+// 同时只检查一次：多个页面同时刷新时共用结果
+function createLocalBrowserChecker(env = process.env) {
+  let pending = null;
+  return () => {
+    if (!pending) {
+      pending = checkLocalBrowser(env).finally(() => {
+        pending = null;
+      });
+    }
+    return pending;
+  };
 }
 
 module.exports = {
   browserPath,
   checkLocalBrowser,
   chromedriverPath,
+  createLocalBrowserChecker,
   majorVersion,
   readVersion,
 };
