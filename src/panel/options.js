@@ -9,6 +9,9 @@ function normalizeBasePath(raw) {
   if (trimmed && !/^[A-Za-z0-9._~\-/]+$/.test(trimmed)) {
     throw new Error(`PANEL_BASE_PATH 含有不支持的字符: ${value}`);
   }
+  if (trimmed.split("/").some((segment) => segment === "." || segment === "..")) {
+    throw new Error(`PANEL_BASE_PATH 不能包含 . 或 .. 路径段: ${value}`);
+  }
   return trimmed ? `/${trimmed}/` : "/";
 }
 
@@ -62,11 +65,22 @@ function panelDataDirFromEnv(env = process.env) {
 
 // PANEL_PUBLIC_URL 与 PANEL_BASE_PATH 明显不一致时的提示：面板部署在子路径下，外网地址却不以该路径结尾，
 // 推送中的面板链接多半打不开。反向代理去掉了前缀时（PANEL_BASE_PATH 为 /）外网地址带路径是正常的，不提示
-function publicUrlWarning({ publicUrl, basePath }) {
-  if (!publicUrl || basePath === "/" || new URL(publicUrl).pathname.endsWith(basePath)) {
+function publicUrlWarning({ publicUrl, basePath, trustProxy = false }) {
+  if (!publicUrl) {
     return "";
   }
-  return `PANEL_PUBLIC_URL（${publicUrl}）的路径不以 PANEL_BASE_PATH（${basePath}）结尾，推送中的面板链接可能打不开`;
+  const warnings = [];
+  if (basePath !== "/" && !new URL(publicUrl).pathname.endsWith(basePath)) {
+    warnings.push(`PANEL_PUBLIC_URL（${publicUrl}）的路径不以 PANEL_BASE_PATH（${basePath}）结尾，推送中的面板链接可能打不开`);
+  }
+  // 经 HTTPS 反向代理访问却不信任代理时，面板看到的是 http 与代理的地址：会话 cookie 不带 Secure，登录限速按代理地址计数
+  if (new URL(publicUrl).protocol === "https:" && !trustProxy) {
+    warnings.push(
+      "PANEL_PUBLIC_URL 是 https 地址，但没有设置 PANEL_TRUST_PROXY：经反向代理访问时会话 cookie 不带 Secure、" +
+        "登录限速按代理地址计数，请设置 PANEL_TRUST_PROXY=true（面板端口只允许代理访问）"
+    );
+  }
+  return warnings.join("\n");
 }
 
 // 面板自身的运行参数，来自 PANEL_* 环境变量；取值非法时抛出错误

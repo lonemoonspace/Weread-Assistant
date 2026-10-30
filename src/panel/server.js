@@ -70,6 +70,8 @@ const SECURITY_HEADERS = {
   "X-Frame-Options": "DENY",
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
+  // 面板用不到这些浏览器能力
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
 };
 
 function parseCookies(header = "") {
@@ -263,12 +265,21 @@ function createPanelApp(options, { auth, store, runner }) {
 
   api.post("/auth/password", async (req, res) => {
     const body = req.body || {};
-    const result = await auth.changePassword(body.current, body.next);
+    const result = await auth.changePassword(req.ip, body.current, body.next);
     if (result.ok) {
       setSessionCookie(req, res, result.token);
       console.info("面板密码已修改，其他会话已失效");
       res.status(204).end();
       return;
+    }
+    if (result.error === "too_many_attempts") {
+      const retryAfter = Math.ceil(result.retryAfterMs / 1000);
+      res.set("Retry-After", String(retryAfter));
+      res.status(429).json({ error: result.error, retryAfter });
+      return;
+    }
+    if (result.error === "wrong_password") {
+      console.warn("修改面板密码：当前密码不正确:", req.ip);
     }
     const status = result.error === "password_from_env" ? 409 : 400;
     res.status(status).json({ error: result.error, minPasswordLength: MIN_PASSWORD_LENGTH });
@@ -495,7 +506,7 @@ function createPanelApp(options, { auth, store, runner }) {
   });
 
   // 实时推送（SSE）：连接后先发送一次完整状态 snapshot，之后推送运行状态变化 run 与新的日志行 log。
-  // 退出登录、修改密码时立即断开；定期发送心跳注释，同时检查会话是否过期
+  // 退出登录、修改密码时立即断开；定期发送心跳事件 ping，同时检查会话是否过期
   api.get("/events", (req, res) => {
     res.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
@@ -530,7 +541,8 @@ function createPanelApp(options, { auth, store, runner }) {
         disconnect();
         return;
       }
-      res.write(": ping\n\n");
+      // 以事件而不是注释发送：页面据此发现半开的连接（EventSource 收不到注释）
+      send("ping", {});
     }, options.sseHeartbeatMs || SSE_HEARTBEAT_MS);
     function cleanup() {
       if (!open) {
@@ -576,23 +588,32 @@ function createPanelApp(options, { auth, store, runner }) {
 }
 
 // 0.1.x 的 docker-compose.yml 经 SELENIUM_URL 把这个地址写入了全局默认配置。新版改用内置浏览器、去掉了 selenium 服务，
-// 没有设置 SELENIUM_URL 时把全局默认配置与账号配置中的这个地址清空，改用内置浏览器
+// 第一次在没有设置 SELENIUM_URL 的情况下启动时，把全局默认配置与账号配置中的这个地址清空，改用内置浏览器。
+// 迁移只做一次（记录在 panel.json 的 migrations 中）：之后在面板中主动填写的同一地址不会再被清空
 const LEGACY_SELENIUM_URL = "http://selenium:4444";
+const LEGACY_SELENIUM_MIGRATION = "legacy-selenium-url";
 
 async function migrateLegacySeleniumUrl(store) {
-  const isLegacy = (config) => Boolean(config && config.seleniumUrl) && normalizeSeleniumUrl(config.seleniumUrl) === LEGACY_SELENIUM_URL;
-  const data = store.get();
-  if (!isLegacy(data.defaults) && !data.accounts.some((account) => isLegacy(account.overrides))) {
+  if (store.get().migrations.includes(LEGACY_SELENIUM_MIGRATION)) {
     return;
   }
+  const isLegacy = (config) => Boolean(config && config.seleniumUrl) && normalizeSeleniumUrl(config.seleniumUrl) === LEGACY_SELENIUM_URL;
+  let cleared = 0;
   await store.update((next) => {
     for (const config of [next.defaults, ...next.accounts.map((account) => account.overrides)]) {
       if (isLegacy(config)) {
         delete config.seleniumUrl;
+        cleared += 1;
       }
     }
+    next.migrations.push(LEGACY_SELENIUM_MIGRATION);
   });
-  console.warn(`没有设置 SELENIUM_URL，已把配置中的 Selenium 地址 ${LEGACY_SELENIUM_URL} 清空，改用内置浏览器`);
+  if (cleared > 0) {
+    console.warn(
+      `没有设置 SELENIUM_URL，已把配置中的 Selenium 地址 ${LEGACY_SELENIUM_URL} 清空（${cleared} 处），改用内置浏览器。` +
+        "这一步只在升级后执行一次；仍要使用该地址的 Selenium 时在面板设置中重新填写，之后不会再被清空"
+    );
+  }
 }
 
 // 启动面板。返回 { server, port, generatedPassword, close }；generatedPassword 只在首次生成密码时非空

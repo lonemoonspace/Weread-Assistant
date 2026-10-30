@@ -16,7 +16,7 @@ services:
       # 改用自己部署的 Selenium 时取消注释（首次启动时写入面板的全局默认配置，之后在面板设置中修改）
       # - SELENIUM_URL=http://selenium:4444
       # - PANEL_PASSWORD=change-me
-      # - PANEL_TRUST_PROXY=true
+      # - PANEL_TRUST_PROXY=true # 经反向代理访问时设置：识别真实 IP，HTTPS 下会话 cookie 带 Secure
       # - PANEL_BASE_PATH=/weread/
       # - PANEL_PUBLIC_URL=https://example.com/weread/ # 扫码推送中附带面板链接
     volumes:
