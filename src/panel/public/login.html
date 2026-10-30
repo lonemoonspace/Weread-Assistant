@@ -17,12 +17,16 @@
         <label for="password">面板密码</label>
         <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
         <button type="submit">登录</button>
-        <p id="message" class="error-text" role="alert"></p>
       </form>
+      <div id="passkey-login" class="passkey-login" hidden>
+        <button id="passkey-button" type="button" class="secondary">使用 passkey 登录</button>
+      </div>
+      <p id="passkey-hint" class="muted" hidden></p>
+      <p id="message" class="error-text" role="alert"></p>
       <p class="muted">非微信读书官方工具。首次启动的初始密码见面板日志：<code>docker compose logs app | grep 面板初始密码</code></p>
     </article>
   </main>
   <script src="assets/api.js"></script>
-  <script src="assets/login.js"></script>
+  <script type="module" src="assets/login.js"></script>
 </body>
 </html>

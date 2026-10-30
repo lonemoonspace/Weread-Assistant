@@ -67,7 +67,8 @@ flowchart LR
 | `src/notify/` | Bark / ntfy / 邮件发送与统一通知入口 | 按事件类型开关；标题带账号名 |
 | `src/shared/` | 日志、HTTP、版本号等公共工具 | 不依赖其他业务模块 |
 | `src/panel/options.js` | 读取 `PANEL_*` 环境变量 | 规范化子路径、代理层数与端口 |
-| `src/panel/auth.js` | 面板密码、会话、登录限速 | 未登录时除登录接口与静态资源外一律 401 |
+| `src/panel/auth.js` | 面板密码、会话、登录限速、二次验证 | 未登录时除登录接口与静态资源外一律 401 |
+| `src/panel/passkeys.js` | passkey（WebAuthn）的添加与校验（@simplewebauthn/server） | 域名只取自 `PANEL_PUBLIC_URL`；只保存公钥 |
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入，先写临时文件再 `rename`，文件权限 `0600` |
 | `src/panel/runner.js` | 运行队列、fork、事件处理、停止、日志落盘 | 同一账号不重复排队；并发数可配 |
 | `src/panel/scheduler.js` | 按账号调度规则触发运行 | 显式使用面板时区 |
@@ -105,7 +106,7 @@ flowchart LR
 
 | 页面 | 内容 |
 | --- | --- |
-| 登录 | 面板密码登录 |
+| 登录 | 面板密码登录；配置了 HTTPS 外网地址时也可用 passkey 登录 |
 | 总览 | 顶部 Selenium 状态（就绪、已用/总会话数）与运行队列；每个账号一张卡片：状态、今日已读分钟与是否达标、下次运行时间、运行 / 仅登录 / 停止按钮；需要扫码的账号置顶并直接显示二维码 |
 | 账号 · 实时 | 实时日志、最新截图、二维码、"正在读《书名》第 23/68 分钟"；手机访问时提供"复制登录链接" |
 | 账号 · 历史 | 运行列表（触发方式、起止时间、结果、阅读分钟）、日志查看与下载、截图回看 |
@@ -113,7 +114,7 @@ flowchart LR
 | 账号 · 配置 | 每个字段可"继承全局"或"单独覆盖"；"发送测试通知"覆盖 Bark / ntfy / 邮件 |
 | 账号 · 调度 | 多条规则，每条为每天固定时间 / 每 N 小时 / cron 表达式，可单独启停，显示接下来几次运行时间 |
 | 新建账号 | 账号 ID、名称；创建后可直接点"仅登录"扫码 |
-| 全局设置 | 默认配置（Selenium 地址、阅读时长、通知渠道等）、并发数、时区、日志与截图保留、面板密码、noVNC 地址 |
+| 全局设置 | 默认配置（Selenium 地址、阅读时长、通知渠道等）、并发数、时区、日志与截图保留、登录方式（passkey 与面板密码）、noVNC 地址 |
 
 ### 数据目录与配置
 
@@ -121,7 +122,7 @@ flowchart LR
 
 ```
 data/
-  panel.json              # 面板设置、全局配置、账号、调度、密码哈希（0600）
+  panel.json              # 面板设置、全局配置、账号、调度、密码哈希与 passkey 公钥（0600）
   accounts/<id>/          # 账号数据
     cookies.json  login.png  screenshot-*.png
   runs/<id>/<runId>/      # 每次运行
@@ -140,7 +141,7 @@ data/
     "screenshotRetentionRuns": 3,
     "vncUrl": ""
   },
-  "auth": { "passwordHash": "scrypt$..." },
+  "auth": { "passwordHash": "scrypt$...", "passkeys": [] },
   "defaults": {
     "seleniumUrl": "http://selenium:4444",
     "duration": 68
@@ -248,7 +249,8 @@ sequenceDiagram
 | 项目 | 措施 |
 | --- | --- |
 | 面板密码 | 至少 8 位；优先使用 `PANEL_PASSWORD`（不足 8 位时拒绝启动）；未设置时首次启动随机生成并只在日志中打印一次；scrypt 哈希存储；可在界面修改（设置了 `PANEL_PASSWORD` 时以环境变量为准） |
-| 登录限速 | 按 IP 连续失败 5 次后指数退避，最长 15 分钟；另设全局失败上限，防止 `X-Forwarded-For` 配置错误时被绕过 |
+| passkey | 可选。`PANEL_PUBLIC_URL` 为 HTTPS 地址时可在设置中添加，之后用指纹、面容或 PIN 登录；域名与 origin 只取自该变量，要求用户验证，服务端只保存公钥；添加、删除要求 5 分钟内登录或二次验证过 |
+| 登录限速 | 按 IP 连续失败 5 次后指数退避，最长 15 分钟；另设全局失败上限，防止 `X-Forwarded-For` 配置错误时被绕过；密码与 passkey 共用 |
 | 会话 | 服务端随机令牌，7 天滑动过期；cookie `HttpOnly`、`SameSite=Strict`、HTTPS 时 `Secure`、`Path` 为面板路径；修改密码后所有会话失效 |
 | CSRF | `SameSite=Strict` + 修改类请求必须带自定义请求头与 JSON `Content-Type` |
 | 密钥字段 | 只写不读：接口返回 `••••`，提交空值表示不修改；子进程经 IPC 接收，不进入环境变量；运行日志中的密钥值替换为掩码 |
@@ -268,7 +270,7 @@ sequenceDiagram
 | `PANEL_HOST` | `0.0.0.0` | 监听地址（容器内） |
 | `PANEL_BASE_PATH` | `/` | 部署在子路径时设置，例如 `/weread/`；前端全部使用相对路径 |
 | `PANEL_TRUST_PROXY` | `false` | 设为 `true` 后信任 `X-Forwarded-For` / `X-Forwarded-Proto`，用于识别真实 IP 与 HTTPS |
-| `PANEL_PUBLIC_URL` | 空 | 面板的外网地址，扫码推送附带该账号实时页面的链接（解析不出登录链接时只推送面板链接）；与 `PANEL_BASE_PATH` 明显不一致时启动日志给出提示 |
+| `PANEL_PUBLIC_URL` | 空 | 面板的外网地址，扫码推送附带该账号实时页面的链接（解析不出登录链接时只推送面板链接）；为 HTTPS 地址时可以使用 passkey；与 `PANEL_BASE_PATH` 明显不一致时启动日志给出提示 |
 | `PANEL_PASSWORD` | 空 | 面板密码，至少 8 位（不足时拒绝启动） |
 | `SELENIUM_URL` | 空 | 首次启动时写入全局配置；为空时使用内置浏览器。没有设置时，面板启动时把配置中旧版的 `http://selenium:4444` 清空 |
 

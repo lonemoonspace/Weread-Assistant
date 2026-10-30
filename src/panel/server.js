@@ -28,6 +28,8 @@ const {
   todayStats,
 } = require("./history");
 const { acquirePanelLock } = require("./lock");
+const { passkeyRelyingParty } = require("./options");
+const { createPasskeys } = require("./passkeys");
 const { createRunner } = require("./runner");
 const { markInterruptedRuns, restrictRunDirs, runDir } = require("./runs");
 const { createScheduler } = require("./scheduler");
@@ -113,9 +115,11 @@ function requireObject(body) {
   return body;
 }
 
-function createPanelApp(options, { auth, store, runner }) {
+function createPanelApp(options, { auth, store, runner, passkeys }) {
   const panelDataDir = path.resolve(options.dataDir);
   const settingsView = (data) => ({ settings: data.settings, defaults: maskValues(data.defaults) });
+  // passkey 是否可用，以及可用时面板的地址（origin）：页面不在这个地址打开时不能使用 passkey
+  const passkeyView = () => (passkeys.available ? { available: true, origin: passkeys.relyingParty.origin } : { available: false });
   // 账号信息附带今天的阅读分钟数与最近一次运行，供总览使用
   const accountView = (account, timezone = store.get().settings.timezone) => ({
     ...publicAccount(account, panelDataDir, timezone),
@@ -218,14 +222,8 @@ function createPanelApp(options, { auth, store, runner }) {
   // 面板前端不发送压缩的请求体；不解压可以避免未登录的请求进入 gzip/Brotli 解码（Node.js 的解码器漏洞，如 CVE-2026-111497）
   api.use(express.json({ limit: "10kb", inflate: false }));
 
-  api.post("/auth/login", async (req, res) => {
-    const result = await auth.login(req.ip, req.body && req.body.password);
-    if (result.ok) {
-      setSessionCookie(req, res, result.token);
-      console.info("面板登录成功:", req.ip);
-      res.status(204).end();
-      return;
-    }
+  // 登录或二次验证失败：被限速时 429，否则按 status 返回 error
+  const sendAuthFailure = (res, result, status, error) => {
     const retryAfter = Math.ceil(result.retryAfterMs / 1000);
     if (retryAfter > 0) {
       res.set("Retry-After", String(retryAfter));
@@ -234,8 +232,64 @@ function createPanelApp(options, { auth, store, runner }) {
       res.status(429).json({ error: "too_many_attempts", retryAfter });
       return;
     }
-    console.warn("面板登录失败:", req.ip);
-    res.status(401).json({ error: "wrong_password" });
+    res.status(status).json({ error });
+  };
+
+  api.post("/auth/login", async (req, res) => {
+    const result = await auth.login(req.ip, req.body && req.body.password);
+    if (result.ok) {
+      setSessionCookie(req, res, result.token);
+      console.info("面板登录成功:", req.ip);
+      res.status(204).end();
+      return;
+    }
+    if (!result.locked) {
+      console.warn("面板登录失败:", req.ip);
+    }
+    sendAuthFailure(res, result, 401, "wrong_password");
+  });
+
+  // 登录页据此决定显示哪些登录方式。只说明是否提供 passkey 与它所在的地址，不透露添加了哪些 passkey
+  api.get("/auth/methods", (req, res) => {
+    res.json({ password: true, passkey: passkeyView() });
+  });
+
+  // { purpose: "login" | "reauth" }：passkey 登录或二次验证的参数。登录不需要会话，被限速时 429；二次验证需要已登录
+  api.post("/auth/passkey/options", async (req, res) => {
+    const purpose = req.body && req.body.purpose;
+    if (purpose === "reauth") {
+      if (!req.sessionToken) {
+        res.status(401).json({ error: "unauthorized" });
+        return;
+      }
+      res.json(await passkeys.reauthOptions(req.sessionToken));
+      return;
+    }
+    if (purpose !== "login") {
+      throw badRequest("purpose 只能是 login 或 reauth");
+    }
+    const wait = auth.loginRetryAfterMs(req.ip);
+    if (wait > 0) {
+      sendAuthFailure(res, { locked: true, retryAfterMs: wait });
+      return;
+    }
+    res.json(await passkeys.loginOptions());
+  });
+
+  // { response }：浏览器返回的 passkey 登录结果。成功 204 并下发会话 cookie，失败 401（计入限速）
+  api.post("/auth/passkey/login", async (req, res) => {
+    const response = req.body && req.body.response;
+    const result = await auth.loginWithPasskey(req.ip, () => passkeys.verifyLogin(response));
+    if (result.ok) {
+      setSessionCookie(req, res, result.token);
+      console.info(`面板登录成功（passkey「${result.passkey.name}」）:`, req.ip);
+      res.status(204).end();
+      return;
+    }
+    if (!result.locked) {
+      console.warn("面板 passkey 登录失败:", req.ip);
+    }
+    sendAuthFailure(res, result, 401, "passkey_failed");
   });
 
   api.use((req, res, next) => {
@@ -252,7 +306,65 @@ function createPanelApp(options, { auth, store, runner }) {
       version: VERSION,
       passwordFromEnv: auth.passwordFromEnv,
       minPasswordLength: MIN_PASSWORD_LENGTH,
+      passkey: passkeyView(),
+      ...auth.sessionInfo(req.sessionToken),
     });
+  });
+
+  // 二次验证：{ password } 或 { passkey }（浏览器返回的 passkey 结果）。成功后 5 分钟内可以添加、删除 passkey。
+  // 失败返回 400（不是 401，避免页面当作会话失效），计入登录限速
+  api.post("/auth/reauth", async (req, res) => {
+    const body = requireObject(req.body);
+    const usePasskey = body.passkey !== undefined;
+    const result = usePasskey
+      ? await auth.reauthWithPasskey(req.ip, req.sessionToken, () => passkeys.verifyReauth(body.passkey, req.sessionToken))
+      : await auth.reauthWithPassword(req.ip, req.sessionToken, body.password);
+    if (result.ok) {
+      res.status(204).end();
+      return;
+    }
+    if (!result.locked) {
+      console.warn("面板二次验证失败:", req.ip);
+    }
+    sendAuthFailure(res, result, 400, usePasskey ? "passkey_failed" : "wrong_password");
+  });
+
+  // 敏感操作要求会话在 5 分钟内登录或二次验证过，否则 403 reauth_required，页面据此弹出验证对话框后重试
+  const requireRecentAuth = (req, res, next) => {
+    if (!auth.isRecentlyVerified(req.sessionToken)) {
+      res.status(403).json({ error: "reauth_required" });
+      return;
+    }
+    next();
+  };
+
+  api.get("/auth/passkeys", (req, res) => {
+    res.json({ passkey: passkeyView(), passkeys: passkeys.list() });
+  });
+
+  api.post("/auth/passkeys/options", requireRecentAuth, async (req, res) => {
+    res.json(await passkeys.registrationOptions(req.sessionToken));
+  });
+
+  // { name?, response }：校验浏览器返回的结果并保存
+  api.post("/auth/passkeys", requireRecentAuth, async (req, res) => {
+    const body = requireObject(req.body);
+    const passkey = await passkeys.register(body.response, body.name, req.sessionToken);
+    console.info(`已添加 passkey「${passkey.name}」`);
+    res.status(201).json({ passkey });
+  });
+
+  api.patch("/auth/passkeys/:id", async (req, res) => {
+    const passkey = await passkeys.rename(req.params.id, requireObject(req.body).name);
+    res.json({ passkey });
+  });
+
+  // 删除后，用这个 passkey 登录的其他会话立即失效（当前会话保留）
+  api.delete("/auth/passkeys/:id", requireRecentAuth, async (req, res) => {
+    const passkey = await passkeys.remove(req.params.id);
+    const ended = auth.endPasskeySessions(passkey.id, req.sessionToken);
+    console.info(`已删除 passkey「${passkey.name}」${ended > 0 ? `，结束了用它登录的 ${ended} 个会话` : ""}`);
+    res.status(204).end();
   });
 
   api.post("/auth/logout", (req, res) => {
@@ -595,6 +707,19 @@ async function migrateLegacySeleniumUrl(store) {
   console.warn(`没有设置 SELENIUM_URL，已把配置中的 Selenium 地址 ${LEGACY_SELENIUM_URL} 清空，改用内置浏览器`);
 }
 
+// 已添加的 passkey 在当前地址下都用不了（PANEL_PUBLIC_URL 未设置、不是 HTTPS 或换了域名）时提示，密码登录不受影响
+function warnUnusablePasskeys(store, passkeys) {
+  const total = store.get().auth.passkeys.length;
+  if (total === 0 || passkeys.usableCount() > 0) {
+    return;
+  }
+  console.warn(
+    passkeys.available
+      ? `已添加的 ${total} 个 passkey 都不是在 ${passkeys.relyingParty.id} 下添加的（更换了域名？），需要用密码登录后重新添加`
+      : `已添加了 ${total} 个 passkey，但 PANEL_PUBLIC_URL 没有设置为 HTTPS 地址，暂时不能用 passkey 登录`
+  );
+}
+
 // 启动面板。返回 { server, port, generatedPassword, close }；generatedPassword 只在首次生成密码时非空
 async function startPanel(options) {
   // 先拿到数据目录的锁，再读写 panel.json
@@ -612,6 +737,8 @@ async function startPanel(options) {
     }
     const auth = createAuth({ store, envPassword: options.password, limits: options.limits });
     const generatedPassword = await auth.init();
+    const passkeys = createPasskeys({ store, relyingParty: passkeyRelyingParty(options.publicUrl) });
+    warnUnusablePasskeys(store, passkeys);
     restrictRunDirs(options.dataDir);
     markInterruptedRuns(options.dataDir);
     // 按保留策略清理截图与日志；进行中的运行不清理
@@ -643,7 +770,7 @@ async function startPanel(options) {
         setImmediate(cleanup);
       }
     });
-    const app = createPanelApp(options, { auth, store, runner });
+    const app = createPanelApp(options, { auth, store, runner, passkeys });
     scheduler = createScheduler({ store, runner });
     server = http.createServer(app);
 

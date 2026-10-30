@@ -1,3 +1,4 @@
+const net = require("net");
 const { parseBooleanValue, parseIntegerValue } = require("../config/resolve");
 
 const DEFAULT_PANEL_PORT = 26868;
@@ -30,6 +31,21 @@ function normalizePublicUrl(raw) {
   url.hash = "";
   url.search = "";
   return url.toString().replace(/\/*$/, "/");
+}
+
+// passkey（WebAuthn）的 RP ID 与 origin，只由 PANEL_PUBLIC_URL 推导：反向代理后面的面板看到的是内部地址，
+// Host 请求头又可以伪造，不能从请求推断。RP ID 只是域名，与 PANEL_BASE_PATH、端口无关。
+// 浏览器只在 HTTPS 页面（或 http://localhost）中提供 passkey，RP ID 也不能是 IP 地址；不满足时返回 null，面板不提供 passkey
+function passkeyRelyingParty(publicUrl) {
+  if (!publicUrl) {
+    return null;
+  }
+  const url = new URL(publicUrl);
+  const host = url.hostname;
+  if (net.isIP(host.replace(/^\[|\]$/g, "")) || (url.protocol !== "https:" && host !== "localhost")) {
+    return null;
+  }
+  return { id: host, origin: url.origin };
 }
 
 // false：不信任代理头；数字：信任的代理层数。"true" 视为 1 层
@@ -90,5 +106,6 @@ module.exports = {
   panelDataDirFromEnv,
   panelOptionsFromEnv,
   parseTrustProxy,
+  passkeyRelyingParty,
   publicUrlWarning,
 };

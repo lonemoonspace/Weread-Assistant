@@ -1,6 +1,6 @@
 ## Web 面板说明
 
-> 已完成：登录、会话、修改密码、反向代理支持，全局设置、默认配置与账号管理接口，运行队列（立即运行、仅登录、停止、运行日志、实时推送），按账号的调度规则与定时运行，运行历史、按天统计、打卡日历与挑战进度、按保留策略清理，Selenium 状态与 noVNC 链接，以及完整的页面。
+> 已完成：登录（密码或 passkey）、会话、修改密码、反向代理支持，全局设置、默认配置与账号管理接口，运行队列（立即运行、仅登录、停止、运行日志、实时推送），按账号的调度规则与定时运行，运行历史、按天统计、打卡日历与挑战进度、按保留策略清理，Selenium 状态与 noVNC 链接，以及完整的页面。
 
 ### 启动
 
@@ -27,7 +27,7 @@ docker compose logs app | grep 面板初始密码
 | `PANEL_PASSWORD` | 空 | 面板密码，至少 8 位（不足时拒绝启动）；设置后以它为准，界面中不能修改 |
 | `PANEL_BASE_PATH` | `/` | 部署在反向代理子路径下时设置，例如 `/weread/` |
 | `PANEL_TRUST_PROXY` | `false` | `true` 表示信任 1 层代理，也可填信任的代理层数 |
-| `PANEL_PUBLIC_URL` | 空 | 面板的外网地址（不含用户名与密码的 http(s) 地址，例如 `https://example.com/weread/`）：扫码推送附带该账号实时页面的链接；二维码解析不出登录链接时改为推送面板链接，在面板中扫二维码截图。地址无效时拒绝启动；设置了 `PANEL_BASE_PATH` 而外网地址的路径不以它结尾时，启动日志给出提示（反向代理去掉前缀、`PANEL_BASE_PATH` 为 `/` 时外网地址带路径是正常的）；`run --account` 不读取它 |
+| `PANEL_PUBLIC_URL` | 空 | 面板的外网地址（不含用户名与密码的 http(s) 地址，例如 `https://example.com/weread/`）：扫码推送附带该账号实时页面的链接；二维码解析不出登录链接时改为推送面板链接，在面板中扫二维码截图；也决定 passkey 绑定的域名，见下文“passkey”。地址无效时拒绝启动；设置了 `PANEL_BASE_PATH` 而外网地址的路径不以它结尾时，启动日志给出提示（反向代理去掉前缀、`PANEL_BASE_PATH` 为 `/` 时外网地址带路径是正常的）；`run --account` 不读取它 |
 | `PANEL_DATA_DIR` | `data` | 面板数据目录，保存 `panel.json`、`panel.log` 与各账号的数据 |
 | `SELENIUM_URL` | 空 | 首次初始化全局默认配置时写入 Selenium 地址；之后以面板中的设置为准。没有设置时使用内置浏览器，并在启动时把全局默认配置与账号配置中旧版的 `http://selenium:4444` 清空 |
 | `CHROME_BIN` / `CHROMEDRIVER_PATH` | 空 | 内置浏览器的 Chromium 与 chromedriver 路径；为空时在 `PATH` 中查找（`chromium-browser`、`chromium` 等与 `chromedriver`），镜像中不需要设置 |
@@ -50,7 +50,8 @@ docker compose logs app | grep 面板初始密码
 | `src/shared/selenium.js` | 查询 Selenium 的 `/status`：是否就绪、已用/总会话数；面板总览与阅读子进程的运行日志共用 | 先 `/status`，不是 Selenium 状态时再试 `/wd/hub/status`；3 秒超时（整个请求的时限，含读取响应体，响应体不超过 1 MB）；展示的地址去掉其中的用户名与密码 |
 | `src/reader/worker.js` | 阅读子进程入口：经 IPC 接收配置、上报事件，收到 SIGTERM 时关闭浏览器后退出 | 只由面板启动，见 `docs/reader.md` |
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入、先写临时文件并刷到磁盘再重命名、权限 0600；每次修改前把上一版保存为 `panel.json.bak`；启动时把已有文件的权限收紧为 0600，改不了时拒绝启动；文件无法解析或结构不对（例如 `accounts` 不是数组、`settings` 不是对象）时视为损坏，另存为 `panel.json.corrupt-<时间>`（只保留最近 3 份）并从上一版恢复，`panel.json` 不见了而上一版还在时同样从上一版恢复，上一版也不可用时拒绝启动（重置面板需同时删除 `panel.json` 与 `panel.json.bak`）；补齐缺少的部分（旧文件自动升级） |
-| `src/panel/auth.js` | 密码哈希、会话、登录限速、修改密码 | 密码以 scrypt 哈希保存；会话只在内存中保存令牌哈希，面板重启后需重新登录 |
+| `src/panel/auth.js` | 密码哈希、会话、登录限速、修改密码、二次验证 | 密码以 scrypt 哈希保存；会话只在内存中保存令牌哈希，面板重启后需重新登录；passkey 登录与二次验证的失败同样计入登录限速 |
+| `src/panel/passkeys.js` | passkey（WebAuthn）的添加、登录与二次验证校验、改名、删除（@simplewebauthn/server） | 域名与地址只取自 `PANEL_PUBLIC_URL`，不信任请求的 Host；challenge 只在内存中，一次有效；`panel.json` 中只保存公钥 |
 | `src/panel/server.js` | Express 应用、页面与接口 | 统一安全响应头；修改类请求校验自定义请求头 |
 | `src/panel/healthcheck.js` | 镜像 `HEALTHCHECK` 使用 | 请求 `<子路径>healthz` |
 | `src/panel/public/` | 登录页与面板页面（`index.html` + `assets/app/`），见下文“页面” | 不使用内联脚本与样式；第三方文件在 `assets/vendor/`，版本与校验值见其中的 README |
@@ -63,7 +64,16 @@ docker compose logs app | grep 面板初始密码
 | `GET /` | 是 | 未登录时 302 到 `login` |
 | `GET login` | 否 | 登录页；已登录时 302 到 `./` |
 | `POST api/auth/login` | 否 | `{ password }`；成功 204 并下发会话 cookie，密码错误 401，被限速 429（带 `Retry-After`） |
-| `GET api/auth/session` | 是 | 返回版本号、密码是否来自环境变量、最短密码长度 |
+| `GET api/auth/methods` | 否 | 登录页可用的登录方式：`{ password: true, passkey: { available, origin? } }`，不透露添加了哪些 passkey |
+| `POST api/auth/passkey/options` | 登录：否；二次验证：是 | `{ purpose: "login" \| "reauth" }`：passkey 登录或二次验证的参数（含 challenge）；登录被限速时 429，passkey 不可用时 409 `passkey_unavailable` |
+| `POST api/auth/passkey/login` | 否 | `{ response }`：浏览器返回的 passkey 结果；成功 204 并下发会话 cookie，校验失败 401 `passkey_failed`（计入登录限速），被限速 429 |
+| `GET api/auth/session` | 是 | 返回版本号、密码是否来自环境变量、最短密码长度、passkey 是否可用及其地址 `passkey`、当前会话的登录方式 `method`（`password` 或 `passkey`）与二次验证的有效期 `verifiedUntil`（已过期为 null） |
+| `POST api/auth/reauth` | 是 | 二次验证：`{ password }` 或 `{ passkey }`（浏览器返回的 passkey 结果）；成功 204，之后 5 分钟内可以添加、删除 passkey；失败 400 `wrong_password` / `passkey_failed`（计入登录限速），被限速 429 |
+| `GET api/auth/passkeys` | 是 | `{ passkey, passkeys }`：每个 passkey 的 ID、名称、添加与最近使用时间、是否已同步备份 `backedUp`、在当前域名下是否可用 `usable`；不返回公钥 |
+| `POST api/auth/passkeys/options` | 是，需二次验证 | 添加 passkey 的参数；最多 20 个，已满 409 `too_many_passkeys`；5 分钟内没有登录或二次验证过时 403 `reauth_required` |
+| `POST api/auth/passkeys` | 是，需二次验证 | `{ name?, response }`：校验并保存，成功 201 `{ passkey }`；校验失败 400 `passkey_failed`，已添加过 409 `passkey_exists`；名称 1–64 个字符，不填时为“passkey 日期” |
+| `PATCH api/auth/passkeys/:id` | 是 | `{ name }`：改名；不存在 404 `passkey_not_found` |
+| `DELETE api/auth/passkeys/:id` | 是，需二次验证 | 删除 passkey，用它登录的其他会话立即失效（当前会话保留）；不存在 404 |
 | `POST api/auth/logout` | 是 | 注销当前会话 |
 | `POST api/auth/password` | 是 | `{ current, next }`；成功后所有会话失效，并为当前请求下发新会话；密码来自环境变量时返回 409。多个请求依次处理，后到的请求按新密码校验 |
 | `GET api/schema` | 是 | 表单清单：配置分组、运行配置字段（类型、可选值、范围、是否密钥）、面板设置字段 |
@@ -98,7 +108,7 @@ docker compose logs app | grep 面板初始密码
 
 | 页面 | 地址 | 内容 |
 | --- | --- | --- |
-| 登录 | `login` | 面板密码登录 |
+| 登录 | `login` | 面板密码登录；passkey 可用且页面在 `PANEL_PUBLIC_URL` 的地址上打开时显示“使用 passkey 登录”，在其他地址（例如内网 IP）打开时提示到哪个地址使用 passkey |
 | 总览 | `#/` | 顶部浏览器状态（内置浏览器的版本，或 Selenium 是否就绪、已用/总会话数；不可用时的提示与处理办法）与 noVNC 链接；需要扫码的账号置顶并直接显示二维码；运行队列；每个账号一张卡片：运行状态或上次运行结果、今天的阅读分钟与是否打卡、下次运行时间、立即运行 / 仅登录 / 停止 |
 | 账号 · 实时 | `#/accounts/<id>/live` | 状态、“正在读《书名》第 23/68 分钟”与进度条、二维码与“复制登录链接”、最新截图、实时日志；运行进行中且设置了 noVNC 地址时显示查看浏览器画面的链接 |
 | 账号 · 历史 | `#/accounts/<id>/history` | 运行列表（开始时间、时长、触发方式、结果、阅读分钟），展开查看日志与截图，下载日志，加载更多 |
@@ -106,7 +116,7 @@ docker compose logs app | grep 面板初始密码
 | 账号 · 调度 | `#/accounts/<id>/schedules` | 编辑多条规则（每天固定时间 / 每 N 小时 / cron），单独启停，预览接下来的运行时间，保存后立即生效 |
 | 账号 · 配置 | `#/accounts/<id>/config` | 名称与启用状态；运行配置的每一项可“继承全局”或“单独设置”；发送测试通知；删除账号（可选同时删除数据） |
 | 新建账号 | `#/accounts/new` | 账号 ID 与名称，创建后进入账号页面并提示扫码 |
-| 设置 | `#/settings` | 面板设置（时区、并发数、保留策略、noVNC 地址，填写 noVNC 地址时显示安全提示）；全局默认配置与测试通知；修改面板密码 |
+| 设置 | `#/settings` | 面板设置（时区、并发数、保留策略、noVNC 地址，填写 noVNC 地址时显示安全提示）；全局默认配置与测试通知；登录方式：passkey 列表（添加、改名、删除，在当前域名下不可用的标出）与修改面板密码 |
 
 | 规则 | 说明 |
 | --- | --- |
@@ -115,6 +125,7 @@ docker compose logs app | grep 面板初始密码
 | 二维码 | 由登录链接在浏览器本地生成（不经过第三方服务）；手机上可复制登录链接发到微信中打开，非 HTTPS 访问时浏览器不允许写剪贴板，改为显示链接供手动复制 |
 | 密钥 | 表单中只显示“已设置 / 未设置”，留空表示不修改，点“清除”删除 |
 | 手机 | 390px 宽度下各页面没有横向滚动；表格在自身区域内横向滚动 |
+| 二次验证 | 添加、删除 passkey 时接口返回 403 `reauth_required` 则弹出“确认身份”对话框，用 passkey 或面板密码验证后自动重试；取消时不做修改 |
 | CSP | 面板主页面在浏览器内编译模板，需要 `'unsafe-eval'`，只对该页面放开（登录页、接口与静态文件不放开）。模板只写在 `assets/app/` 的脚本中，不使用 DOM 模板，不用 `v-html` 渲染内容 |
 
 ### 运行队列
@@ -285,7 +296,7 @@ noVNC 默认关闭，只在使用 Selenium 时可用（内置浏览器以无界�
 
 ```
 data/
-  panel.json              # 面板设置、全局默认配置、账号与调度规则、密码哈希（0600）
+  panel.json              # 面板设置、全局默认配置、账号与调度规则、密码哈希与 passkey 公钥（0600）
   panel.json.bak          # 上一版 panel.json，损坏时自动恢复（0600）
   panel.log
   panel.lock              # 面板运行期间存在，防止同一数据目录启动多个面板
@@ -298,7 +309,23 @@ data/
 ```json
 {
   "version": 1,
-  "auth": { "passwordHash": "scrypt$..." },
+  "auth": {
+    "passwordHash": "scrypt$...",
+    "webauthnUserId": "<首次添加 passkey 时生成>",
+    "passkeys": [
+      {
+        "id": "<凭据 ID>",
+        "publicKey": "<公钥（COSE，base64url）>",
+        "counter": 0,
+        "transports": ["internal", "hybrid"],
+        "backedUp": true,
+        "rpId": "example.com",
+        "name": "我的 iPhone",
+        "createdAt": "2026-10-30T00:00:00.000Z",
+        "lastUsedAt": null
+      }
+    ]
+  },
   "settings": {
     "timezone": "Asia/Shanghai",
     "maxConcurrentRuns": 1,
@@ -332,13 +359,41 @@ data/
 | 停用账号 | `enabled: false` 的账号不会被定时运行，也不能手动运行（接口返回 409，`run --account` 直接报错）；已在排队的运行开始前发现账号被停用时记为已停止 |
 | 按账号运行 | `node src/cli.js run --account <id>` 按上述合并结果运行一次，见 `docs/cli.md` |
 
+### passkey
+
+面板保存着各账号的微信读书 cookie，除密码外还可以用 passkey（手机或电脑的指纹、面容、PIN，或 iCloud 钥匙串、Google 密码管理器、1Password 等同步的通行密钥）登录。passkey 不能被钓鱼网站骗走，服务端只保存公钥。密码登录保持不变，两种方式都可以用。
+
+使用条件：
+
+| 条件 | 说明 |
+| --- | --- |
+| `PANEL_PUBLIC_URL` | 必须设置为面板的 HTTPS 地址（本机调试时可以是 `http://localhost:<端口>/`）。passkey 绑定这个地址的域名（RP ID）与 origin，二者只取自该变量，不按请求的 Host 推断。没有设置、不是 HTTPS 或是 IP 地址时不提供 passkey，设置页说明原因，已添加的仍可查看与删除 |
+| 打开面板的地址 | 只能在 `PANEL_PUBLIC_URL` 的地址上用 passkey，用内网 IP 或其他域名打开时只能用密码登录（登录页给出提示） |
+| 子路径 | 部署在子路径下（`PANEL_BASE_PATH`）不影响 passkey，域名相同即可 |
+| 反向代理 | 建议设置 `PANEL_TRUST_PROXY`，使会话 cookie 带 `Secure`，并按真实客户端 IP 限速 |
+| 更换域名 | 已添加的 passkey 只在添加时的域名下可用：更换域名后它们在设置页标为“当前域名不可用”，启动日志给出提示，需要用密码登录后重新添加，并删除旧的 |
+
+使用方法：在“设置 → 登录方式”中填写名称（例如“我的 iPhone”）后点“添加 passkey”，按浏览器提示验证；之后登录页出现“使用 passkey 登录”。最多添加 20 个。
+
+| 规则 | 说明 |
+| --- | --- |
+| 二次验证 | 添加、删除 passkey 要求当前会话在 5 分钟内登录或二次验证过，否则先用 passkey 或密码再验证一次；改名不需要 |
+| 验证要求 | 要求可发现凭据（登录时不用输入用户名）与用户验证（指纹、面容或 PIN）；不要求证明设备型号（attestation 为 none）；算法为 EdDSA、ES256、RS256 |
+| challenge | 只保存在内存中，5 分钟内有效、只能使用一次，只能用于申请时的用途；二次验证与添加还绑定申请时的会话；同时有效的最多 100 个，超出时丢弃最早的。面板重启后需重新发起 |
+| 签名计数 | 每次登录记录认证器返回的签名计数，计数不增反减时拒绝（同步的 passkey 计数始终为 0，不受影响） |
+| 删除 | 删除 passkey 后，用它登录的其他会话立即失效；修改面板密码时所有会话失效，与登录方式无关 |
+| 限速 | passkey 登录与二次验证的失败同样计入登录限速 |
+| 备份 | `panel.json` 中只有公钥，泄露后不能用来登录；从备份恢复 `panel.json` 时 passkey 一并恢复 |
+
 ### 安全
 
 | 项目 | 做法 |
 | --- | --- |
 | 密码 | scrypt（N=16384, r=8, p=1）加盐哈希，比较使用定长时间比较；新密码至少 8 位 |
 | 会话 | 32 字节随机令牌；cookie `wa_session` 为 `HttpOnly`、`SameSite=Strict`，HTTPS 时加 `Secure`，`Path` 为面板子路径；7 天滑动过期，cookie 最多每小时重新下发一次 |
-| 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；所有 IP 在 15 分钟内累计失败 100 次后暂停全部登录 15 分钟 |
+| passkey | 公钥签名验证，域名与 origin 只取自 `PANEL_PUBLIC_URL`，要求用户验证；见上文“passkey” |
+| 二次验证 | 添加、删除 passkey 要求 5 分钟内登录或二次验证过，防止被他人借用已登录的浏览器添加自己的 passkey |
+| 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；所有 IP 在 15 分钟内累计失败 100 次后暂停全部登录 15 分钟；密码与 passkey 的登录、二次验证共用 |
 | 跨站请求伪造 | 修改类请求必须带 `X-WA-Request: 1` 请求头且为 JSON，配合 `SameSite=Strict` |
 | 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`；接口响应 `Cache-Control: no-store` |
 | 文件 | `panel.json` 权限 0600，已有文件在启动时收紧；账号数据目录 0700，`cookies.json` 与登录二维码图片 0600（等同于登录状态）；初始密码不写入日志文件 |

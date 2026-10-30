@@ -9,14 +9,18 @@
  *   UI_SMOKE_SCREENSHOTS=<目录> 截图保存位置，默认在系统临时目录下新建。
  *   浏览器需要能访问本机的面板；Selenium 跑在容器里时用 --network host 启动，
  *   或通过 PANEL_HOST_FOR_BROWSER 指定浏览器访问本机时使用的地址。
+ *   passkey 部分用浏览器的虚拟认证器，面板地址为 http://localhost:<端口>/（WebAuthn 不接受 IP 地址），
+ *   因此只在浏览器与面板在同一台机器上（PANEL_HOST_FOR_BROWSER 为默认值）时进行。
  */
 
 const assert = require("assert");
 const fs = require("fs");
+const net = require("net");
 const os = require("os");
 const path = require("path");
 const { Builder, By, Key, logging, until } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
+const { Protocol, Transport, VirtualAuthenticatorOptions } = require("selenium-webdriver/lib/virtual_authenticator");
 
 const { startPanel } = require(path.resolve(__dirname, "..", "src", "panel", "server"));
 const { dateInZone } = require(path.resolve(__dirname, "..", "src", "panel", "history"));
@@ -523,6 +527,126 @@ async function mobile(env, h, driver, results) {
   console.log("✅ 手机宽度（390px）：总览、实时、历史、日历、调度、配置、设置都没有横向滚动，控制台没有错误");
 }
 
+// ---------- passkey ----------
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+// 单独启动一个外网地址为 http://localhost:<端口>/ 的面板，用浏览器的虚拟认证器（支持可发现凭据与用户验证）
+// 走一遍：添加、改名、退出后用 passkey 登录、二次验证后删除；从 IP 地址打开时登录页说明去哪里用 passkey
+async function passkeys(h, driver, results) {
+  const step = (name) => {
+    results.push(name);
+    console.log(`✅ ${name}`);
+  };
+  const port = await freePort();
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ui-smoke-passkey-"));
+  const password = "passkey-ui-123";
+  const panel = await startPanel({
+    port,
+    host: "0.0.0.0",
+    basePath: "/",
+    trustProxy: false,
+    publicUrl: `http://localhost:${port}/`,
+    password,
+    dataDir,
+    seleniumUrl: "",
+    runner: { workerPath: STUB_WORKER, killTimeoutMs: 500 },
+    // 二次验证的有效期缩短为 3 秒，便于触发验证对话框
+    limits: { reauthWindowMs: 3000 },
+  });
+  try {
+    const authenticator = new VirtualAuthenticatorOptions();
+    authenticator.setProtocol(Protocol.CTAP2);
+    authenticator.setTransport(Transport.INTERNAL);
+    authenticator.setHasResidentKey(true);
+    authenticator.setHasUserVerification(true);
+    authenticator.setIsUserVerified(true);
+    await driver.addVirtualAuthenticator(authenticator);
+    const base = `http://localhost:${port}/`;
+
+    await h.open(`http://127.0.0.1:${port}/`, "login");
+    await h.waitText("#passkey-hint", `passkey 只能在 http://localhost:${port} 上使用`);
+    assert.strictEqual(await (await h.waitFor("#passkey-login")).isDisplayed(), false, "从 IP 地址打开时不显示 passkey 按钮");
+    await h.open(base, "login");
+    await driver.wait(async () => (await h.waitFor("#passkey-login")).isDisplayed(), 10000, "应显示 passkey 登录按钮");
+    await h.shot("01-login");
+    step("passkey 登录页：从面板的外网地址打开时显示 passkey 按钮；从其他地址打开时说明去哪里使用");
+
+    await (await h.waitFor("#password")).sendKeys(password, Key.ENTER);
+    await h.waitText("main", "还没有账号");
+    await h.go("#/settings");
+    await h.waitText("main", "还没有添加 passkey");
+    const nameInput = await h.waitFor("input[placeholder='例如：我的 iPhone']");
+    await nameInput.sendKeys("虚拟认证器");
+    // 等登录时的验证过期，添加时弹出验证对话框：先输错密码，再用正确的密码验证
+    await driver.sleep(3500);
+    await h.clickButton("添加 passkey");
+    const passwordDialog = await h.waitFor("dialog.reauth-dialog[open]");
+    const reauthInput = await h.waitFor("dialog.reauth-dialog input[type=password]");
+    await reauthInput.sendKeys("wrong-password");
+    await h.clickButton("用密码验证", passwordDialog);
+    await h.waitText("dialog.reauth-dialog .error-text", "密码不正确");
+    await h.type(reauthInput, password);
+    await h.clickButton("用密码验证", passwordDialog);
+    await h.waitText(".notice", "passkey 已添加");
+    await h.waitText(".passkey-table", "虚拟认证器");
+    await h.waitText(".passkey-table", "从未使用");
+    await h.clickButton("改名");
+    const renameInput = await h.waitFor(".passkey-table .inline-form input");
+    await h.type(renameInput, "UI 测试设备");
+    await h.clickButton("保存", await h.waitFor(".passkey-table"));
+    await h.waitText(".passkey-table", "UI 测试设备");
+    await driver.executeScript("arguments[0].scrollIntoView({ block: 'center' })", await h.waitFor(".passkey-table"));
+    await h.shot("02-settings");
+    step("passkey 设置：填写名称后添加（超过有效期时先用密码二次验证），列表显示名称与时间，可以改名");
+
+    await h.click(await h.waitText("header nav a", "退出"));
+    await h.waitFor("#passkey-button");
+    await driver.wait(async () => (await h.waitFor("#passkey-login")).isDisplayed(), 10000);
+    await h.click(await h.waitFor("#passkey-button"));
+    await h.waitText("main", "还没有账号");
+    const session = await driver.executeScript(
+      "return fetch('api/auth/session', { credentials: 'same-origin' }).then((res) => res.json())"
+    );
+    assert.strictEqual(session.method, "passkey");
+    step("passkey 登录：退出后在登录页用 passkey 登录");
+
+    await h.go("#/settings");
+    await h.waitText(".passkey-table", "UI 测试设备");
+    // 等二次验证过期，删除时弹出验证对话框，用 passkey 验证后完成删除
+    await driver.sleep(3500);
+    await h.clickButton("删除", await h.waitFor(".passkey-table"));
+    await driver.wait(until.alertIsPresent(), 5000);
+    await (await driver.switchTo().alert()).accept();
+    const dialog = await h.waitFor("dialog.reauth-dialog[open]");
+    await h.waitText("dialog.reauth-dialog", "确认身份");
+    await h.shot("03-reauth");
+    await h.clickButton("使用 passkey 验证", dialog);
+    await h.waitText(".notice", "passkey 已删除");
+    await h.waitText("main", "还没有添加 passkey");
+    assert.strictEqual((await driver.findElements(By.css("dialog.reauth-dialog[open]"))).length, 0, "验证后对话框关闭");
+    step("二次验证：超过有效期后删除 passkey 时弹出验证对话框，用 passkey 验证后完成删除");
+
+    // 需要二次验证时接口返回 403、验证密码错误时返回 400，浏览器会记请求失败；只允许这两种
+    const errors = (await h.consoleErrors()).filter(
+      (line) => !/api\/auth\/passkeys\S* .*403/.test(line) && !/api\/auth\/reauth .*400/.test(line)
+    );
+    assert.deepStrictEqual(errors, [], `浏览器控制台不应有错误或警告：\n${errors.join("\n")}`);
+  } finally {
+    await panel.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const env = await startSeededPanel();
   const results = [];
@@ -537,6 +661,14 @@ async function main() {
       await run(env, helpers(driver, prefix), driver, results);
       await driver.quit();
       driver = null;
+    }
+    if (["127.0.0.1", "localhost"].includes(BROWSER_HOST)) {
+      driver = await createDriver();
+      await passkeys(helpers(driver, "p"), driver, results);
+      await driver.quit();
+      driver = null;
+    } else {
+      console.log("⏭️ 跳过 passkey：浏览器不在本机，无法用 http://localhost 访问面板");
     }
     console.log(`\n页面 smoke 全部通过（${results.length} 项）。截图：${SHOTS}`);
   } finally {

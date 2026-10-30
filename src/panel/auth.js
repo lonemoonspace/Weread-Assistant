@@ -8,6 +8,8 @@ const KEY_LENGTH = 64;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // 会话按访问滑动延期；cookie 最多每小时重新下发一次
 const COOKIE_REFRESH_MS = 60 * 60 * 1000;
+// 添加、删除 passkey 等敏感操作要求会话在这段时间内登录或二次验证过，被盗用的会话不能给自己添加 passkey
+const REAUTH_WINDOW_MS = 5 * 60 * 1000;
 const MIN_PASSWORD_LENGTH = 8;
 const GENERATED_PASSWORD_LENGTH = 16;
 // 去掉易混淆的 0/O、1/l/I
@@ -15,13 +17,14 @@ const PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz2345
 
 // 同一 IP 连续失败 maxFailures 次后锁定，锁定时长从 lockoutBaseMs 开始翻倍，最长 lockoutMaxMs；
 // 所有 IP 在 globalWindowMs 内累计失败 globalMaxFailures 次后暂停全部登录，
-// 防止反向代理配置不当时攻击者伪造 X-Forwarded-For 绕过按 IP 限速
+// 防止反向代理配置不当时攻击者伪造 X-Forwarded-For 绕过按 IP 限速。reauthWindowMs 为二次验证的有效期
 const DEFAULT_LIMITS = {
   maxFailures: 5,
   lockoutBaseMs: 30 * 1000,
   lockoutMaxMs: 15 * 60 * 1000,
   globalMaxFailures: 100,
   globalWindowMs: 15 * 60 * 1000,
+  reauthWindowMs: REAUTH_WINDOW_MS,
 };
 
 async function hashPassword(password) {
@@ -91,7 +94,9 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     }
   }
 
-  function createSession() {
+  // method 为登录方式（password 或 passkey），passkey 登录时 credentialId 为所用 passkey 的 ID；
+  // verifiedAt 为最近一次登录或二次验证的时间
+  function createSession(method = "password", credentialId = "") {
     const token = crypto.randomBytes(32).toString("base64url");
     const t = now();
     // 顺便回收已过期的会话：过期的会话只有再次被使用时才会被发现
@@ -100,9 +105,32 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
         endSession(key);
       }
     }
-    sessions.set(hashToken(token), { expiresAt: t + SESSION_TTL_MS, cookieSetAt: t });
+    sessions.set(hashToken(token), { expiresAt: t + SESSION_TTL_MS, cookieSetAt: t, method, credentialId, verifiedAt: t });
     return token;
   }
+
+  // 有效的会话；无效或已过期时返回 null（不延长有效期）
+  function activeSession(token) {
+    const session = token ? sessions.get(hashToken(token)) : null;
+    return session && session.expiresAt > now() ? session : null;
+  }
+
+  // verify() 校验凭据（密码或 passkey），成功时返回真值。被限速时不调用；失败计入限速
+  async function attempt(ip, verify) {
+    const wait = retryAfterMs(ip);
+    if (wait > 0) {
+      return { ok: false, locked: true, retryAfterMs: wait };
+    }
+    const result = await verify();
+    if (result) {
+      attempts.delete(ip);
+      return { ok: true, result };
+    }
+    recordFailure(ip);
+    return { ok: false, retryAfterMs: retryAfterMs(ip) };
+  }
+
+  const checkPassword = (password) => typeof password === "string" && password.length > 0 && verifyPassword(password, currentHash());
 
   function retryAfterMs(ip) {
     const t = now();
@@ -142,6 +170,23 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     }
   }
 
+  async function reauth(ip, token, verify) {
+    if (!activeSession(token)) {
+      return { ok: false, retryAfterMs: 0 };
+    }
+    const outcome = await attempt(ip, verify);
+    if (!outcome.ok) {
+      return outcome;
+    }
+    // 校验期间会话可能已经结束（退出登录、修改密码）
+    const session = activeSession(token);
+    if (!session) {
+      return { ok: false, retryAfterMs: 0 };
+    }
+    session.verifiedAt = now();
+    return { ok: true };
+  }
+
   return {
     passwordFromEnv: Boolean(envPassword),
 
@@ -170,17 +215,59 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
 
     // 返回 { ok: true, token } / { ok: false, locked: true, retryAfterMs } / { ok: false, retryAfterMs }
     async login(ip, password) {
-      const wait = retryAfterMs(ip);
-      if (wait > 0) {
-        return { ok: false, locked: true, retryAfterMs: wait };
+      const outcome = await attempt(ip, () => checkPassword(password));
+      return outcome.ok ? { ok: true, token: createSession("password") } : outcome;
+    },
+
+    // passkey 登录。verify() 校验成功时返回所用的 passkey，失败返回 null；失败与密码错误一样计入限速。
+    // 返回 { ok: true, token, passkey } 或与 login 相同的失败结果
+    async loginWithPasskey(ip, verify) {
+      const outcome = await attempt(ip, verify);
+      return outcome.ok ? { ok: true, token: createSession("passkey", outcome.result.id), passkey: outcome.result } : outcome;
+    },
+
+    // 距离解除限速的毫秒数，0 表示没有被限速；未登录申请 passkey 登录参数时检查
+    loginRetryAfterMs(ip) {
+      return retryAfterMs(ip);
+    },
+
+    // 二次验证：用密码或 passkey 再次确认身份，成功后会话在二次验证的有效期内（默认 5 分钟）可以进行敏感操作。
+    // 失败与登录失败一样计入限速。返回 { ok: true } 或与 login 相同的失败结果
+    async reauthWithPassword(ip, token, password) {
+      return reauth(ip, token, () => checkPassword(password));
+    },
+
+    async reauthWithPasskey(ip, token, verify) {
+      return reauth(ip, token, verify);
+    },
+
+    // 会话在二次验证的有效期内登录或二次验证过
+    isRecentlyVerified(token) {
+      const session = activeSession(token);
+      return Boolean(session && now() - session.verifiedAt < cfg.reauthWindowMs);
+    },
+
+    // 当前会话的登录方式与二次验证的有效期（ISO 时间，已过期时为 null）
+    sessionInfo(token) {
+      const session = activeSession(token);
+      if (!session) {
+        return null;
       }
-      const valid = typeof password === "string" && password.length > 0 && (await verifyPassword(password, currentHash()));
-      if (valid) {
-        attempts.delete(ip);
-        return { ok: true, token: createSession() };
+      const verifiedUntil = session.verifiedAt + cfg.reauthWindowMs;
+      return { method: session.method, verifiedUntil: verifiedUntil > now() ? new Date(verifiedUntil).toISOString() : null };
+    },
+
+    // 结束用某个 passkey 登录的会话（删除 passkey 后），keepToken 对应的会话除外。返回结束的数量
+    endPasskeySessions(credentialId, keepToken = "") {
+      const keep = keepToken ? hashToken(keepToken) : "";
+      let count = 0;
+      for (const [key, session] of [...sessions]) {
+        if (key !== keep && session.method === "passkey" && session.credentialId === credentialId) {
+          endSession(key);
+          count += 1;
+        }
       }
-      recordFailure(ip);
-      return { ok: false, retryAfterMs: retryAfterMs(ip) };
+      return count;
     },
 
     // 校验并延长会话。返回 null 表示无效；refreshCookie 表示需要重新下发 cookie
@@ -266,7 +353,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     for (const key of [...sessions.keys()]) {
       endSession(key);
     }
-    return { ok: true, token: createSession() };
+    return { ok: true, token: createSession("password") };
   }
 }
 

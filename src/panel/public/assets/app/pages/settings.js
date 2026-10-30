@@ -1,14 +1,17 @@
-import { computed, reactive, ref, watch } from "../../vendor/vue.esm-browser.prod.js";
+import { computed, onMounted, reactive, ref, watch } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
 import { ConfigForm } from "../components/config-form.js";
+import { ReauthCancelled, ReauthDialog, withReauth } from "../components/reauth-dialog.js";
 import { TestNotification } from "../components/test-notification.js";
-import { notify, refreshAccounts, refreshSettings, state } from "../store.js";
+import { formatDateTime } from "../format.js";
+import { notify, refreshAccounts, refreshSettings, state, timezone } from "../store.js";
+import { createPasskey, originMatches, passkeyErrorMessage, passkeySupported } from "../webauthn.js";
 
 const COMMON_TIMEZONES = ["Asia/Shanghai", "Asia/Hong_Kong", "Asia/Taipei", "Asia/Tokyo", "Asia/Singapore", "Europe/London", "America/New_York", "UTC"];
 
-// 设置：面板设置、全局默认运行配置、测试通知、面板密码
+// 设置：面板设置、全局默认运行配置、测试通知、登录方式（passkey 与面板密码）
 export const SettingsPage = {
-  components: { ConfigForm, TestNotification },
+  components: { ConfigForm, ReauthDialog, TestNotification },
   setup() {
     const panel = reactive({});
     const savingPanel = ref(false);
@@ -90,6 +93,81 @@ export const SettingsPage = {
       }
     }
 
+    // passkey：列表、添加（先填名称再调用系统弹窗）、改名、删除；添加与删除需要二次验证
+    const passkeys = ref([]);
+    const newPasskeyName = ref("");
+    const addingPasskey = ref(false);
+    const editing = reactive({ id: "", name: "" });
+    const passkeyInfo = computed(() => state.session.passkey);
+    const onPasskeyOrigin = computed(() => originMatches(passkeyInfo.value));
+    const supported = passkeySupported();
+
+    async function loadPasskeys() {
+      try {
+        passkeys.value = (await api("auth/passkeys")).passkeys;
+      } catch (error) {
+        notify(error.message, "error");
+      }
+    }
+    onMounted(loadPasskeys);
+
+    async function addPasskey() {
+      addingPasskey.value = true;
+      try {
+        const options = await withReauth(() => api("auth/passkeys/options", { method: "POST" }));
+        let response;
+        try {
+          response = await createPasskey(options);
+        } catch (error) {
+          const text = passkeyErrorMessage(error);
+          if (text) {
+            notify(text, "error");
+          }
+          return;
+        }
+        const body = { name: newPasskeyName.value || undefined, response };
+        await withReauth(() => api("auth/passkeys", { method: "POST", body }));
+        newPasskeyName.value = "";
+        await loadPasskeys();
+        notify("passkey 已添加，下次可以用它登录");
+      } catch (error) {
+        if (!(error instanceof ReauthCancelled)) {
+          notify(error.message, "error");
+        }
+      } finally {
+        addingPasskey.value = false;
+      }
+    }
+
+    function startRename(item) {
+      Object.assign(editing, { id: item.id, name: item.name });
+    }
+
+    async function saveRename() {
+      try {
+        await api(`auth/passkeys/${encodeURIComponent(editing.id)}`, { method: "PATCH", body: { name: editing.name } });
+        Object.assign(editing, { id: "", name: "" });
+        await loadPasskeys();
+      } catch (error) {
+        notify(error.message, "error");
+      }
+    }
+
+    async function removePasskey(item) {
+      if (!window.confirm(`确定删除 passkey“${item.name}”？用它登录的其他设备会退出登录。`)) {
+        return;
+      }
+      try {
+        await withReauth(() => api(`auth/passkeys/${encodeURIComponent(item.id)}`, { method: "DELETE" }));
+        await loadPasskeys();
+        notify("passkey 已删除");
+      } catch (error) {
+        if (!(error instanceof ReauthCancelled)) {
+          notify(error.message, "error");
+        }
+      }
+    }
+
     return {
       state,
       panel,
@@ -104,6 +182,20 @@ export const SettingsPage = {
       changePassword,
       resetPanel,
       COMMON_TIMEZONES,
+      passkeys,
+      newPasskeyName,
+      addingPasskey,
+      editing,
+      passkeyInfo,
+      onPasskeyOrigin,
+      supported,
+      addPasskey,
+      startRename,
+      saveRename,
+      cancelRename: () => Object.assign(editing, { id: "", name: "" }),
+      removePasskey,
+      formatDateTime,
+      timezone,
     };
   },
   template: `
@@ -143,7 +235,47 @@ export const SettingsPage = {
     </section>
 
     <section>
-      <h3>面板密码</h3>
+      <h3>登录方式</h3>
+      <h4>passkey</h4>
+      <p class="muted">用指纹、面容或设备 PIN 登录面板，不用输入密码。passkey 与面板的域名绑定，更换域名后需要重新添加。</p>
+      <p v-if="!passkeyInfo.available" class="muted">需要把环境变量 PANEL_PUBLIC_URL 设置为面板的 HTTPS 地址（例如 https://example.com/weread/）并重启面板，才能使用 passkey。</p>
+      <p v-else-if="!onPasskeyOrigin" class="callout callout-warn">passkey 只能在 {{ passkeyInfo.origin }} 上使用，请从这个地址打开面板后再添加。</p>
+      <div v-if="passkeys.length" class="table-scroll">
+        <table class="striped passkey-table">
+          <thead><tr><th>名称</th><th>添加于</th><th>最近使用</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="item in passkeys" :key="item.id">
+              <td>
+                <form v-if="editing.id === item.id" class="inline-form" @submit.prevent="saveRename">
+                  <input v-model.trim="editing.name" maxlength="64" required aria-label="passkey 名称">
+                  <button type="submit">保存</button>
+                  <button type="button" class="secondary outline" @click="cancelRename">取消</button>
+                </form>
+                <template v-else>
+                  {{ item.name }}
+                  <span v-if="item.backedUp" class="badge" title="已同步到 iCloud 钥匙串、Google 密码管理器等，换设备后仍可使用">已同步</span>
+                  <span v-if="!item.usable" class="badge passkey-unusable" title="这个 passkey 不是在当前域名下添加的，不能用于登录">当前域名不可用</span>
+                </template>
+              </td>
+              <td>{{ formatDateTime(item.createdAt, timezone()) }}</td>
+              <td>{{ item.lastUsedAt ? formatDateTime(item.lastUsedAt, timezone()) : "从未使用" }}</td>
+              <td class="actions">
+                <button type="button" class="secondary outline" @click="startRename(item)">改名</button>
+                <button type="button" class="secondary outline" @click="removePasskey(item)">删除</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-else class="muted">还没有添加 passkey。</p>
+      <form v-if="onPasskeyOrigin && supported" class="narrow" @submit.prevent="addPasskey">
+        <label>名称<input v-model.trim="newPasskeyName" maxlength="64" placeholder="例如：我的 iPhone"></label>
+        <button type="submit" :aria-busy="addingPasskey" :disabled="addingPasskey">添加 passkey</button>
+      </form>
+      <p v-else-if="onPasskeyOrigin" class="muted">这个浏览器不支持 passkey。</p>
+      <reauth-dialog :passkeys="passkeys" />
+
+      <h4>面板密码</h4>
       <p v-if="state.session.passwordFromEnv" class="muted">面板密码由环境变量 PANEL_PASSWORD 设置，请修改该变量后重启面板。</p>
       <form v-else class="narrow" @submit.prevent="changePassword">
         <label>当前密码<input type="password" v-model="password.current" autocomplete="current-password" required></label>

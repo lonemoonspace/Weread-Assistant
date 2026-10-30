@@ -2,6 +2,23 @@
 
 版本号与 `package.json` 一致；推送 `v<版本号>` tag 时，发布流程把对应一节作为 GitHub Release 的说明。
 
+## 未发布
+
+面板支持 passkey 登录：用手机或电脑的指纹、面容、PIN 登录，不用输入密码，也不会被钓鱼网站骗走。密码登录保持不变。
+
+升级说明：
+
+- 执行 `docker compose pull && docker compose up -d` 即可，不设置任何变量时与之前完全相同
+- 想使用 passkey：在 `docker-compose.yml` 的 `app` 中把 `PANEL_PUBLIC_URL` 设为面板的 HTTPS 地址（例如 `https://example.com/weread/`），建议同时设置 `PANEL_TRUST_PROXY`，然后从这个地址打开面板，在“设置 → 登录方式”中添加
+
+变更：
+
+- 登录页在 `PANEL_PUBLIC_URL` 的地址上打开时显示“使用 passkey 登录”；从内网 IP 等其他地址打开时只能用密码登录，并提示 passkey 的地址
+- 设置中新增“登录方式”：添加（最多 20 个）、改名、删除 passkey，显示添加与最近使用时间、是否已同步；更换域名后原来的 passkey 标为“当前域名不可用”，启动日志给出提示
+- 添加、删除 passkey 前需要在 5 分钟内登录或二次验证过（用 passkey 或密码），防止他人借用已登录的浏览器添加自己的 passkey
+- 删除 passkey 后，用它登录的其他会话立即退出；passkey 的失败同样计入登录限速
+- 新增依赖 `@simplewebauthn/server` 14.0.3，用于校验 passkey；`panel.json` 中只保存公钥
+
 ## 0.2.0
 
 镜像内置浏览器，不再需要单独的 Selenium 容器：部署体积从约 3.5GB 降到约 1GB，阅读时的内存占用减少约 300–450MB。

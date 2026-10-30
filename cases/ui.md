@@ -1,10 +1,10 @@
 ## 面板页面验收用例
 
-`scripts/ui-smoke.js` 启动面板（用桩子进程 `scripts/fixtures/stub-worker.js` 代替阅读子进程，Selenium 地址指向模拟的 Selenium `scripts/fixtures/mock-selenium.js`，预先写入本月的运行记录、调度规则与月卡挑战），用浏览器走通各页面并截图，不访问微信读书。桌面与手机宽度依次进行，同一时间只占用一个浏览器会话，Selenium 默认的 1 个会话即可。执行方式：`SELENIUM_URL=<Selenium 或 chromedriver 地址> npm run test:ui`，截图目录见输出。
+`scripts/ui-smoke.js` 启动面板（用桩子进程 `scripts/fixtures/stub-worker.js` 代替阅读子进程，Selenium 地址指向模拟的 Selenium `scripts/fixtures/mock-selenium.js`，预先写入本月的运行记录、调度规则与月卡挑战），用浏览器走通各页面并截图，不访问微信读书。桌面与手机宽度依次进行，同一时间只占用一个浏览器会话，Selenium 默认的 1 个会话即可。执行方式：`SELENIUM_URL=<Selenium 或 chromedriver 地址> npm run test:ui`，截图目录见输出。浏览器能用 `localhost` 访问面板时（默认，CI 中 Selenium 容器使用宿主机网络），最后另启动一个外网地址为 `http://localhost:<端口>/` 的面板，用浏览器的虚拟认证器验证 passkey；浏览器在其他机器上（设置了 `PANEL_HOST_FOR_BROWSER`）时跳过这一部分。
 
 | 场景 | 操作 | 预期结果 |
 | --- | --- | --- |
-| smoke 自查 | 执行 `npm run test:ui` | 19 项全部通过并退出码 0 |
+| smoke 自查 | 执行 `npm run test:ui` | 23 项（跳过 passkey 时 19 项）全部通过并退出码 0 |
 | 登录与总览 | 先输入错误密码，再输入正确密码 | 显示“密码错误”；登录后总览顶部的浏览器状态为“就绪”、已用 0/1 个会话，没有 noVNC 链接；有 3 个账号卡片，显示今天的阅读分钟、打卡状态与下次运行时间 |
 | Selenium 状态 | 模拟 Selenium 的会话被占用后点“刷新”；节点改为不可用后点“刷新”；停止模拟 Selenium 后点“刷新”；重新启动后点“刷新” | 占用时显示“会话已满”与“其中 1 个会话不属于面板正在进行的运行”；节点不可用时提示“Selenium 未就绪：Selenium Grid not ready。”；停止后卡片变红，标签为“无法连接”，提示“无法连接 Selenium：连接被拒绝”与“改用内置浏览器时把该地址清空”；恢复后为“就绪”且不再提示 |
 | 扫码 | 在“扫码测试”卡片上点“仅登录” | 总览顶部出现该账号的二维码（`data:image/gif`，浏览器本地生成）与“复制登录链接”；实时页面同样显示二维码；点“停止”后状态为已停止 |
@@ -23,4 +23,9 @@
 | 控制台 | 以上操作全程 | 除了故意输错密码产生的一条 401，浏览器控制台没有错误与警告（包括 CSP 拦截） |
 | 退出 | 点“退出” | 回到登录页 |
 | 手机宽度 | 以 390px 宽度登录，依次打开总览（含 Selenium 状态、并发提示与二维码）、实时、历史、日历、调度、配置、设置 | 各页面没有横向滚动，控制台没有错误与警告 |
+| passkey 登录页 | 从 `http://127.0.0.1:<端口>/login` 打开，再从 `http://localhost:<端口>/login` 打开 | 前者不显示 passkey 按钮，提示“passkey 只能在 http://localhost:<端口> 上使用。”；后者显示“使用 passkey 登录” |
+| passkey 添加与改名 | 用密码登录，等二次验证过期（缩短为 3 秒）后在“设置 → 登录方式”中填写“虚拟认证器”并点“添加 passkey”；在弹出的“确认身份”中先输错密码，再输入正确密码；之后改名为“UI 测试设备” | 输错时对话框显示“密码不正确”；验证后提示“passkey 已添加，下次可以用它登录”，列表显示名称、添加时间与“从未使用”；改名后列表更新 |
+| passkey 登录 | 退出后在登录页点“使用 passkey 登录” | 进入总览，会话的登录方式为 `passkey` |
+| passkey 删除与二次验证 | 等二次验证过期后在列表中点“删除”并确认 | 弹出“确认身份”对话框，点“使用 passkey 验证”后对话框关闭，提示“passkey 已删除”，列表为空；控制台只有需要二次验证时的 403 与输错密码时的 400 |
+| passkey 真机 | 经 HTTPS 反向代理部署并设置 `PANEL_PUBLIC_URL`；分别在 iPhone（Safari）、Android（Chrome）、Mac（Safari 或 Chrome）、Windows（Windows Hello）上添加 passkey 并登录；在电脑上用手机扫码（跨设备）登录；从内网 IP 打开面板 | 各设备都能添加与登录，iCloud 钥匙串或 Google 密码管理器同步的显示“已同步”；扫码登录成功；内网 IP 打开时只能用密码登录并提示 passkey 的地址 |
 | 真实部署 | 在树莓派上以 compose 部署，经反向代理访问，完成扫码、阅读、停止、调度触发各一次 | 页面状态与实际运行一致（第 10 步真机验收） |

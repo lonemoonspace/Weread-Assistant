@@ -4,7 +4,7 @@
 
 | 场景 | 前置条件 / 输入 | 预期结果 |
 | --- | --- | --- |
-| smoke 自查 | 执行 `npm run test:panel` | 52 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
+| smoke 自查 | 执行 `npm run test:panel` | 63 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
 | 首次启动生成密码 | 空数据目录、未设置 `PANEL_PASSWORD` | 生成 16 位密码；`panel.json` 只保存 scrypt 哈希且权限为 0600；再次启动不再生成，原密码可登录 |
 | 未登录访问 | 不带会话 | `healthz` 返回 `{"status":"ok"}`；`/` 302 到 `login`；登录页与静态资源可访问；`api/auth/session` 返回 401 |
 | 登录与退出 | 设置 `PANEL_PASSWORD` | 错误密码 401；正确密码 204，`Set-Cookie` 带 `HttpOnly`、`SameSite=Strict`、`Path=/`，HTTP 下不带 `Secure`；登录后可访问首页；退出后会话失效 |
@@ -15,6 +15,15 @@
 | 子路径部署 | `PANEL_BASE_PATH=/weread/` | `/weread?x=1` 301 到 `/weread/?x=1`；`/weread/healthz` 200、`/healthz` 404；cookie `Path=/weread/` |
 | 修改密码 | 两个会话中的一个修改密码 | 当前密码错误、新密码过短时拒绝；成功后两个旧会话都失效、新会话可用，旧密码不能登录；密码来自环境变量时返回 409 |
 | 并发修改密码 | 两个会话同时用同一个当前密码修改为不同的新密码 | 只有一个返回 204，另一个返回 400 `wrong_password`；成功者的新会话保持有效，只有成功者的新密码能登录 |
+| passkey 是否可用 | `PANEL_PUBLIC_URL` 依次为空、`http://example.com/`、`https://192.168.1.2:26868/`、`https://[::1]/`、`http://localhost:26868/`、`https://example.com:8443/weread/` | 前四种 `api/auth/methods` 与会话中 `passkey.available` 为 false，申请参数 409 `passkey_unavailable`；后两种可用，`origin` 分别为 `http://localhost:26868` 与 `https://example.com:8443`；添加参数的 RP ID 为 `example.com`，要求可发现凭据与用户验证，attestation 为 none，算法为 -8、-7、-257；`purpose` 非法 400，缺少 `X-WA-Request` 403 |
+| passkey 添加与登录 | 用软件认证器（`scripts/fixtures/soft-authenticator.js`）添加名为“我的手机”的 passkey 后登录；重复添加；不填名称添加第二个；改名 | 列表有名称、`usable`、`backedUp`，不返回公钥；登录 204 并下发 `HttpOnly` cookie，会话 `method` 为 `passkey`；`panel.json` 只有 ID、公钥、计数、传输方式、是否备份、RP ID、名称与时间，计数为 1；重复添加时参数排除已有的，强行提交 409 `passkey_exists`；不填名称时为“passkey 日期”；改名去掉首尾空白，空名称或超过 64 个字符 400；不存在 404；未登录 401 |
+| passkey 校验 | 登录时篡改 origin（含端口不同）、RP ID、类型、去掉用户验证标志、改签名，使用未登记的认证器，计数不增或回退，重放 challenge，用二次验证或添加的 challenge 登录，请求体格式不对；添加时篡改 origin、RP ID、去掉用户验证、用登录的 challenge | 登录都返回 401 `passkey_failed` 且不下发 cookie；计数增加时成功；添加都返回 400 `passkey_failed` 且不保存 |
+| passkey 登录限速 | 同一 IP 连续 5 次签名错误 | 之后申请登录参数、passkey 登录与密码登录都返回 429 并带 `Retry-After` |
+| 二次验证 | 有效期缩短为 0.3 秒；过期后添加、删除、改名；用错误与正确的密码验证；用 passkey 验证，其中一次用其他会话申请的 challenge；未登录时申请参数与验证；另一个面板连续 5 次密码错误 | 过期后 `verifiedUntil` 为 null，添加、删除 403 `reauth_required`，改名 200；密码错误 400 `wrong_password`，正确 204 后可以添加；passkey 参数只列出可用的 passkey，其他会话的 challenge 400 `passkey_failed`，自己的 204 后可以删除；未登录 401；连续失败后二次验证与登录都 429 |
+| 删除 passkey | 两个 passkey；用 A 登录两个会话（其中一个连着实时推送）、用 B 登录一个，另有密码会话；在 A 的一个会话中删除 A | 推送连接 1 秒内断开；用 A 登录的另一个会话失效，删除者的会话、用 B 登录的会话与密码会话保留；A 不能再登录，B 可以 |
+| passkey 与域名绑定 | 在 `https://example.com/` 下添加后，先去掉 `PANEL_PUBLIC_URL` 重启，再换为 `https://other.example/` 重启；另在 `https://example.com:9443/other-path/` 下登录 | 两次启动日志分别提示“PANEL_PUBLIC_URL 没有设置为 HTTPS 地址”与“都不是在 other.example 下添加的”；列表中 `usable` 为 false，二次验证参数不列出它，不能登录，仍可删除；换端口与路径时 RP ID 不变，可以登录 |
+| passkey challenge 有效期与数量 | 时间推进 5 分钟；连续申请 101 个登录参数；用其他会话的令牌提交添加结果 | 过期与被挤掉的最早 challenge 校验失败，新的成功；添加的 challenge 绑定会话 |
+| `auth.passkeys` 格式 | 没有上一版的 `panel.json` 中 `auth.passkeys` 为对象、字符串、`[null]`、缺少公钥的对象 | 视为损坏，不会被清空为空列表；没有上一版可恢复，拒绝启动并报错 `auth.passkeys 必须是…` |
 | 收紧已有文件权限 | 启动前 `panel.json` 权限为 0644 | 启动后权限为 0600，日志提示已修改 |
 | 全局设置与默认配置 | 修改时区、并发数与默认阅读时长；提交非法时区、并发数 0、阅读时长 0 或 400 位数字、选书方式 9、未知项、`dataDir` | 合法值生效；非法值返回 400，`message` 指出字段名称与原因；一项非法时整个请求不生效；`null` 恢复默认 |
 | SELENIUM_URL 只写入一次 | 首次启动设置 `SELENIUM_URL`，在面板中改为其他地址后用新的 `SELENIUM_URL` 重启 | 全局默认中的 Selenium 地址保持面板中的设置 |
