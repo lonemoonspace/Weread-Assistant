@@ -52,7 +52,15 @@ function initLogFile(filePath, options = {}) {
   }
 
   // 日志中有书名、错误信息等，只允许属主读写；mode 只对新文件生效，已有的文件再 chmod 一次
-  logStream = fs.createWriteStream(filePath, { flags: "w", mode: 0o600 });
+  const stream = fs.createWriteStream(filePath, { flags: "w", mode: 0o600 });
+  // 数据目录只读、磁盘已满等写入失败时只输出到控制台，不让进程因未处理的 error 事件崩溃
+  stream.on("error", (e) => {
+    if (logStream === stream) {
+      logStream = null;
+    }
+    writeStdout(`[ERROR][${formatLocalTimestamp()}]: 无法写入日志文件 ${filePath}，之后只输出到控制台：${e.message}`);
+  });
+  logStream = stream;
   try {
     fs.chmodSync(filePath, 0o600);
   } catch (_) {}
@@ -68,6 +76,7 @@ function closeLogFile() {
     }
     const stream = logStream;
     logStream = null;
+    stream.once("error", () => resolve());
     stream.end(resolve);
   });
 }

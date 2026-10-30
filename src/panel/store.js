@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { writeFileAtomic } = require("../shared/files");
 const { ACCOUNT_ID_PATTERN } = require("./config");
-const { DEFAULT_SETTINGS } = require("./settings");
+const { sanitizeSettings } = require("./settings");
 
 const STORE_VERSION = 1;
 
@@ -43,16 +43,23 @@ function parseData(text) {
 
 // 补齐各部分的结构。defaults 不存在时（首次启动，或由只有 auth 的旧文件升级）用 seedDefaults 初始化
 function normalizeData(raw, seedDefaults) {
+  const { settings, invalid } = sanitizeSettings(raw.settings || {});
+  if (invalid.length > 0) {
+    const values = invalid.map((key) => `${key}=${JSON.stringify(raw.settings[key])}`).join(", ");
+    console.warn(`panel.json 中的设置取值无效，已恢复默认值：${values}`);
+  }
   return {
     version: STORE_VERSION,
     auth: { passwordHash: "", ...(raw.auth || {}) },
-    settings: { ...DEFAULT_SETTINGS, ...(raw.settings || {}) },
+    settings,
     defaults: raw.defaults || { ...seedDefaults },
     accounts: (raw.accounts || []).map((account) => ({
       ...account,
       schedules: account.schedules || [],
       challenge: account.challenge && typeof account.challenge === "object" ? account.challenge : null,
     })),
+    // 已完成的一次性升级迁移，避免每次启动重复执行
+    migrations: Array.isArray(raw.migrations) ? raw.migrations.filter((name) => typeof name === "string") : [],
   };
 }
 

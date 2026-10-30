@@ -4,7 +4,7 @@ const { describeSchedule, schedulePatterns } = require("./schedules");
 
 /**
  * 调度器：按账号的调度规则在面板时区的对应时间把运行加入队列。
- * panel.json 每次修改后整体重建定时任务，账号、规则、启用状态与时区的变化立即生效。
+ * panel.json 中的时区、账号启用状态或调度规则变化后整体重建定时任务，修改立即生效。
  * 面板停机期间错过的时间不补跑；账号已在运行或排队、已停用时跳过本次触发并记录日志。
  */
 function createScheduler({ store, runner }) {
@@ -66,8 +66,23 @@ function createScheduler({ store, runner }) {
     }
   }
 
+  // 只有调度相关的内容（时区、账号启用状态与规则）变化时才重建：其他写入（修改名称、配置、挑战等）不必重建全部定时任务
+  const scheduleKey = () => {
+    const data = store.get();
+    return JSON.stringify([
+      data.settings.timezone,
+      data.accounts.map((account) => [account.id, account.enabled, account.schedules || []]),
+    ]);
+  };
+  let lastKey = scheduleKey();
   reload();
-  const unsubscribe = store.subscribe(reload);
+  const unsubscribe = store.subscribe(() => {
+    const key = scheduleKey();
+    if (key !== lastKey) {
+      lastKey = key;
+      reload();
+    }
+  });
 
   return {
     reload,

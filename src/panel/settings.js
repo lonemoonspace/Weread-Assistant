@@ -106,8 +106,29 @@ function applySettingsPatch(current, patch) {
   return next;
 }
 
+// 校验 panel.json 中保存的设置（可能被手工改坏）：取值无效的项恢复默认值。返回 { settings, invalid }，
+// invalid 为恢复了默认值的设置项。避免无效时区让账号接口全部出错、并发数为 0 让运行一直排队
+function sanitizeSettings(stored) {
+  const settings = { ...DEFAULT_SETTINGS, ...stored };
+  const invalid = [];
+  for (const field of SETTINGS_FIELDS) {
+    try {
+      const value = coerceFieldValue(field, settings[field.key], field.label);
+      if (EXTRA_CHECKS[field.key]) {
+        EXTRA_CHECKS[field.key](field, value);
+      }
+      settings[field.key] = value;
+    } catch (_) {
+      invalid.push(field.key);
+      settings[field.key] = field.default;
+    }
+  }
+  return { settings, invalid };
+}
+
 module.exports = {
   DEFAULT_SETTINGS,
   SETTINGS_FIELDS,
   applySettingsPatch,
+  sanitizeSettings,
 };

@@ -17,6 +17,7 @@ const RANGE_MARGIN_MS = 3 * DAY_MS;
 const SCREENSHOT_PATTERN = /^screenshot(-\d{1,5})?\.png$/;
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 const MAX_PAGE_SIZE = 100;
+const QUARTER_HOUR_MS = 15 * 60 * 1000;
 
 // ---------- 日期 ----------
 
@@ -221,6 +222,18 @@ function dailyMinutes(panelDataDir, accountId, { timezone, from, to }) {
   const lower = Date.UTC(fy, fm - 1, fd) - RANGE_MARGIN_MS;
   const upper = Date.UTC(ty, tm - 1, td) + DAY_MS + RANGE_MARGIN_MS;
   const totals = {};
+  // 时区偏移都是 15 分钟的整数倍，同一个 15 分钟区间内的时刻日期相同：按区间缓存，
+  // 不必对每个分钟记录都调用一次 Intl（一年的记录有数万条）
+  const dates = new Map();
+  const dateOf = (ms) => {
+    const bucket = Math.floor(ms / QUARTER_HOUR_MS);
+    let date = dates.get(bucket);
+    if (date === undefined) {
+      date = dateInZone(new Date(bucket * QUARTER_HOUR_MS), timezone);
+      dates.set(bucket, date);
+    }
+    return date;
+  };
   for (const id of accountRunIds(panelDataDir, accountId)) {
     const queuedAt = runIdTime(id);
     if (queuedAt < lower || queuedAt > upper) {
@@ -231,7 +244,7 @@ function dailyMinutes(panelDataDir, accountId, { timezone, from, to }) {
       continue;
     }
     for (const mark of minuteMarksOf(meta)) {
-      const date = dateInZone(new Date(mark), timezone);
+      const date = dateOf(Date.parse(mark));
       if (date >= from && date <= to) {
         totals[date] = (totals[date] || 0) + 1;
       }
