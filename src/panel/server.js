@@ -225,7 +225,7 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
   // 面板前端不发送压缩的请求体；不解压可以避免未登录的请求进入 gzip/Brotli 解码（Node.js 的解码器漏洞，如 CVE-2026-111497）
   api.use(express.json({ limit: "10kb", inflate: false }));
 
-  // 登录或二次验证失败：被限速时 429，否则按 status 返回 error
+  // 登录或二次验证失败：被限速时 429，否则按 status 返回 error。这次失败触发了锁定时同样带上 retryAfter（秒），页面可以直接提示等待
   const sendAuthFailure = (res, result, status, error) => {
     const retryAfter = Math.ceil(result.retryAfterMs / 1000);
     if (retryAfter > 0) {
@@ -235,7 +235,7 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
       res.status(429).json({ error: "too_many_attempts", retryAfter });
       return;
     }
-    res.status(status).json({ error });
+    res.status(status).json(retryAfter > 0 ? { error, retryAfter } : { error });
   };
 
   // 密码登录关闭时直接拒绝，不校验密码，也不计入限速
@@ -281,7 +281,7 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
       sendAuthFailure(res, { locked: true, retryAfterMs: wait });
       return;
     }
-    res.json(await passkeys.loginOptions());
+    res.json(await passkeys.loginOptions(req.ip));
   });
 
   // { response }：浏览器返回的 passkey 登录结果。成功 204 并下发会话 cookie，失败 401（计入限速）

@@ -34,12 +34,21 @@ function listFiles(dir, predicate) {
   return files.sort();
 }
 
-// 页面以 type="module" 引用的脚本，例如登录页的 assets/login.js
+// 标签中某个属性的值：双引号、单引号或不带引号都可以，大小写不敏感；没有这个属性时为 null
+function tagAttribute(tag, name) {
+  const match = tag.match(new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'<>\`]+))`, "i"));
+  return match ? (match[1] ?? match[2] ?? match[3]).trim() : null;
+}
+
+// 页面以 type="module" 引用的脚本，例如登录页的 assets/login.js。属性的顺序与引号不限，地址中的查询参数与片段忽略
 function pageModules() {
   const files = new Set();
   for (const page of listFiles(PUBLIC_DIR, (file) => file.endsWith(".html"))) {
-    for (const match of fs.readFileSync(page, "utf8").matchAll(/<script\b[^>]*\btype="module"[^>]*\bsrc="([^"]+)"/g)) {
-      files.add(path.join(path.dirname(page), match[1]));
+    for (const [tag] of fs.readFileSync(page, "utf8").matchAll(/<script\b[^>]*>/gi)) {
+      const src = tagAttribute(tag, "src");
+      if (src && (tagAttribute(tag, "type") || "").toLowerCase() === "module") {
+        files.add(path.join(path.dirname(page), src.replace(/[?#].*$/, "")));
+      }
     }
   }
   return files;

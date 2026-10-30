@@ -44,15 +44,17 @@ export async function withReauth(action) {
   return action();
 }
 
+// 失败次数达到上限时，服务端在这次失败与之后的 429 中都带上需要等待的秒数
 function failureText(error) {
+  const wait = error.data.retryAfter > 0 ? `，请 ${error.data.retryAfter} 秒后再试` : "";
   if (error.code === "wrong_password") {
-    return "密码不正确";
+    return `密码不正确${wait}`;
   }
   if (error.code === "passkey_failed") {
-    return "passkey 校验失败，请重试";
+    return wait ? `passkey 校验失败${wait}` : "passkey 校验失败，请重试";
   }
   if (error.code === "too_many_attempts") {
-    return "尝试次数过多，请稍后再试";
+    return `尝试次数过多${wait || "，请稍后再试"}`;
   }
   if (error.code === "password_login_disabled") {
     return "密码登录已关闭，请用 passkey 验证";

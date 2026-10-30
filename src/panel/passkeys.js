@@ -13,12 +13,17 @@ const MAX_NAME_LENGTH = 64;
 // 浏览器等待用户操作的时长（跨设备扫码登录需要多一些时间）；challenge 的有效期略长于它
 const CEREMONY_TIMEOUT_MS = 2 * 60 * 1000;
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
-// 未登录也能申请登录用的 challenge，限制同时有效的数量，超出时丢弃最早的
+// 同时有效的 challenge 数量上限，登录用与二次验证、添加用的分开计数，超出时丢弃最早的
 const MAX_PENDING_CHALLENGES = 100;
+// 登录用的 challenge 未登录也能申请，同一 IP 同时有效的数量另有上限，超出时丢弃它自己最早的
+const MAX_PENDING_LOGIN_PER_IP = 5;
 // EdDSA、ES256、RS256。固定下来，不随 Node.js 是否支持后量子算法而变化
 const SUPPORTED_ALGORITHMS = [-8, -7, -257];
 
 const ownerKey = (token) => crypto.createHash("sha256").update(String(token || "")).digest("hex");
+
+// 控制字符（含换行）、行与段落分隔符、文字方向控制符：名称会写入日志并显示在页面上，这些字符会伪造日志行或打乱显示
+const UNSAFE_NAME_CHARS = /[\p{Cc}\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 
 function normalizeName(rawName, fallback) {
   const name = rawName === undefined || rawName === null ? fallback : String(rawName).trim();
@@ -27,6 +32,9 @@ function normalizeName(rawName, fallback) {
   }
   if (name.length > MAX_NAME_LENGTH) {
     throw badRequest(`passkey 名称不能超过 ${MAX_NAME_LENGTH} 个字符`);
+  }
+  if (UNSAFE_NAME_CHARS.test(name)) {
+    throw badRequest("passkey 名称不能包含换行、控制字符或文字方向控制符");
   }
   return name;
 }
@@ -38,9 +46,10 @@ function notFound(id) {
 // 面板的 passkey（WebAuthn）。relyingParty 为 { id, origin }（见 options.js 的 passkeyRelyingParty），为 null 时不提供 passkey，
 // 已保存的 passkey 仍可查看与删除。passkey 保存在 panel.json 的 auth.passkeys 中，只含公钥。
 // challenge 只保存在内存中：5 分钟内有效、只能使用一次，并且只能用于申请时的用途（登录、二次验证或添加）；
-// 二次验证与添加还绑定申请时的会话
+// 二次验证与添加还绑定申请时的会话。登录用的单独存放，未登录的请求再多也挤不掉二次验证与添加用的
 function createPasskeys({ store, relyingParty, now = Date.now }) {
-  const pending = new Map();
+  const pending = { login: new Map(), session: new Map() };
+  const poolFor = (purpose) => (purpose === "login" ? pending.login : pending.session);
 
   const usable = (passkey) => Boolean(relyingParty) && passkey.rpId === relyingParty.id;
 
@@ -50,23 +59,32 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
     }
   }
 
-  function remember(challenge, purpose, owner) {
+  // ip 只用于登录用的 challenge
+  function remember(challenge, purpose, owner, ip = "") {
     const t = now();
-    for (const [key, entry] of pending) {
+    const pool = poolFor(purpose);
+    const sameIp = [];
+    for (const [key, entry] of pool) {
       if (entry.expiresAt <= t) {
-        pending.delete(key);
+        pool.delete(key);
+      } else if (ip && entry.ip === ip) {
+        sameIp.push(key);
       }
     }
-    while (pending.size >= MAX_PENDING_CHALLENGES) {
-      pending.delete(pending.keys().next().value);
+    while (sameIp.length >= MAX_PENDING_LOGIN_PER_IP) {
+      pool.delete(sameIp.shift());
     }
-    pending.set(challenge, { purpose, owner: owner ? ownerKey(owner) : "", expiresAt: t + CHALLENGE_TTL_MS });
+    while (pool.size >= MAX_PENDING_CHALLENGES) {
+      pool.delete(pool.keys().next().value);
+    }
+    pool.set(challenge, { purpose, owner: owner ? ownerKey(owner) : "", ip, expiresAt: t + CHALLENGE_TTL_MS });
   }
 
   // 校验并作废 challenge：无论是否匹配都只能使用一次
   function take(challenge, purpose, owner) {
-    const entry = pending.get(challenge);
-    pending.delete(challenge);
+    const entry = pending.login.get(challenge) || pending.session.get(challenge);
+    pending.login.delete(challenge);
+    pending.session.delete(challenge);
     return Boolean(entry) && entry.expiresAt > now() && entry.purpose === purpose && entry.owner === (owner ? ownerKey(owner) : "");
   }
 
@@ -82,7 +100,7 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
   }
 
   // 登录与二次验证的参数。二次验证只列出当前会话可用的 passkey；登录不列出，由浏览器让用户选择（不暴露有哪些 passkey）
-  async function authenticationOptions(purpose, owner) {
+  async function authenticationOptions(purpose, owner, ip) {
     requireAvailable();
     const options = await generateAuthenticationOptions({
       rpID: relyingParty.id,
@@ -93,7 +111,7 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
       userVerification: "required",
       timeout: CEREMONY_TIMEOUT_MS,
     });
-    remember(options.challenge, purpose, owner);
+    remember(options.challenge, purpose, owner, ip);
     return options;
   }
 
@@ -157,8 +175,9 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
       return store.get().auth.passkeys.filter(usable).length;
     },
 
-    loginOptions() {
-      return authenticationOptions("login", "");
+    // ip：申请者的地址，用于限制同一 IP 同时有效的数量
+    loginOptions(ip = "") {
+      return authenticationOptions("login", "", ip);
     },
 
     reauthOptions(token) {

@@ -64,16 +64,16 @@ docker compose logs app | grep 面板初始密码
 | `GET healthz` | 否 | 返回 `{"status":"ok"}` |
 | `GET /` | 是 | 未登录时 302 到 `login` |
 | `GET login` | 否 | 登录页；已登录时 302 到 `./` |
-| `POST api/auth/login` | 否 | `{ password }`；成功 204 并下发会话 cookie，密码错误 401，被限速 429（带 `Retry-After`）；密码登录关闭时 403 `password_login_disabled`（不校验密码，不计入限速） |
+| `POST api/auth/login` | 否 | `{ password }`；成功 204 并下发会话 cookie，密码错误 401，被限速 429（带 `Retry-After`，响应体中的 `retryAfter` 为同一秒数；这次失败触发锁定时 401 也带上二者）；密码登录关闭时 403 `password_login_disabled`（不校验密码，不计入限速） |
 | `GET api/auth/methods` | 否 | 登录页可用的登录方式：`{ password, passkey: { available, origin? } }`，`password` 为实际是否允许密码登录；不透露添加了哪些 passkey |
 | `POST api/auth/passkey/options` | 登录：否；二次验证：是 | `{ purpose: "login" \| "reauth" }`：passkey 登录或二次验证的参数（含 challenge）；登录被限速时 429，passkey 不可用时 409 `passkey_unavailable` |
 | `POST api/auth/passkey/login` | 否 | `{ response }`：浏览器返回的 passkey 结果；成功 204 并下发会话 cookie，校验失败 401 `passkey_failed`（计入登录限速），被限速 429 |
 | `GET api/auth/session` | 是 | 返回版本号、密码是否来自环境变量、最短密码长度、passkey 是否可用及其地址 `passkey`、当前会话的登录方式 `method`（`password` 或 `passkey`）、二次验证的有效期 `verifiedUntil` 与所用方式 `verifiedBy`（已过期都为 null），以及密码登录的状态 `passwordLogin`：`{ enabled, active, forced, reason }`，见下文“关闭密码登录” |
-| `POST api/auth/reauth` | 是 | 二次验证：`{ password }` 或 `{ passkey }`（浏览器返回的 passkey 结果）；成功 204，之后 5 分钟内可以添加、删除 passkey 与切换密码登录；失败 400 `wrong_password` / `passkey_failed`（计入登录限速），被限速 429；密码登录关闭时只接受 passkey，提交密码返回 403 `password_login_disabled` |
+| `POST api/auth/reauth` | 是 | 二次验证：`{ password }` 或 `{ passkey }`（浏览器返回的 passkey 结果）；成功 204，之后 5 分钟内可以添加、删除 passkey 与切换密码登录；失败 400 `wrong_password` / `passkey_failed`（计入登录限速，这次失败触发锁定时带 `retryAfter`），被限速 429；密码登录关闭时只接受 passkey，提交密码返回 403 `password_login_disabled` |
 | `GET api/auth/passkeys` | 是 | `{ passkey, passkeys }`：每个 passkey 的 ID、名称、添加与最近使用时间、是否已同步备份 `backedUp`、在当前域名下是否可用 `usable`；不返回公钥 |
 | `POST api/auth/passkeys/options` | 是，需二次验证 | 添加 passkey 的参数；最多 20 个，已满 409 `too_many_passkeys`；5 分钟内没有登录或二次验证过时 403 `reauth_required` |
-| `POST api/auth/passkeys` | 是，需二次验证 | `{ name?, response }`：校验并保存，成功 201 `{ passkey }`；校验失败 400 `passkey_failed`，已添加过 409 `passkey_exists`；名称 1–64 个字符，不填时为“passkey 日期” |
-| `PATCH api/auth/passkeys/:id` | 是 | `{ name }`：改名；不存在 404 `passkey_not_found` |
+| `POST api/auth/passkeys` | 是，需二次验证 | `{ name?, response }`：校验并保存，成功 201 `{ passkey }`；校验失败 400 `passkey_failed`，已添加过 409 `passkey_exists`；名称 1–64 个字符，不能含换行、控制字符与文字方向控制符，不填时为“passkey 日期” |
+| `PATCH api/auth/passkeys/:id` | 是 | `{ name }`：改名，名称规则同添加；不存在 404 `passkey_not_found` |
 | `DELETE api/auth/passkeys/:id` | 是，需二次验证 | 删除 passkey，用它登录的其他会话立即失效（当前会话保留）；不存在 404；密码登录在设置中关闭时，不能删除当前域名下最后一个可用的 passkey，返回 409 `last_passkey` |
 | `PATCH api/auth/password-login` | 是，需二次验证 | `{ enabled }`：在设置中打开或关闭密码登录，返回 `{ passwordLogin }`。关闭要求当前域名下有可用的 passkey（否则 409 `no_usable_passkey`），并且 5 分钟内用 passkey 验证过（否则 403 `reauth_required`，带 `method: "passkey"`）；关闭后其他用密码登录的会话立即失效（当前会话保留）。打开只要求 5 分钟内验证过 |
 | `POST api/auth/logout` | 是 | 注销当前会话 |
@@ -370,7 +370,7 @@ data/
 
 | 条件 | 说明 |
 | --- | --- |
-| `PANEL_PUBLIC_URL` | 必须设置为面板的 HTTPS 地址（本机调试时可以是 `http://localhost:<端口>/`）。passkey 绑定这个地址的域名（RP ID）与 origin，二者只取自该变量，不按请求的 Host 推断。没有设置、不是 HTTPS 或是 IP 地址时不提供 passkey，设置页说明原因，已添加的仍可查看与删除 |
+| `PANEL_PUBLIC_URL` | 必须设置为面板的 HTTPS 地址（本机调试时可以是 `http://localhost:<端口>/`）。passkey 绑定这个地址的域名（RP ID）与 origin，二者只取自该变量，不按请求的 Host 推断；域名末尾的点会去掉（`https://example.com./` 按 `https://example.com` 提供）。没有设置、不是 HTTPS 或是 IP 地址时不提供 passkey，设置页说明原因，已添加的仍可查看与删除 |
 | 打开面板的地址 | 只能在 `PANEL_PUBLIC_URL` 的地址上用 passkey，用内网 IP 或其他域名打开时只能用密码登录（登录页给出提示） |
 | 子路径 | 部署在子路径下（`PANEL_BASE_PATH`）不影响 passkey，域名相同即可 |
 | 反向代理 | 建议设置 `PANEL_TRUST_PROXY`，使会话 cookie 带 `Secure`，并按真实客户端 IP 限速 |
@@ -382,7 +382,7 @@ data/
 | --- | --- |
 | 二次验证 | 添加、删除 passkey 与切换密码登录要求当前会话在 5 分钟内登录或二次验证过，否则先用 passkey 或密码再验证一次；改名不需要 |
 | 验证要求 | 要求可发现凭据（登录时不用输入用户名）与用户验证（指纹、面容或 PIN）；不要求证明设备型号（attestation 为 none）；算法为 EdDSA、ES256、RS256 |
-| challenge | 只保存在内存中，5 分钟内有效、只能使用一次，只能用于申请时的用途；二次验证与添加还绑定申请时的会话；同时有效的最多 100 个，超出时丢弃最早的。面板重启后需重新发起 |
+| challenge | 只保存在内存中，5 分钟内有效、只能使用一次，只能用于申请时的用途；二次验证与添加还绑定申请时的会话。登录用的与二次验证、添加用的分开存放，各自同时有效的最多 100 个，超出时丢弃最早的；登录用的同一 IP 最多 5 个，超出时丢弃它自己最早的，未登录的请求挤不掉二次验证与添加用的。面板重启后需重新发起 |
 | 签名计数 | 每次登录记录认证器返回的签名计数，计数不增反减时拒绝（同步的 passkey 计数始终为 0，不受影响） |
 | 删除 | 删除 passkey 后，用它登录的其他会话立即失效；修改面板密码时所有会话失效，与登录方式无关 |
 | 限速 | passkey 登录与二次验证的失败同样计入登录限速 |

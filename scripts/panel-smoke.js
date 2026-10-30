@@ -336,6 +336,7 @@ async function main() {
       const fifth = await login(panel, "wrong");
       assert.strictEqual(fifth.status, 401);
       assert.ok(Number(fifth.headers.get("retry-after")) >= 1);
+      assert.strictEqual(fifth.json.retryAfter, Number(fifth.headers.get("retry-after")), "触发锁定的这次失败同样带上等待秒数");
       const locked = await login(panel, "correct-horse");
       assert.strictEqual(locked.status, 429);
       assert.strictEqual(locked.json.error, "too_many_attempts");
@@ -470,6 +471,8 @@ async function main() {
         ["https://[::1]/", null],
         ["http://localhost:26868/", "http://localhost:26868"],
         ["https://example.com:8443/weread/", "https://example.com:8443"],
+        // 域名末尾的点去掉
+        ["https://example.com.:8443/", "https://example.com:8443"],
       ];
       for (const [publicUrl, origin] of cases) {
         const panel = await startAuthed({ publicUrl });
@@ -486,6 +489,8 @@ async function main() {
           assert.deepStrictEqual((await panel.call("GET", "api/auth/passkeys")).json, { passkey: { available: false }, passkeys: [] });
         }
       }
+      const dotted = await startAuthed({ publicUrl: "https://example.com./" });
+      assert.strictEqual((await dotted.call("POST", "api/auth/passkeys/options")).json.rp.id, "example.com");
       const panel = await startAuthed({ publicUrl: "https://example.com:8443/weread/" });
       const options = await panel.call("POST", "api/auth/passkeys/options");
       assert.strictEqual(options.json.rp.id, "example.com");
@@ -548,6 +553,16 @@ async function main() {
       assert.strictEqual(renamed.json.passkey.name, "笔记本");
       assert.strictEqual((await panel.call("PATCH", `api/auth/passkeys/${second.id}`, { name: " " })).status, 400);
       assert.strictEqual((await panel.call("PATCH", `api/auth/passkeys/${second.id}`, { name: "x".repeat(65) })).status, 400);
+      // 换行、控制字符与文字方向控制符会伪造日志行或打乱显示，添加与改名都拒绝
+      for (const name of ["名字\n[ERROR] 伪造的日志", "a\u0000b", "a\u0085b", "a\u2028b", "abc\u202Efdp.exe", "a\u2066b"]) {
+        const bad = await panel.call("PATCH", `api/auth/passkeys/${second.id}`, { name });
+        assert.strictEqual(bad.status, 400, JSON.stringify(name));
+        assert.match(bad.json.message, /不能包含换行、控制字符或文字方向控制符/);
+      }
+      const third = createSoftAuthenticator(PASSKEY_RP);
+      const badNameOptions = await panel.call("POST", "api/auth/passkeys/options");
+      assert.strictEqual((await panel.call("POST", "api/auth/passkeys", { name: "x\ty", response: third.register(badNameOptions.json) })).status, 400);
+      assert.strictEqual((await panel.call("PATCH", `api/auth/passkeys/${second.id}`, { name: "我的 iPhone 🔑" })).status, 200);
       assert.strictEqual((await panel.call("PATCH", "api/auth/passkeys/missing", { name: "x" })).status, 404);
       assert.strictEqual((await panel.call("DELETE", "api/auth/passkeys/missing")).status, 404);
       // 需要登录
@@ -661,7 +676,9 @@ async function main() {
       // 二次验证失败计入登录限速
       const limited = await startAuthed({ publicUrl: PASSKEY_URL, limits: { lockoutBaseMs: 60000 } });
       for (let i = 0; i < 5; i += 1) {
-        assert.strictEqual((await limited.call("POST", "api/auth/reauth", { password: "wrong" })).status, 400);
+        const failed = await limited.call("POST", "api/auth/reauth", { password: "wrong" });
+        assert.strictEqual(failed.status, 400);
+        assert.strictEqual(failed.json.retryAfter, i < 4 ? undefined : 60, "第 5 次失败触发锁定，带上等待秒数");
       }
       assert.strictEqual((await limited.call("POST", "api/auth/reauth", { password: "correct-horse" })).status, 429);
       assert.strictEqual((await login(limited, "correct-horse")).status, 429);
@@ -719,7 +736,7 @@ async function main() {
       assert.strictEqual(res.status, 204);
     });
 
-    await scenario("passkey 的 challenge：5 分钟后过期；未登录申请的数量有上限，超出时丢弃最早的", async () => {
+    await scenario("passkey 的 challenge：5 分钟后过期；登录用的数量有上限（同一 IP 另有上限），超出时丢弃最早的，挤不掉二次验证与添加用的", async () => {
       let t = Date.parse("2026-01-01T00:00:00Z");
       const dataDir = tempDir();
       const store = createStore(dataDir);
@@ -747,6 +764,26 @@ async function main() {
       assert.strictEqual(await passkeys.verifyLogin(authenticator.assert(first)), null, "最早的 challenge 被丢弃");
       const latest = await passkeys.loginOptions();
       assert.ok(await passkeys.verifyLogin(authenticator.assert(latest)));
+
+      // 未登录的请求再多，也挤不掉二次验证与添加用的 challenge
+      const reauth = await passkeys.reauthOptions(token);
+      const registration = await passkeys.registrationOptions(token);
+      for (let i = 0; i < 110; i += 1) {
+        await passkeys.loginOptions(`10.0.${i}.1`);
+      }
+      assert.ok(await passkeys.verifyReauth(authenticator.assert(reauth), token), "二次验证用的 challenge 保留");
+      const added = await passkeys.register(createSoftAuthenticator(PASSKEY_RP).register(registration), "后加的", token);
+      assert.strictEqual(added.name, "后加的", "添加用的 challenge 保留");
+
+      // 同一 IP 同时有效的最多 5 个，超出时丢弃它自己最早的，其他 IP 的不受影响
+      const own = await passkeys.loginOptions("192.0.2.1");
+      const flood = [];
+      for (let i = 0; i < 6; i += 1) {
+        flood.push(await passkeys.loginOptions("192.0.2.2"));
+      }
+      assert.strictEqual(await passkeys.verifyLogin(authenticator.assert(flood[0])), null, "同一 IP 最早的被丢弃");
+      assert.ok(await passkeys.verifyLogin(authenticator.assert(flood[1])));
+      assert.ok(await passkeys.verifyLogin(authenticator.assert(own)), "其他 IP 的保留");
     });
 
     await scenario("panel.json 中 auth.passkeys、auth.passwordLogin 格式不对时视为损坏，不会被清空", async () => {
