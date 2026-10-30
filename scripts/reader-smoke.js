@@ -8,7 +8,8 @@
  * 检查经 IPC 上报的事件，以及收到 SIGTERM 后关闭浏览器。不访问微信读书。
  *
  * 用法: SELENIUM_URL=http://localhost:4444 node scripts/reader-smoke.js
- *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / timeout / no-entry / no-qr / qr-late / corrupt / reading / single / worker / worker-stop）。
+ *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / timeout / no-entry / no-qr / qr-late / corrupt / reading / single /
+ *   single-only / no-catalog / shot-fail / worker / worker-stop / worker-no-selenium）。
  *   SELENIUM_URL 默认 http://localhost:4444，也可以直接指向 chromedriver（如 http://localhost:9515）；
  *   设为空（SELENIUM_URL= node scripts/reader-smoke.js）时使用内置浏览器，即本机的 chromedriver 与 Chromium。
  *   浏览器需要能访问本机的模拟服务；Selenium 跑在容器里时用 --network host 启动，
@@ -306,6 +307,18 @@ async function main() {
         assert.ok(fs.existsSync(path.join(dataDir, "screenshot-1.png")));
         assert.ok(countEvents(events, "reload") >= 1, "白屏截图后应刷新页面");
         assert.ok(countEvents(events, "vertical") >= countEvents(events, "reload") + 1, "刷新后应重新切换到上下滚动模式");
+      },
+    });
+
+    await scenario("单章书、目录中只有当前章节：读完后点当前章节回到开头，正常完成", {
+      name: "single-only",
+      site: { loggedIn: true, chapters: 1, contentHeight: 600 },
+      values: (homeUrl) => ({ selection: -1, bookUrl: `${homeUrl}reader?book=1&ch=1` }),
+      timing: { durationMs: 10000, pressIntervalMs: [100, 200] },
+      check({ result, events }) {
+        assert.strictEqual(result.status, "success");
+        const visits = events.filter((event) => event.type === "chapter" && event.ch === "1").length;
+        assert.ok(visits >= 2, `读完后应点击当前章节回到开头（进入第 1 章 ${visits} 次）`);
       },
     });
 

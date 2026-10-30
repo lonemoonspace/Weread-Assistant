@@ -1,7 +1,15 @@
 const fs = require("fs");
 const path = require("path");
 const { By, until, Key, error: webdriverErrors } = require("selenium-webdriver");
-const { clickOrThrow, findElementsWithin, isSessionLost, randomBetween, sleep, throwIfStopped } = require("./dom");
+const {
+  clickOrThrow,
+  findElementsWithin,
+  isSessionLost,
+  randomBetween,
+  safeClickElement,
+  sleep,
+  throwIfStopped,
+} = require("./dom");
 const { READ_FINISHED_TITLE_TEXT, XPATH, parseBookTitle } = require("./selectors");
 const { formatDuration } = require("./timing");
 
@@ -118,32 +126,34 @@ async function openBook(driver, ctx) {
 
 // 目录列表是否已经展开：已展开时再点目录按钮会把它关上
 async function catalogOpen(driver) {
-  const [first] = await driver.findElements(By.xpath(XPATH.catalogItem));
+  const [first] = await driver.findElements(By.xpath(XPATH.catalogItemAny));
   return Boolean(first) && (await first.isDisplayed().catch(() => false));
 }
 
 // 打开目录回到书的开头附近；返回是否点到了目录中的章节
 async function jumpToStart(driver, ctx) {
   if (!(await catalogOpen(driver))) {
-    const catalogs = await driver.findElements(By.xpath(XPATH.catalogButton));
-    if (catalogs.length === 0) {
+    const [catalogButton] = await driver.findElements(By.xpath(XPATH.catalogButton));
+    if (!catalogButton) {
       console.error("Catalog button not found.");
       return false;
     }
-    await catalogs[0].click();
-    console.info("Clicked on catalog button.");
+    if (!(await safeClickElement(driver, catalogButton, "目录按钮"))) {
+      return false;
+    }
   }
 
-  // 当前章节带有选中样式，不在列表中。与旧版一样选第 2 项，目录只有一项时选这一项
-  const chapters = await findElementsWithin(driver, XPATH.catalogItem, ctx.timing.elementWaitMs);
+  // 当前章节带有选中样式，不计入 catalogItem。与旧版一样选第 2 项，只有一项时选这一项；
+  // 目录中只有当前章节时（单章书）点当前章节，回到它的开头
+  const items = await findElementsWithin(driver, XPATH.catalogItemAny, ctx.timing.elementWaitMs);
+  const others = items.length > 0 ? await driver.findElements(By.xpath(XPATH.catalogItem)) : [];
+  const chapters = others.length > 0 ? others : items;
   if (chapters.length === 0) {
     console.error("Chapters not found.");
     return false;
   }
   await driver.executeScript("arguments[0].scrollIntoView();", chapters[0]);
-  await (chapters[1] || chapters[0]).click();
-  console.info("Clicked on first chapter.");
-  return true;
+  return safeClickElement(driver, chapters[1] || chapters[0], "目录中的章节");
 }
 
 // 每分钟截图一次并上报进度；截图过小时视为白屏并刷新页面
@@ -167,6 +177,8 @@ async function onReadingMinute(driver, ctx, minute) {
     if (isSessionLost(e)) {
       throw e;
     }
+    // 写入中途失败时不留下半截的截图
+    fs.rmSync(screenshotPath, { force: true });
     console.warn(`第 ${minute} 分钟截图失败:`, e.message);
     ctx.report("reading-minute", progress);
     return;
@@ -256,13 +268,10 @@ async function readLoop(driver, ctx) {
       }
       const step = await readStep(driver, ctx);
       transientErrors = 0;
-      if (step.jumped === false) {
-        jumpFailures += 1;
-        if (jumpFailures >= MAX_JUMP_FAILURES) {
-          throw new Error(`${step.reasons.join("、")}，连续 ${jumpFailures} 次无法通过目录回到开头：页面结构可能已改版`);
-        }
-      } else if (step.jumped) {
-        jumpFailures = 0;
+      // 只统计连续的跳转失败：中间有一轮正常翻动或跳转成功就重新计数
+      jumpFailures = step.jumped === false ? jumpFailures + 1 : 0;
+      if (jumpFailures >= MAX_JUMP_FAILURES) {
+        throw new Error(`${step.reasons.join("、")}，连续 ${jumpFailures} 次无法通过目录回到开头：页面结构可能已改版`);
       }
     } catch (e) {
       throwIfStopped(ctx.signal);

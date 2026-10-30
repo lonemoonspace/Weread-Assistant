@@ -236,6 +236,9 @@ async function refreshQRCode(driver, ctx) {
         try {
           await driver.wait(until.stalenessOf(refreshElement), 3000);
         } catch (waitError) {
+          if (isSessionLost(waitError)) {
+            throw waitError;
+          }
           console.debug(`刷新元素可能未及时从DOM移除: ${waitError.message}`);
         }
         break;
