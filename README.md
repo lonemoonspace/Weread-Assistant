@@ -52,7 +52,7 @@ docker compose logs app | grep 面板初始密码
 | 从局域网其他设备打开 | 把 `docker-compose.yml` 中的端口改为 `"26868:26868"`，再执行 `docker compose up -d`，访问 `http://<设备 IP>:26868/`。面板是 HTTP，只在可信的局域网中这样用 |
 | 从外网打开 | 经自己的反向代理（Nginx、Caddy 等）提供 HTTPS，端口保持只映射到本机，见 [docs/panel.md](docs/panel.md#反向代理) |
 
-想固定版本时，在 `docker-compose.yml` 同目录的 `.env` 中写入 `WEREAD_ASSISTANT_TAG=0.2.0`（默认 `latest`；`dev` 为 main 分支的最新构建）。
+想固定版本时，在 `docker-compose.yml` 同目录的 `.env` 中写入 `WEREAD_ASSISTANT_TAG=0.3.0`（默认 `latest`；`dev` 为 main 分支的最新构建）。
 
 ### 开始使用
 
@@ -76,7 +76,7 @@ docker compose up -d --remove-orphans
 
 数据在 `data/` 中，升级不受影响。版本说明见 [CHANGELOG.md](CHANGELOG.md)。
 
-从使用 Selenium 容器的旧版本升级时，**先重新下载 `docker-compose.yml` 再执行上面的命令**：面板会把设置中的 `http://selenium:4444` 自动清空并改用内置浏览器（只 `docker compose pull`、保留旧的 `docker-compose.yml` 时，旧文件中的 `selenium` 容器与 `SELENIUM_URL` 都还在，面板继续使用 Selenium，也能正常运行）；确认运行正常后可以执行 `docker image rm selenium/standalone-chromium:4.51.0-20261010` 删除旧的浏览器镜像，释放约 3GB 磁盘。想继续使用自己部署的 Selenium 时，在 `docker-compose.yml` 中设置 `SELENIUM_URL`，或在面板设置中填写地址：清空只在升级后第一次不带 `SELENIUM_URL` 启动时执行一次，之后在面板中填写的地址不会再被清空（0.2.0 中每次启动都会清空，升级到 0.2.1 后第一次启动还会清空一次，需要时再填写一次）。内置浏览器以无界面模式运行，没有可以用 noVNC 查看的画面，运行中的状况看实时页面中的截图与日志；需要 noVNC 时改用自己部署的 Selenium。
+从使用 Selenium 容器的旧版本升级时，**先重新下载 `docker-compose.yml` 再执行上面的命令**：面板会把设置中的 `http://selenium:4444` 自动清空并改用内置浏览器（只 `docker compose pull`、保留旧的 `docker-compose.yml` 时，旧文件中的 `selenium` 容器与 `SELENIUM_URL` 都还在，面板继续使用 Selenium，也能正常运行）；确认运行正常后可以执行 `docker image rm selenium/standalone-chromium:4.51.0-20261010` 删除旧的浏览器镜像，释放约 3GB 磁盘。想继续使用自己部署的 Selenium 时，在 `docker-compose.yml` 中设置 `SELENIUM_URL`，或在面板设置中填写地址：清空只在升级后第一次不带 `SELENIUM_URL` 启动时执行一次，之后在面板中填写的地址不会再被清空（0.2.0 中每次启动都会清空，升级到 0.3.0 后第一次启动还会清空一次，需要时再填写一次）。内置浏览器以无界面模式运行，没有可以用 noVNC 查看的画面，运行中的状况看实时页面中的截图与日志；需要 noVNC 时改用自己部署的 Selenium。
 
 ### 备份与迁移
 
