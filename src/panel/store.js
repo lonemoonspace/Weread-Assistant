@@ -29,6 +29,18 @@ function parseData(text) {
       throw new Error(`${key} 必须是对象`);
     }
   }
+  // passkey 至少要有字符串的 ID 与公钥，否则登录时无法使用
+  const passkeys = raw.auth && raw.auth.passkeys;
+  if (
+    passkeys !== undefined &&
+    !(Array.isArray(passkeys) && passkeys.every((item) => isPlainObject(item) && typeof item.id === "string" && typeof item.publicKey === "string"))
+  ) {
+    throw new Error("auth.passkeys 必须是由带 id 与 publicKey 的对象组成的数组");
+  }
+  const passwordLogin = raw.auth && raw.auth.passwordLogin;
+  if (passwordLogin !== undefined && typeof passwordLogin !== "boolean") {
+    throw new Error("auth.passwordLogin 必须是 true 或 false");
+  }
   if (Object.hasOwn(raw, "accounts") && !(Array.isArray(raw.accounts) && raw.accounts.every(isPlainObject))) {
     throw new Error("accounts 必须是由对象组成的数组");
   }
@@ -50,7 +62,7 @@ function normalizeData(raw, seedDefaults) {
   }
   return {
     version: STORE_VERSION,
-    auth: { passwordHash: "", ...(raw.auth || {}) },
+    auth: { passwordHash: "", passwordLogin: true, passkeys: [], ...(raw.auth || {}) },
     settings,
     defaults: raw.defaults || { ...seedDefaults },
     accounts: (raw.accounts || []).map((account) => ({

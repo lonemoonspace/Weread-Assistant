@@ -2,7 +2,7 @@
 
 ## 项目结构与模块组织
 - 整体设计与开发计划见 `docs/design.md`，改动前先确认属于计划中的哪一步。
-- `src/cli.js` 是唯一入口；`src/config/` 定义配置项清单与解析，`src/reader/` 是自动阅读流程（浏览器、登录、选书、阅读循环），`src/notify/` 是 Bark / ntfy / 邮件通知，`src/panel/` 是 Web 面板（服务端、鉴权、存储、运行队列与页面），`src/shared/` 放日志、HTTP 等公共工具。
+- `src/cli.js` 是唯一入口；`src/config/` 定义配置项清单与解析，`src/reader/` 是自动阅读流程（浏览器、登录、选书、阅读循环），`src/notify/` 是 Bark / ntfy / 邮件通知，`src/panel/` 是 Web 面板（服务端、鉴权与 passkey、存储、运行队列与页面），`src/shared/` 放日志、HTTP 等公共工具。
 - 新增运行配置项时只改 `src/config/schema.js`，面板表单与校验都由它生成，不新增对应的环境变量；整数项用 `min` / `max` 限定范围，枚举项用 `options` 列出可选值，解析时会据此校验。
 - 页面定位器与关键文案集中在 `src/reader/selectors.js`；浏览器隐式等待为 0，需要等元素出现时使用 `src/reader/dom.js` 中的显式等待。
 - 面板中的每次运行由 `src/panel/runner.js` fork 阅读子进程 `src/reader/worker.js` 执行：配置经 IPC 下发，不放进环境变量；子进程经 IPC 上报事件，新增事件时同步更新 `docs/reader.md` 与 `docs/panel.md`。阅读流程中较长的等待要传入 `ctx.signal`，保证停止时能立即结束。

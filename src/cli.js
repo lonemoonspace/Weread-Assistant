@@ -27,7 +27,8 @@ Environment variables:
   PANEL_PASSWORD           Panel password; generated on first start when unset
   PANEL_BASE_PATH          Path prefix behind a reverse proxy, e.g. /weread/ (default: /)
   PANEL_TRUST_PROXY        Trust X-Forwarded-* headers: true or the number of proxy hops (default: false)
-  PANEL_PUBLIC_URL         Public URL of the panel, used in notification links
+  PANEL_PUBLIC_URL         Public URL of the panel, used in notification links; an HTTPS URL enables passkey login
+  PANEL_FORCE_PASSWORD_LOGIN  true: allow password login even if it is turned off in settings (recovery)
   PANEL_DATA_DIR           Panel data directory (default: data)
   SELENIUM_URL             Selenium address written to the panel's global settings on first start;
                            leave unset to use the built-in browser (Chromium + chromedriver in the image)

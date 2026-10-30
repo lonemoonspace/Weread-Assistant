@@ -552,6 +552,34 @@ table.history td {
   max-width: 520px;
 }
 
+/* 登录方式：passkey 列表与改名 */
+.passkey-unusable {
+  background: var(--wa-amber);
+}
+
+.inline-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0;
+}
+
+.inline-form input {
+  flex: 1;
+  min-width: 8rem;
+  margin: 0;
+}
+
+.inline-form button {
+  width: auto;
+  margin: 0;
+}
+
+.reauth-dialog article > button,
+.reauth-dialog form button {
+  width: 100%;
+}
+
 .test-notification {
   display: flex;
   flex-direction: column;
@@ -599,6 +627,10 @@ table.history td {
 
 .login-page h1 {
   font-size: 1.6rem;
+}
+
+.passkey-login button {
+  width: 100%;
 }
 
 /* 手机 */

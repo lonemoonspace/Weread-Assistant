@@ -40,7 +40,7 @@ node src/cli.js run --account <id> --login-only   # 只登录并保存 cookies
 
 没有 Docker 时，可以用与本机 Chrome 版本一致的 chromedriver 代替 Selenium：先执行 `chromedriver --port=9515`，再以 `SELENIUM_URL=http://localhost:9515` 运行。`test:reader` 也可以用内置浏览器运行（`SELENIUM_URL= npm run test:reader`），CI 在镜像中这样运行，验证镜像中的 Chromium。
 
-`test:reader` 会在本机启动模拟页面服务，浏览器需要能访问它：Selenium 跑在容器里时用 `--network host` 启动，或通过 `MOCK_HOST` 指定浏览器访问本机时使用的地址。`test:ui` 同理（`PANEL_HOST_FOR_BROWSER`），截图保存位置见输出，也可用 `UI_SMOKE_SCREENSHOTS` 指定。
+`test:reader` 会在本机启动模拟页面服务，浏览器需要能访问它：Selenium 跑在容器里时用 `--network host` 启动，或通过 `MOCK_HOST` 指定浏览器访问本机时使用的地址。`test:ui` 同理（`PANEL_HOST_FOR_BROWSER`），截图保存位置见输出，也可用 `UI_SMOKE_SCREENSHOTS` 指定；passkey 部分需要浏览器用 `localhost` 访问面板（passkey 只能在 HTTPS 或 localhost 上使用），设置了 `PANEL_HOST_FOR_BROWSER` 时跳过。
 
 面板前端免构建，直接修改 `src/panel/public/assets/app/` 下的文件后刷新页面即可。
 

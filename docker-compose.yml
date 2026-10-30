@@ -18,7 +18,8 @@ services:
       # - PANEL_PASSWORD=change-me
       # - PANEL_TRUST_PROXY=true # 经反向代理访问时设置：识别真实 IP，HTTPS 下会话 cookie 带 Secure
       # - PANEL_BASE_PATH=/weread/
-      # - PANEL_PUBLIC_URL=https://example.com/weread/ # 扫码推送中附带面板链接
+      # - PANEL_PUBLIC_URL=https://example.com/weread/ # 扫码推送中附带面板链接；HTTPS 地址可以使用 passkey 登录
+      # - PANEL_FORCE_PASSWORD_LOGIN=true # 关闭了密码登录又用不了 passkey 时临时允许密码登录，处理完后删掉
     volumes:
       - ./data:/app/data
     # 容器默认使用宿主机的 DNS。宿主机解析微信读书或通知服务较慢时，可以取消注释指定 DNS
