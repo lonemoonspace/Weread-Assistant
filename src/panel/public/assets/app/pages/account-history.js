@@ -13,18 +13,29 @@ export const HistoryTab = {
     const nextBefore = ref(null);
     const loading = ref(false);
     const expanded = reactive({});
+    // 只采用最近一次请求的结果：重新加载与“加载更多”交错时，先发出的请求后返回不会覆盖列表或重复追加
+    let latest = 0;
 
     async function load(more = false) {
+      if (more && loading.value) {
+        return;
+      }
+      const request = ++latest;
       loading.value = true;
       try {
         const query = more && nextBefore.value ? `&before=${nextBefore.value}` : "";
         const data = await api(`accounts/${props.account.id}/runs?limit=20${query}`);
+        if (request !== latest) {
+          return;
+        }
         runs.value = more ? [...runs.value, ...data.runs] : data.runs;
         nextBefore.value = data.nextBefore;
       } catch (error) {
         notify(error.message, "error");
       } finally {
-        loading.value = false;
+        if (request === latest) {
+          loading.value = false;
+        }
       }
     }
 
@@ -102,7 +113,7 @@ export const HistoryTab = {
           </tbody>
         </table>
       </div>
-      <button v-if="nextBefore" type="button" class="secondary" :aria-busy="loading" @click="load(true)">加载更多</button>
+      <button v-if="nextBefore" type="button" class="secondary" :aria-busy="loading" :disabled="loading" @click="load(true)">加载更多</button>
       <p class="muted">截图只保留最近几次运行，日志按设置的天数保留，可在“设置”中调整。</p>
     </section>`,
 };

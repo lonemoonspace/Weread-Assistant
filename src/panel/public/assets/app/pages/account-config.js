@@ -14,6 +14,7 @@ export const ConfigTab = {
     const savingInfo = ref(false);
     const savingConfig = ref(false);
     const deleteData = ref(false);
+    const deleting = ref(false);
 
     // 继承的值：全局默认，未设置时为内置默认
     const inherited = computed(() =>
@@ -32,6 +33,9 @@ export const ConfigTab = {
     }
 
     async function saveInfo() {
+      if (savingInfo.value) {
+        return;
+      }
       savingInfo.value = true;
       try {
         await update({ name: info.name, enabled: info.enabled }, "已保存");
@@ -61,9 +65,10 @@ export const ConfigTab = {
       const text = deleteData.value
         ? `确定删除账号“${props.account.name}”，并删除它的 cookies、截图与运行记录？此操作不能撤销。`
         : `确定从面板移除账号“${props.account.name}”？数据目录会保留，重新添加同 ID 的账号时继续使用。`;
-      if (!window.confirm(text)) {
+      if (deleting.value || !window.confirm(text)) {
         return;
       }
+      deleting.value = true;
       try {
         await api(`accounts/${props.account.id}`, { method: "DELETE", body: { deleteData: deleteData.value } });
         await refreshAccounts();
@@ -71,6 +76,8 @@ export const ConfigTab = {
         go("/");
       } catch (error) {
         notify(error.message, "error");
+      } finally {
+        deleting.value = false;
       }
     }
 
@@ -79,7 +86,7 @@ export const ConfigTab = {
       info.enabled = props.account.enabled;
     });
 
-    return { info, savingInfo, savingConfig, deleteData, inherited, saveInfo, saveConfig, remove, state };
+    return { info, savingInfo, savingConfig, deleteData, deleting, inherited, saveInfo, saveConfig, remove, state };
   },
   template: `
     <section>
@@ -89,7 +96,7 @@ export const ConfigTab = {
         <label class="switch-line">
           <input type="checkbox" role="switch" v-model="info.enabled"> 启用（停用后不会定时运行，也不能手动运行）
         </label>
-        <div class="form-actions"><button type="submit" :aria-busy="savingInfo">保存</button></div>
+        <div class="form-actions"><button type="submit" :aria-busy="savingInfo" :disabled="savingInfo">保存</button></div>
       </form>
     </section>
 
@@ -114,6 +121,6 @@ export const ConfigTab = {
     <section class="danger-zone">
       <h3>删除账号</h3>
       <label class="switch-line"><input type="checkbox" v-model="deleteData"> 同时删除 cookies、截图与运行记录</label>
-      <button type="button" class="contrast" @click="remove">删除账号</button>
+      <button type="button" class="contrast" :aria-busy="deleting" :disabled="deleting" @click="remove">删除账号</button>
     </section>`,
 };

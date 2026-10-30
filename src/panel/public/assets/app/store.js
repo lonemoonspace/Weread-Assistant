@@ -16,6 +16,8 @@ export const state = reactive({
   finished: {},
   connection: "connecting",
   notice: null,
+  // 账号 ID → 运行或停止请求在途，期间按钮不可点，避免双击时第二次请求报错
+  pending: {},
 });
 
 const LOG_LINES = 500;
@@ -121,6 +123,17 @@ async function recoverFinished(accountId, run) {
 
 let source = null;
 let retryTimer = null;
+let idleTimer = null;
+// 服务端每 15 秒发送一次心跳；这段时间内什么都没收到时认为连接已经半开（代理静默丢包、休眠唤醒），主动重连
+const EVENTS_IDLE_MS = 45000;
+
+function resetIdleTimer() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    state.connection = "reconnecting";
+    connectEvents();
+  }, EVENTS_IDLE_MS);
+}
 
 // 实时推送。连接后先收到完整状态（snapshot）；断开后浏览器自动重连，
 // 服务端拒绝（例如会话失效）时先确认会话，再重新连接
@@ -130,9 +143,14 @@ export function connectEvents() {
     source.close();
   }
   source = new EventSource("api/events");
+  resetIdleTimer();
   source.addEventListener("open", () => {
     state.connection = "connected";
+    resetIdleTimer();
   });
+  for (const name of ["snapshot", "run", "log", "ping"]) {
+    source.addEventListener(name, resetIdleTimer);
+  }
   source.addEventListener("snapshot", (event) => {
     const { runs } = JSON.parse(event.data);
     const next = {};
@@ -189,6 +207,10 @@ export async function logout() {
 
 // 启动运行或停止；出错时提示
 export async function startRun(accountId, mode) {
+  if (state.pending[accountId]) {
+    return;
+  }
+  state.pending[accountId] = true;
   try {
     const { run } = await api(`accounts/${accountId}/runs`, { method: "POST", body: { mode } });
     // 实时推送可能先于响应到达，甚至运行已经结束
@@ -200,14 +222,22 @@ export async function startRun(accountId, mode) {
     notify(mode === "login" ? "已开始登录，稍后显示二维码" : "已加入运行队列");
   } catch (error) {
     notify(error.message, "error");
+  } finally {
+    delete state.pending[accountId];
   }
 }
 
 export async function stopRun(accountId) {
+  if (state.pending[accountId]) {
+    return;
+  }
+  state.pending[accountId] = true;
   try {
     await api(`accounts/${accountId}/stop`, { method: "POST" });
     notify("正在停止");
   } catch (error) {
     notify(error.message, "error");
+  } finally {
+    delete state.pending[accountId];
   }
 }
