@@ -143,7 +143,7 @@ async function main() {
   const results = [];
 
   // 建立临时数据目录，运行一次 runOnce，再交给 check 断言；values 可以是接收首页地址的函数
-  const scenario = async (title, { name, site, values = {}, mode, timing, prepare, check }) => {
+  const scenario = async (title, { name, site, values = {}, mode, timing, prepare, check, screenshotDir }) => {
     if (ONLY && ONLY !== name) {
       return;
     }
@@ -167,7 +167,12 @@ async function main() {
 
     const startedAt = Date.now();
     const note = await withCapturedConsole(async () => {
-      const result = await runOnce(config, { mode, homeUrl, timing: { ...FAST_TIMING, ...timing } });
+      const result = await runOnce(config, {
+        mode,
+        homeUrl,
+        timing: { ...FAST_TIMING, ...timing },
+        screenshotDir: screenshotDir ? screenshotDir(dataDir) : undefined,
+      });
       return check({ result, events: mock.events(name), pushes: ntfy.requests, dataDir });
     });
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -193,8 +198,10 @@ async function main() {
         assert.ok(cookies.some((cookie) => cookie.name === "wr_vid"));
         // cookies 与二维码等同于登录状态，只允许属主访问
         assert.strictEqual(fs.statSync(dataDir).mode & 0o777, 0o700);
-        for (const name of ["cookies.json", "login.png", "login-qr.png"]) {
-          assert.strictEqual(fs.statSync(path.join(dataDir, name)).mode & 0o777, 0o600, name);
+        assert.strictEqual(fs.statSync(path.join(dataDir, "cookies.json")).mode & 0o777, 0o600);
+        // 登录完成后删除登录弹窗的截图（整页截图可能含昵称、头像）
+        for (const name of ["login.png", "login-qr.png"]) {
+          assert.ok(!fs.existsSync(path.join(dataDir, name)), `登录后应删除 ${name}`);
         }
       },
     });
@@ -299,6 +306,39 @@ async function main() {
         assert.ok(fs.existsSync(path.join(dataDir, "screenshot-1.png")));
         assert.ok(countEvents(events, "reload") >= 1, "白屏截图后应刷新页面");
         assert.ok(countEvents(events, "vertical") >= countEvents(events, "reload") + 1, "刷新后应重新切换到上下滚动模式");
+      },
+    });
+
+    await scenario("读完后目录中没有章节：连续几次回不到开头后以出错结束，不把停在原处当作正常阅读", {
+      name: "no-catalog",
+      site: { loggedIn: true, chapters: 1, emptyCatalog: true },
+      values: (homeUrl) => ({ selection: -1, bookUrl: `${homeUrl}reader?book=1&ch=1` }),
+      timing: { durationMs: 60000, pressIntervalMs: [100, 200], elementWaitMs: 500 },
+      check({ result, pushes }) {
+        assert.strictEqual(result.status, "error");
+        assert.match(result.error, /书籍已读完.*连续 3 次无法通过目录回到开头/);
+        assert.ok(pushes.some((push) => push.title.endsWith("运行失败")));
+        assert.ok(!pushes.some((push) => push.title.endsWith("阅读完成")));
+      },
+    });
+
+    await scenario("截图写入失败（截图目录不存在）：阅读照常完成，邮件附件截图失败也不在“阅读完成”之后补报出错", {
+      name: "shot-fail",
+      site: { loggedIn: true, chapters: 2, contentHeight: 1800 },
+      values: (homeUrl) => ({
+        selection: -1,
+        bookUrl: `${homeUrl}reader?book=1&ch=1`,
+        screenshot: true,
+        // 开启邮件通知时为“阅读完成”截图作为附件；缺少 SMTP 配置，只截图不发送
+        emailEnabled: true,
+      }),
+      screenshotDir: (dataDir) => path.join(dataDir, "missing"),
+      timing: { durationMs: 9000, minuteMs: 3000, pressIntervalMs: [300, 500] },
+      check({ result, pushes }) {
+        assert.strictEqual(result.status, "success");
+        assert.ok(result.minutes >= 0);
+        assert.ok(pushes.some((push) => push.title.endsWith("阅读完成")));
+        assert.ok(!pushes.some((push) => push.title.endsWith("运行失败")), "截图失败不应让运行失败");
       },
     });
 

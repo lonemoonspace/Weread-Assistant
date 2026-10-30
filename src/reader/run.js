@@ -8,18 +8,26 @@ const { openBook, readLoop } = require("./reading");
 const { formatDuration, resolveTiming } = require("./timing");
 
 const MAX_ERROR_LENGTH_IN_NOTIFICATION = 100;
+// 关闭浏览器的最长等待，短于面板停止时强制结束子进程的时限（runner.js 的 KILL_TIMEOUT_MS）
+const QUIT_TIMEOUT_MS = 10000;
 
 async function saveScreenshot(driver, filePath) {
   fs.writeFileSync(filePath, await driver.takeScreenshot(), { encoding: "base64", mode: 0o600 });
 }
 
-// 发送事件通知；需要为该事件发邮件时截图作为附件，发送后删除（不混入运行目录中的阅读截图）
+// 发送事件通知；需要为该事件发邮件时截图作为附件，发送后删除（不混入运行目录中的阅读截图）。
+// 截图是尽力而为：截图失败时照常发送不带附件的通知，不影响运行结果
 async function notifyWithScreenshot(eventName, body, driver, ctx) {
   const attachments = [];
   if (ctx.notifier.willEmail(eventName)) {
     const filePath = ctx.paths.screenshot(`email-${eventName}.png`);
-    await saveScreenshot(driver, filePath);
-    attachments.push(filePath);
+    try {
+      await saveScreenshot(driver, filePath);
+      attachments.push(filePath);
+    } catch (e) {
+      fs.rmSync(filePath, { force: true });
+      console.warn("截取通知附件失败，本次通知不带截图:", e.message);
+    }
   }
   try {
     await ctx.notifier.event(eventName, body, { attachments });
@@ -65,14 +73,25 @@ async function runOnce(config, options = {}) {
   };
 
   let driver;
+  // 上报 done 后为阅读分钟数：之后的收尾动作（发送通知等）出错只记录日志，不再补发 error、改变运行结果
+  let doneMinutes = null;
   let quitting = null;
   const quitDriver = () => {
     if (!quitting) {
       console.info("Quitting the browser...");
-      quitting = driver.quit().then(
+      // WebDriver 命令本身没有超时：浏览器卡死时不一直等，超时后照常结束（面板随后结束子进程组中剩下的浏览器进程）
+      let timer;
+      const timeout = new Promise((resolve) => {
+        timer = setTimeout(() => {
+          console.warn(`关闭浏览器超过 ${QUIT_TIMEOUT_MS / 1000} 秒仍未完成，不再等待`);
+          resolve();
+        }, QUIT_TIMEOUT_MS);
+      });
+      const quit = driver.quit().then(
         () => console.info("Browser closed."),
         (e) => console.warn("关闭浏览器失败:", e.message)
       );
+      quitting = Promise.race([quit, timeout]).finally(() => clearTimeout(timer));
     }
     return quitting;
   };
@@ -111,6 +130,7 @@ async function runOnce(config, options = {}) {
 
     if (mode === "login") {
       report("done", { minutes: 0 });
+      doneMinutes = 0;
       await notifier.event("loginSuccess", "登录成功，已保存登录状态");
       return { status: "success", minutes: 0, error: "" };
     }
@@ -121,12 +141,21 @@ async function runOnce(config, options = {}) {
 
     const minutes = await readLoop(driver, ctx);
 
-    // save cookies after reading
-    await saveCookies(driver, paths.cookies);
+    // 阅读已经完成，保存 cookies 失败只影响下次是否需要扫码
+    try {
+      await saveCookies(driver, paths.cookies);
+    } catch (e) {
+      console.warn("阅读后保存 cookies 失败:", e.message);
+    }
     report("done", { minutes });
+    doneMinutes = minutes;
     await notifyWithScreenshot("done", `阅读完成，共 ${minutes} 分钟`, driver, ctx);
     return { status: "success", minutes, error: "" };
   } catch (e) {
+    if (doneMinutes !== null) {
+      console.warn("阅读完成后的收尾出错:", e?.message || e);
+      return { status: "success", minutes: doneMinutes, error: "" };
+    }
     if (signal && signal.aborted) {
       console.warn("运行已停止");
       return { status: "stopped", minutes: 0, error: "" };
