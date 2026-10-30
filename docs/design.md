@@ -123,7 +123,7 @@ flowchart LR
 data/
   panel.json              # 面板设置、全局配置、账号、调度、密码哈希（0600）
   accounts/<id>/          # 账号数据
-    cookies.json  login.png  screenshot-*.png
+    cookies.json  login.png（等待扫码时的截图，登录后删除）  screenshot-*.png
   runs/<id>/<runId>/      # 每次运行
     meta.json  output.log  screenshot-*.png
 ```
@@ -156,7 +156,8 @@ data/
       ],
       "challenge": { "type": "month", "startDate": "2026-10-01" }
     }
-  ]
+  ],
+  "migrations": ["legacy-selenium-url"]
 }
 ```
 
@@ -248,8 +249,8 @@ sequenceDiagram
 | 项目 | 措施 |
 | --- | --- |
 | 面板密码 | 至少 8 位；优先使用 `PANEL_PASSWORD`（不足 8 位时拒绝启动）；未设置时首次启动随机生成并只在日志中打印一次；scrypt 哈希存储；可在界面修改（设置了 `PANEL_PASSWORD` 时以环境变量为准） |
-| 登录限速 | 按 IP 连续失败 5 次后指数退避，最长 15 分钟；另设全局失败上限，防止 `X-Forwarded-For` 配置错误时被绕过 |
-| 会话 | 服务端随机令牌，7 天滑动过期；cookie `HttpOnly`、`SameSite=Strict`、HTTPS 时 `Secure`、`Path` 为面板路径；修改密码后所有会话失效 |
+| 登录限速 | 按 IP 连续失败 5 次后指数退避，最长 15 分钟；另设全局失败上限，防止 `X-Forwarded-For` 配置错误时被绕过，达到上限时登录成功过的 IP 不受影响；修改密码时当前密码错误共用同一套计数 |
+| 会话 | 服务端随机令牌，7 天滑动过期、从登录起最长 30 天；cookie `HttpOnly`、`SameSite=Strict`、HTTPS 时 `Secure`、`Path` 为面板路径；修改密码后所有会话失效 |
 | CSRF | `SameSite=Strict` + 修改类请求必须带自定义请求头与 JSON `Content-Type` |
 | 密钥字段 | 只写不读：接口返回 `••••`，提交空值表示不修改；子进程经 IPC 接收，不进入环境变量；运行日志中的密钥值替换为掩码 |
 | 登录链接 | 二维码在浏览器本地生成，不经过第三方服务；仅已登录用户可见；不写入运行日志 |
@@ -270,13 +271,13 @@ sequenceDiagram
 | `PANEL_TRUST_PROXY` | `false` | 设为 `true` 后信任 `X-Forwarded-For` / `X-Forwarded-Proto`，用于识别真实 IP 与 HTTPS |
 | `PANEL_PUBLIC_URL` | 空 | 面板的外网地址，扫码推送附带该账号实时页面的链接（解析不出登录链接时只推送面板链接）；与 `PANEL_BASE_PATH` 明显不一致时启动日志给出提示 |
 | `PANEL_PASSWORD` | 空 | 面板密码，至少 8 位（不足时拒绝启动） |
-| `SELENIUM_URL` | 空 | 首次启动时写入全局配置；为空时使用内置浏览器。没有设置时，面板启动时把配置中旧版的 `http://selenium:4444` 清空 |
+| `SELENIUM_URL` | 空 | 首次启动时写入全局配置；为空时使用内置浏览器。没有设置时，升级后第一次启动把配置中旧版的 `http://selenium:4444` 清空（只执行一次，记录在 `panel.json` 的 `migrations` 中） |
 
 | 注意事项 | 说明 |
 | --- | --- |
 | 端口映射 | 反向代理与面板在同一主机时映射为 `127.0.0.1:26868:26868`；在同一 Docker 网络时不必映射端口。端口冲突只取决于宿主机一侧，改映射左边的端口即可 |
 | 端口被占用 | 启动时端口被占用直接报错退出，并提示通过 `PANEL_PORT` 更换，不自动换用其他端口，避免反向代理指向错误 |
-| SSE | 实时接口响应头带 `Cache-Control: no-cache` 与 `X-Accel-Buffering: no`，每 15 秒发送心跳注释；Nginx 需对该路径设置 `proxy_buffering off` 并加大 `proxy_read_timeout` |
+| SSE | 实时接口响应头带 `Cache-Control: no-cache` 与 `X-Accel-Buffering: no`，每 15 秒发送心跳事件 `ping`；Nginx 需对该路径设置 `proxy_buffering off` 并加大 `proxy_read_timeout` |
 | 断线重连 | 前端 `EventSource` 自动重连，重连后重新拉取一次完整状态 |
 
 ### 部署
