@@ -1,9 +1,12 @@
 const fs = require("fs");
+const path = require("path");
 const { until } = require("selenium-webdriver");
 const { ensurePrivateDir, writeFileAtomic } = require("../shared/files");
 const {
   findElementsWithin,
   findVisible,
+  isSessionLost,
+  safeClickElement,
   sleep,
   throwIfStopped,
   toBy,
@@ -27,6 +30,9 @@ async function saveCookies(driver, filePath) {
   console.info("Cookies saved successfully.");
 }
 
+// 损坏的 cookies 文件保留的备份数，更早的删除
+const MAX_CORRUPT_COOKIES = 3;
+
 // 读取 cookies 文件；内容损坏时改名备份并返回 null，本次转入扫码登录
 function readCookiesFile(filePath) {
   try {
@@ -39,7 +45,20 @@ function readCookiesFile(filePath) {
   const backupPath = `${filePath}.corrupt-${Date.now()}`;
   fs.renameSync(filePath, backupPath);
   console.warn("cookies 文件已损坏，已备份为", backupPath, "，本次需要重新扫码登录");
+  // 文件名中的时间戳位数相同，按名称排序即按时间
+  const prefix = `${path.basename(filePath)}.corrupt-`;
+  const copies = fs.readdirSync(path.dirname(filePath)).filter((name) => name.startsWith(prefix)).sort().reverse();
+  for (const name of copies.slice(MAX_CORRUPT_COOKIES)) {
+    fs.rmSync(path.join(path.dirname(filePath), name), { force: true });
+  }
   return null;
+}
+
+// 登录完成后删除登录弹窗的截图：整页截图可能含昵称、头像，二维码截图已经没有用处
+function removeLoginImages(paths) {
+  for (const filePath of [paths.loginQrCode, paths.loginQrImage]) {
+    fs.rmSync(filePath, { force: true });
+  }
 }
 
 // 返回是否加载了至少一个 cookie
@@ -117,6 +136,9 @@ async function extractAndDisplayQRCode(driver, ctx) {
     }
     console.warn("无法从二维码图片中解析登录链接");
   } catch (e) {
+    if (isSessionLost(e)) {
+      throw e;
+    }
     console.warn("提取二维码登录链接失败:", e.message);
   }
   // 配置了面板地址时改为推送面板链接，在面板中扫二维码截图
@@ -128,10 +150,19 @@ async function extractAndDisplayQRCode(driver, ctx) {
 async function captureQRCode(driver, ctx) {
   // 避免截图时二维码还未弹出
   await sleep(1000);
-  const image = await driver.takeScreenshot();
-  // 二维码在有效期内可用于完成登录，与 cookies 一样只允许属主读写
-  writeFileAtomic(ctx.paths.loginQrCode, Buffer.from(image, "base64"), { mode: 0o600 });
-  console.info("QR code saved, datetime: ", new Date());
+  // 整页截图只用于排查与兜底显示：截图失败（页面重绘、磁盘写入失败等）时照常解析二维码并上报 login-required，
+  // 否则面板拿不到二维码
+  try {
+    const image = await driver.takeScreenshot();
+    // 二维码在有效期内可用于完成登录，与 cookies 一样只允许属主读写
+    writeFileAtomic(ctx.paths.loginQrCode, Buffer.from(image, "base64"), { mode: 0o600 });
+    console.info("QR code saved, datetime: ", new Date());
+  } catch (e) {
+    if (isSessionLost(e)) {
+      throw e;
+    }
+    console.warn("保存登录页截图失败:", e.message);
+  }
   const url = await extractAndDisplayQRCode(driver, ctx);
   // 解析不出链接时也上报，面板据此显示“等待扫码”
   ctx.report("login-required", { url: url || "" });
@@ -148,7 +179,9 @@ async function openLoginDialog(driver, ctx) {
   console.info("Login link found. Clicking...");
   // 避免点击不成功
   await sleep(1000);
-  await loginLinks[0].click();
+  if (!(await safeClickElement(driver, loginLinks[0], "登录入口"))) {
+    return false;
+  }
   // 等待弹窗加载
   await sleep(2000);
 
@@ -179,45 +212,6 @@ async function openLoginDialogOrFail(driver, ctx) {
   }
 }
 
-// 安全点击元素函数，处理元素被拦截的情况
-async function safeClickElement(driver, element, description = "元素") {
-  try {
-    // 首先检查元素是否可见和可点击
-    const isDisplayed = await element.isDisplayed();
-    if (!isDisplayed) {
-      console.warn(`${description}不可见，尝试滚动到元素位置`);
-      await driver.executeScript("arguments[0].scrollIntoView({block: 'center'});", element);
-      await sleep(500);
-    }
-
-    await element.click();
-    console.info(`成功点击${description}`);
-    return true;
-  } catch (error) {
-    console.warn(`直接点击${description}失败: ${error.message}`);
-
-    try {
-      console.info(`尝试使用JavaScript点击${description}`);
-      await driver.executeScript("arguments[0].click();", element);
-      console.info(`使用JavaScript成功点击${description}`);
-      return true;
-    } catch (jsError) {
-      console.warn(`使用JavaScript点击${description}失败: ${jsError.message}`);
-
-      try {
-        console.info(`尝试使用Actions类点击${description}`);
-        const actions = driver.actions({ bridge: true });
-        await actions.move({ origin: element }).click().perform();
-        console.info(`使用Actions类成功点击${description}`);
-        return true;
-      } catch (actionError) {
-        console.error(`所有点击方法都失败: ${actionError.message}`);
-        return false;
-      }
-    }
-  }
-}
-
 // 点击二维码上的刷新入口；返回是否拿到了新的二维码
 async function refreshQRCode(driver, ctx) {
   try {
@@ -230,6 +224,9 @@ async function refreshQRCode(driver, ctx) {
       try {
         refreshElement = await driver.wait(until.elementLocated(by), 2000);
       } catch (e) {
+        if (isSessionLost(e)) {
+          throw e;
+        }
         console.debug(`未找到元素: ${by.toString()}`);
         continue;
       }
@@ -239,6 +236,9 @@ async function refreshQRCode(driver, ctx) {
         try {
           await driver.wait(until.stalenessOf(refreshElement), 3000);
         } catch (waitError) {
+          if (isSessionLost(waitError)) {
+            throw waitError;
+          }
           console.debug(`刷新元素可能未及时从DOM移除: ${waitError.message}`);
         }
         break;
@@ -263,6 +263,9 @@ async function refreshQRCode(driver, ctx) {
     await captureQRCode(driver, ctx);
     return true;
   } catch (error) {
+    if (isSessionLost(error)) {
+      throw error;
+    }
     console.error("刷新二维码过程中发生错误:", error.message);
     return false;
   }
@@ -303,6 +306,25 @@ async function login(driver, ctx) {
   if (entry === 0) {
     await openLoginDialogOrFail(driver, ctx);
   }
+  // 最近一次打开或刷新二维码的时间：过期提示的定位器失效时，按时间兜底重新打开登录弹窗
+  let qrShownAt = Date.now();
+
+  // 重新加载页面并再次打开登录弹窗；失败时继续等待到扫码超时（下一轮再试），不提前结束运行
+  const reopenLoginDialog = async () => {
+    try {
+      await driver.navigate().refresh();
+      await sleep(3000, ctx.signal);
+      await openLoginDialogOrFail(driver, ctx);
+    } catch (e) {
+      throwIfStopped(ctx.signal);
+      if (isSessionLost(e)) {
+        throw e;
+      }
+      console.error("重新打开登录弹窗失败，继续等待扫码:", e.message);
+      await sleep(timing.loginPollMs, ctx.signal);
+    }
+    qrShownAt = Date.now();
+  };
 
   const deadline = Date.now() + timing.loginTimeoutMs;
   console.info("Waiting for login...");
@@ -312,6 +334,9 @@ async function login(driver, ctx) {
     try {
       state = await xpathsExist(driver, [XPATH.shelfLink, XPATH.qrExpiredOverlay, XPATH.qrExpiredText]);
     } catch (e) {
+      if (isSessionLost(e)) {
+        throw e;
+      }
       // 扫码成功后页面会跳转，跳转过程中执行脚本可能失败，稍后再查
       console.debug("检查登录状态失败，稍后重试:", e.message);
       await sleep(timing.loginPollMs, ctx.signal);
@@ -321,18 +346,27 @@ async function login(driver, ctx) {
 
     if (loggedIn) {
       console.info("Login completed.");
+      removeLoginImages(paths);
       return true;
     }
 
     // 二维码过期则刷新；刷新失败时重新加载页面并再次打开登录弹窗
     if (overlayShown || expiredTextShown) {
       console.info("Refreshing QR code...");
-      if (!(await refreshQRCode(driver, ctx))) {
+      if (await refreshQRCode(driver, ctx)) {
+        qrShownAt = Date.now();
+      } else {
         console.error("二维码刷新失败，重新加载页面后再次打开登录弹窗");
-        await driver.navigate().refresh();
-        await sleep(3000);
-        await openLoginDialogOrFail(driver, ctx);
+        await reopenLoginDialog();
       }
+      console.info("Waiting for login...");
+      continue;
+    }
+
+    // 二维码约 1 分钟过期；长时间没有识别到过期提示（页面改版、定位器失配）时按时间兜底，避免一直显示失效的二维码
+    if (entry === 0 && Date.now() - qrShownAt > timing.qrMaxAgeMs) {
+      console.warn(`${formatDuration(timing.qrMaxAgeMs)}内未识别到二维码过期提示，重新加载页面后再次打开登录弹窗`);
+      await reopenLoginDialog();
       console.info("Waiting for login...");
       continue;
     }

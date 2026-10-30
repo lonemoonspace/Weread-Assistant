@@ -93,7 +93,8 @@ async function sendNtfy(config, title, body, options = {}) {
 
   // ntfy 的 topic 等价于密码，只允许字母、数字、下划线与短横线
   if (!NTFY_TOPIC_PATTERN.test(config.ntfyTopic)) {
-    console.error(`ntfy 主题不合法: ${config.ntfyTopic}（仅支持字母、数字、下划线与短横线，且不超过 64 个字符）`);
+    // 不打印主题本身：它等同于密钥
+    console.error(`ntfy 主题不合法（${config.ntfyTopic.length} 个字符）：仅支持字母、数字、下划线与短横线，且不超过 64 个字符`);
     return false;
   }
 

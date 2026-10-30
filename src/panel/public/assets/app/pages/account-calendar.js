@@ -19,12 +19,20 @@ export const CalendarTab = {
     const month = ref("");
     const loading = ref(false);
     const form = reactive({ type: "month", startDate: "" });
+    const saving = ref(false);
+    // 连续翻月时只采用最近一次请求的结果，显示的月份与按钮一致
+    let latest = 0;
 
     async function load() {
+      const request = ++latest;
       loading.value = true;
       try {
         const query = month.value ? `?month=${month.value}` : "";
-        data.value = await api(`accounts/${props.account.id}/calendar${query}`);
+        const result = await api(`accounts/${props.account.id}/calendar${query}`);
+        if (request !== latest) {
+          return;
+        }
+        data.value = result;
         month.value = data.value.month;
         if (props.account.challenge) {
           Object.assign(form, props.account.challenge);
@@ -32,9 +40,13 @@ export const CalendarTab = {
           form.startDate = data.value.today.date;
         }
       } catch (error) {
-        notify(error.message, "error");
+        if (request === latest) {
+          notify(error.message, "error");
+        }
       } finally {
-        loading.value = false;
+        if (request === latest) {
+          loading.value = false;
+        }
       }
     }
 
@@ -52,6 +64,10 @@ export const CalendarTab = {
     const isCurrentMonth = computed(() => data.value && data.value.today.date.startsWith(data.value.month));
 
     async function saveChallenge(challenge) {
+      if (saving.value) {
+        return;
+      }
+      saving.value = true;
       try {
         await api(`accounts/${props.account.id}`, { method: "PATCH", body: { challenge } });
         await refreshAccounts();
@@ -59,6 +75,8 @@ export const CalendarTab = {
         await load();
       } catch (error) {
         notify(error.message, "error");
+      } finally {
+        saving.value = false;
       }
     }
 
@@ -69,6 +87,7 @@ export const CalendarTab = {
       data,
       month,
       loading,
+      saving,
       cells,
       form,
       isCurrentMonth,
@@ -158,8 +177,8 @@ export const CalendarTab = {
             <input type="date" v-model="form.startDate" required>
           </label>
           <div class="form-actions">
-            <button type="submit">保存</button>
-            <button v-if="data.challenge" type="button" class="secondary" @click="clear">清除</button>
+            <button type="submit" :aria-busy="saving" :disabled="saving">保存</button>
+            <button v-if="data.challenge" type="button" class="secondary" :disabled="saving" @click="clear">清除</button>
           </div>
         </form>
       </details>

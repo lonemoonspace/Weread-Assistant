@@ -236,10 +236,16 @@ function createRunner({
     panelLog(run, `运行结束：${summary}${error ? `（${error}）` : ""}`);
     console.info(`运行结束：${run.accountId} ${run.id} ${summary}${error ? `（${error}）` : ""}`);
     changed(run);
-    run.logStream.end();
+    // 日志写入磁盘后才算结束：面板停止时等这里完成再退出进程，运行日志不会缺最后几行
+    const stream = run.logStream;
+    if (stream.closed || stream.destroyed) {
+      run.resolveClosed();
+    } else {
+      stream.once("close", run.resolveClosed);
+    }
+    stream.end();
     running.delete(run);
     active.delete(run.accountId);
-    run.resolveClosed();
     try {
       onFinish(publicRun(run));
     } catch (e) {
@@ -625,7 +631,8 @@ function createRunner({
     // 面板停止：取消排队，结束所有子进程并等待退出，这些运行记为中断
     async close() {
       closing = true;
-      for (const run of queue.splice(0)) {
+      const queued = queue.splice(0);
+      for (const run of queued) {
         finish(run, "interrupted", "面板停止时仍在排队");
       }
       const pending = [...running];
@@ -634,7 +641,7 @@ function createRunner({
         panelLog(run, "面板正在停止，结束阅读子进程");
         terminate(run);
       }
-      await Promise.all(pending.map((run) => run.closed));
+      await Promise.all([...queued, ...pending].map((run) => run.closed));
     },
   };
 }

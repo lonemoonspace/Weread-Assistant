@@ -42,7 +42,7 @@ const WEEKDAYS = { Mon: "周一", Tue: "周二", Wed: "周三", Thu: "周四", F
 
 // 2026-10-16 06:00
 export function formatDateTime(iso, timezone) {
-  if (!iso) {
+  if (!iso || Number.isNaN(new Date(iso).getTime())) {
     return "-";
   }
   const p = parts(iso, timezone);
@@ -51,7 +51,7 @@ export function formatDateTime(iso, timezone) {
 
 // 10-16 周五 06:00
 export function formatShort(iso, timezone) {
-  if (!iso) {
+  if (!iso || Number.isNaN(new Date(iso).getTime())) {
     return "-";
   }
   const p = parts(iso, timezone);
@@ -59,7 +59,7 @@ export function formatShort(iso, timezone) {
 }
 
 export function formatClock(iso, timezone) {
-  if (!iso) {
+  if (!iso || Number.isNaN(new Date(iso).getTime())) {
     return "-";
   }
   const p = parts(iso, timezone);

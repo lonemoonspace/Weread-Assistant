@@ -30,7 +30,7 @@ docker compose logs app | grep 面板初始密码
 | `PANEL_TRUST_PROXY` | `false` | `true` 表示信任 1 层代理，也可填信任的代理层数 |
 | `PANEL_PUBLIC_URL` | 空 | 面板的外网地址（不含用户名与密码的 http(s) 地址，例如 `https://example.com/weread/`）：扫码推送附带该账号实时页面的链接；二维码解析不出登录链接时改为推送面板链接，在面板中扫二维码截图；也决定 passkey 绑定的域名，见下文“passkey”。地址无效时拒绝启动；设置了 `PANEL_BASE_PATH` 而外网地址的路径不以它结尾时，启动日志给出提示（反向代理去掉前缀、`PANEL_BASE_PATH` 为 `/` 时外网地址带路径是正常的）；`run --account` 不读取它 |
 | `PANEL_DATA_DIR` | `data` | 面板数据目录，保存 `panel.json`、`panel.log` 与各账号的数据 |
-| `SELENIUM_URL` | 空 | 首次初始化全局默认配置时写入 Selenium 地址；之后以面板中的设置为准。没有设置时使用内置浏览器，并在启动时把全局默认配置与账号配置中旧版的 `http://selenium:4444` 清空 |
+| `SELENIUM_URL` | 空 | 首次初始化全局默认配置时写入 Selenium 地址；之后以面板中的设置为准。没有设置时使用内置浏览器，并在升级后第一次启动时把全局默认配置与账号配置中旧版的 `http://selenium:4444` 清空；只执行一次（记录在 `panel.json` 的 `migrations` 中），之后在面板中填写的同一地址不会再被清空 |
 | `CHROME_BIN` / `CHROMEDRIVER_PATH` | 空 | 内置浏览器的 Chromium 与 chromedriver 路径；为空时在 `PATH` 中查找（`chromium-browser`、`chromium` 等与 `chromedriver`），镜像中不需要设置 |
 
 ### 职责
@@ -43,7 +43,7 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/accounts.js` | 账号增删改查 | 账号 ID 创建后不可修改；删除时默认保留数据目录；运行或排队中的账号不能删除 |
 | `src/panel/runner.js` | 运行队列：fork 阅读子进程、下发配置、处理事件、停止、保存日志 | 同一账号同时只有一个运行；并发数取面板设置，修改后立即生效 |
 | `src/panel/schedules.js` | 调度规则的校验、换算为 cron 表达式、计算接下来的触发时间 | 时间按面板时区解释 |
-| `src/panel/scheduler.js` | 按调度规则定时把运行加入队列（croner） | `panel.json` 每次修改后重建定时任务；错过的时间不补跑 |
+| `src/panel/scheduler.js` | 按调度规则定时把运行加入队列（croner） | 时区、账号启用状态或调度规则变化后重建定时任务；错过的时间不补跑 |
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
 | `src/panel/history.js` | 运行历史、按天统计、打卡日历与挑战进度、按保留策略清理 | 按面板时区统计；口径为本工具的运行记录，非微信读书官方数据 |
 | `src/panel/challenge.js` | 阅读挑战（月卡、年卡）的规则与设置校验 | |
@@ -134,7 +134,7 @@ docker compose logs app | grep 面板初始密码
 
 每次运行（立即运行、仅登录或定时触发）都 fork 一个阅读子进程 `src/reader/worker.js`。子进程经 IPC 接收本次运行的配置（账号覆盖 > 全局默认 > 内置默认，在开始运行时合并），密钥不进入子进程的环境变量。
 
-子进程只继承以下环境变量（白名单）：`PATH`、`HOME`、`USER`、`TZ`、`TMPDIR`、`LANG`、`LANGUAGE`、`LC_*`、`NODE_OPTIONS`、`NODE_EXTRA_CA_CERTS`、`NODE_USE_ENV_PROXY`，以及 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`（含小写形式）。面板所在环境中的其他变量都不会传给子进程，包括 `PANEL_PASSWORD`，以及 `BARK_KEY`、`EMAIL_PASS` 等按环境变量运行时使用的配置。
+子进程只继承以下环境变量（白名单）：`PATH`、`HOME`、`USER`、`TZ`、`TMPDIR`、`LANG`、`LANGUAGE`、`LC_*`、`NODE_OPTIONS`、`NODE_EXTRA_CA_CERTS`、`NODE_USE_ENV_PROXY`，以及 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`（含小写形式），以及内置浏览器的路径 `CHROME_BIN`、`CHROMEDRIVER_PATH`。面板所在环境中的其他变量都不会传给子进程，包括 `PANEL_PASSWORD`，以及 `BARK_KEY`、`EMAIL_PASS` 等按环境变量运行时使用的配置。
 
 | 状态 | 值 | 进入条件 |
 | --- | --- | --- |
@@ -218,7 +218,7 @@ docker compose logs app | grep 面板初始密码
 
 | 规则 | 说明 |
 | --- | --- |
-| 生效时机 | `panel.json` 每次修改后整体重建定时任务：修改规则、启用或停用账号、修改时区、删除账号都立即生效 |
+| 生效时机 | 时区、账号启用状态或调度规则变化后整体重建定时任务（其他修改不重建）：修改规则、启用或停用账号、修改时区、删除账号都立即生效 |
 | 停用 | 停用的规则、停用账号的所有规则都不触发，接口中也没有触发时间 |
 | 重复触发 | 账号已在运行或排队时跳过本次触发，在 `panel.log` 中记录 `定时触发跳过：账号 <id>，规则 <规则 ID>（<说明>）：账号已在运行或排队：<id>` |
 | 运行记录 | 定时触发的运行 `trigger` 为 `schedule`，`scheduleId` 为规则 ID；运行日志第一行为 `加入队列：定时触发（规则 <规则 ID>），阅读` |
@@ -234,8 +234,9 @@ docker compose logs app | grep 面板初始密码
 | `snapshot` | `{ runs }` | 连接后立即发送一次，内容同 `GET api/runs`；断线重连后以它为准 |
 | `run` | 运行状态 | 任一运行的状态或进度变化 |
 | `log` | `{ runId, accountId, line }` | 运行日志新增一行 |
+| `ping` | `{}` | 心跳，每 15 秒一次；页面 45 秒内没有收到任何事件时认为连接已经断开（代理静默丢包、休眠唤醒后的半开连接），显示断线提示并重新连接 |
 
-响应头带 `Cache-Control: no-cache` 与 `X-Accel-Buffering: no`，`retry: 3000` 让浏览器断线 3 秒后重连。退出登录、修改密码时立即断开相应会话的连接（修改密码会断开所有旧会话的连接）。每 15 秒发送一次心跳注释，同时检查会话是否过期，过期的连接在下一次心跳时断开。长连接不会延长会话有效期。
+响应头带 `Cache-Control: no-cache` 与 `X-Accel-Buffering: no`，`retry: 3000` 让浏览器断线 3 秒后重连。退出登录、修改密码时立即断开相应会话的连接（修改密码会断开所有旧会话的连接）。每 15 秒发送一次心跳事件 `ping`，同时检查会话是否过期，过期的连接在下一次心跳时断开。长连接不会延长会话有效期。
 
 ### Selenium 状态与 noVNC
 
@@ -416,13 +417,14 @@ data/
 | 项目 | 做法 |
 | --- | --- |
 | 密码 | scrypt（N=16384, r=8, p=1）加盐哈希，比较使用定长时间比较；新密码至少 8 位 |
-| 会话 | 32 字节随机令牌；cookie `wa_session` 为 `HttpOnly`、`SameSite=Strict`，HTTPS 时加 `Secure`，`Path` 为面板子路径；7 天滑动过期，cookie 最多每小时重新下发一次 |
+| 会话 | 32 字节随机令牌；cookie `wa_session` 为 `HttpOnly`、`SameSite=Strict`，HTTPS 时加 `Secure`，`Path` 为面板子路径；7 天滑动过期，从登录起最长 30 天，cookie 最多每小时重新下发一次 |
 | passkey | 公钥签名验证，域名与 origin 只取自 `PANEL_PUBLIC_URL`，要求用户验证；见上文“passkey” |
 | 二次验证 | 添加、删除 passkey 与切换密码登录要求 5 分钟内登录或二次验证过，防止被他人借用已登录的浏览器添加自己的 passkey 或打开密码登录；关闭密码登录要求用 passkey 验证 |
 | 关闭密码登录 | 可选，见上文“关闭密码登录”；关闭后密码泄露也不能用来登录 |
-| 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；所有 IP 在 15 分钟内累计失败 100 次后暂停全部登录 15 分钟；密码与 passkey 的登录、二次验证共用 |
+| 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；所有 IP 在 15 分钟内累计失败 100 次后暂停 15 分钟，暂停期间只有本次启动以来、最近 30 天内登录或二次验证成功过的 IP 可以登录（仍按 IP 限速），未认证的请求不能借此挡住这些 IP；这份名单与暂停都只在内存中，面板重启后或管理员换了 IP 时仍可能被暂停挡住，重启面板即解除。密码与 passkey 的登录、二次验证以及修改密码时的当前密码共用同一套失败计数与锁定（按 IP 计数，也计入全局上限） |
+| 密码哈希 | `panel.json` 中的哈希格式或参数无效（例如被手工改坏）时拒绝启动并提示恢复办法，校验时一律不通过 |
 | 跨站请求伪造 | 修改类请求必须带 `X-WA-Request: 1` 请求头且为 JSON，配合 `SameSite=Strict` |
-| 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`；接口响应 `Cache-Control: no-store` |
+| 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`、`Permissions-Policy`（关闭摄像头、麦克风、定位等用不到的能力）；接口响应 `Cache-Control: no-store` |
 | 文件 | `panel.json` 权限 0600，已有文件在启动时收紧；账号数据目录 0700，`cookies.json` 与登录二维码图片 0600（等同于登录状态）；初始密码不写入日志文件 |
 | 容器 | 面板进程以 `node` 用户运行：入口脚本以 root 把数据目录中不属于 `node` 的文件改过来后再降权。镜像的 `HEALTHCHECK` 由 Docker 以镜像默认用户（root）执行，只请求本机的 `/healthz`，不读写数据目录 |
 
@@ -453,7 +455,7 @@ location /weread/api/events {
 | --- | --- |
 | 代理层数 | `PANEL_TRUST_PROXY` 填面板前面的代理层数。面板取 `X-Forwarded-For` 中从右往左数第 N 个地址作为客户端 IP，客户端自己伪造的部分会被忽略 |
 | 不信任代理时 | 忽略 `X-Forwarded-*` 请求头，按连接地址限速，cookie 不加 `Secure` |
-| 端口映射 | 代理与面板在同一主机时映射为 `127.0.0.1:26868:26868`，不直接暴露到公网 |
+| 端口映射 | 代理与面板在同一主机时映射为 `127.0.0.1:26868:26868`，不直接暴露到公网。设置了 `PANEL_TRUST_PROXY` 时面板端口只能让代理访问：能直连面板的客户端可以伪造 `X-Forwarded-For`，绕过按 IP 的登录限速，或冒充登录过的 IP 绕过全局暂停 |
 | 额外防护 | 建议在代理层再加一层认证（Basic Auth、Cloudflare Access 等） |
 
 ### 关键约束

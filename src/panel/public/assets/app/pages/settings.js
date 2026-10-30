@@ -87,7 +87,9 @@ export const SettingsPage = {
             ? "当前密码不正确"
             : error.code === "password_too_short"
               ? `新密码至少 ${state.session.minPasswordLength} 位`
-              : error.message;
+              : error.code === "too_many_attempts"
+                ? "当前密码错误次数过多，请稍后再试"
+                : error.message;
       } finally {
         savingPassword.value = false;
       }

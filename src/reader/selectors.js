@@ -20,7 +20,9 @@ const XPATH = {
   shelfBookLink: "//div[@class='wr_index_mini_shelf_card']/a[@href!='' and not(contains(@href, '/mp/reader'))]",
   catalogButton: '//button[@title="目录"]',
   verticalModeButton: "//button[@title='切换到上下滚动阅读'] | //button[contains(@class, 'readerControls_item') and contains(@class, 'isHorizontalReader')]",
+  // 不含当前章节（当前章节另带选中样式）；catalogItemAny 含当前章节
   catalogItem: "//li[@class='readerCatalog_list_item']",
+  catalogItemAny: "//li[contains(@class, 'readerCatalog_list_item')]",
   unlockPrompt: "//span[contains(text(), '开通后即可阅读')]",
   bookFinished: "//div[contains(text(), '全 书 完')]",
   nextButton: "//button[@title='下一章'] | //button[@title='下一页']",

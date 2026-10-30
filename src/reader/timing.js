@@ -17,6 +17,8 @@ function resolveTiming(config) {
     pageWaitMs: 10000,
     // 登录链接推送的最小间隔：二维码约 1 分钟过期一次，避免每次刷新都推送
     loginLinkPushIntervalMs: 3 * 60000,
+    // 二维码约 1 分钟过期；超过这个时长仍未识别到过期提示时重新打开登录弹窗
+    qrMaxAgeMs: 3 * 60000,
   };
 }
 

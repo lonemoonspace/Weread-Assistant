@@ -8,7 +8,8 @@
  * 检查经 IPC 上报的事件，以及收到 SIGTERM 后关闭浏览器。不访问微信读书。
  *
  * 用法: SELENIUM_URL=http://localhost:4444 node scripts/reader-smoke.js
- *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / timeout / no-entry / no-qr / qr-late / corrupt / reading / single / worker / worker-stop）。
+ *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / timeout / no-entry / no-qr / qr-late / corrupt / reading / single /
+ *   single-only / no-catalog / shot-fail / worker / worker-stop / worker-no-selenium）。
  *   SELENIUM_URL 默认 http://localhost:4444，也可以直接指向 chromedriver（如 http://localhost:9515）；
  *   设为空（SELENIUM_URL= node scripts/reader-smoke.js）时使用内置浏览器，即本机的 chromedriver 与 Chromium。
  *   浏览器需要能访问本机的模拟服务；Selenium 跑在容器里时用 --network host 启动，
@@ -143,7 +144,7 @@ async function main() {
   const results = [];
 
   // 建立临时数据目录，运行一次 runOnce，再交给 check 断言；values 可以是接收首页地址的函数
-  const scenario = async (title, { name, site, values = {}, mode, timing, prepare, check }) => {
+  const scenario = async (title, { name, site, values = {}, mode, timing, prepare, check, screenshotDir }) => {
     if (ONLY && ONLY !== name) {
       return;
     }
@@ -167,7 +168,12 @@ async function main() {
 
     const startedAt = Date.now();
     const note = await withCapturedConsole(async () => {
-      const result = await runOnce(config, { mode, homeUrl, timing: { ...FAST_TIMING, ...timing } });
+      const result = await runOnce(config, {
+        mode,
+        homeUrl,
+        timing: { ...FAST_TIMING, ...timing },
+        screenshotDir: screenshotDir ? screenshotDir(dataDir) : undefined,
+      });
       return check({ result, events: mock.events(name), pushes: ntfy.requests, dataDir });
     });
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -193,8 +199,10 @@ async function main() {
         assert.ok(cookies.some((cookie) => cookie.name === "wr_vid"));
         // cookies 与二维码等同于登录状态，只允许属主访问
         assert.strictEqual(fs.statSync(dataDir).mode & 0o777, 0o700);
-        for (const name of ["cookies.json", "login.png", "login-qr.png"]) {
-          assert.strictEqual(fs.statSync(path.join(dataDir, name)).mode & 0o777, 0o600, name);
+        assert.strictEqual(fs.statSync(path.join(dataDir, "cookies.json")).mode & 0o777, 0o600);
+        // 登录完成后删除登录弹窗的截图（整页截图可能含昵称、头像）
+        for (const name of ["login.png", "login-qr.png"]) {
+          assert.ok(!fs.existsSync(path.join(dataDir, name)), `登录后应删除 ${name}`);
         }
       },
     });
@@ -299,6 +307,51 @@ async function main() {
         assert.ok(fs.existsSync(path.join(dataDir, "screenshot-1.png")));
         assert.ok(countEvents(events, "reload") >= 1, "白屏截图后应刷新页面");
         assert.ok(countEvents(events, "vertical") >= countEvents(events, "reload") + 1, "刷新后应重新切换到上下滚动模式");
+      },
+    });
+
+    await scenario("单章书、目录中只有当前章节：读完后点当前章节回到开头，正常完成", {
+      name: "single-only",
+      site: { loggedIn: true, chapters: 1, contentHeight: 600 },
+      values: (homeUrl) => ({ selection: -1, bookUrl: `${homeUrl}reader?book=1&ch=1` }),
+      timing: { durationMs: 10000, pressIntervalMs: [100, 200] },
+      check({ result, events }) {
+        assert.strictEqual(result.status, "success");
+        const visits = events.filter((event) => event.type === "chapter" && event.ch === "1").length;
+        assert.ok(visits >= 2, `读完后应点击当前章节回到开头（进入第 1 章 ${visits} 次）`);
+      },
+    });
+
+    await scenario("读完后目录中没有章节：连续几次回不到开头后以出错结束，不把停在原处当作正常阅读", {
+      name: "no-catalog",
+      site: { loggedIn: true, chapters: 1, emptyCatalog: true },
+      values: (homeUrl) => ({ selection: -1, bookUrl: `${homeUrl}reader?book=1&ch=1` }),
+      timing: { durationMs: 60000, pressIntervalMs: [100, 200], elementWaitMs: 500 },
+      check({ result, pushes }) {
+        assert.strictEqual(result.status, "error");
+        assert.match(result.error, /书籍已读完.*连续 3 次无法通过目录回到开头/);
+        assert.ok(pushes.some((push) => push.title.endsWith("运行失败")));
+        assert.ok(!pushes.some((push) => push.title.endsWith("阅读完成")));
+      },
+    });
+
+    await scenario("截图写入失败（截图目录不存在）：阅读照常完成，邮件附件截图失败也不在“阅读完成”之后补报出错", {
+      name: "shot-fail",
+      site: { loggedIn: true, chapters: 2, contentHeight: 1800 },
+      values: (homeUrl) => ({
+        selection: -1,
+        bookUrl: `${homeUrl}reader?book=1&ch=1`,
+        screenshot: true,
+        // 开启邮件通知时为“阅读完成”截图作为附件；缺少 SMTP 配置，只截图不发送
+        emailEnabled: true,
+      }),
+      screenshotDir: (dataDir) => path.join(dataDir, "missing"),
+      timing: { durationMs: 9000, minuteMs: 3000, pressIntervalMs: [300, 500] },
+      check({ result, pushes }) {
+        assert.strictEqual(result.status, "success");
+        assert.ok(result.minutes >= 0);
+        assert.ok(pushes.some((push) => push.title.endsWith("阅读完成")));
+        assert.ok(!pushes.some((push) => push.title.endsWith("运行失败")), "截图失败不应让运行失败");
       },
     });
 

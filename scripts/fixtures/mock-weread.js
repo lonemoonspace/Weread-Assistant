@@ -16,6 +16,7 @@
 //   frontMatter    目录开头是否有一个“扉页”条目（章节号 0）
 //   contentHeight  每章正文高度（像素）
 //   resetModeOnReload  刷新页面后回到左右翻页模式（不保留已切换的上下滚动阅读）
+//   emptyCatalog   目录中没有任何章节（读完后无法通过目录回到开头）
 const http = require("http");
 const { URL } = require("url");
 const { PNG } = require("pngjs");
@@ -158,7 +159,7 @@ function readerPage(name, scenario, book, ch) {
     entries.push({ ch: i, label: `第${i}章` });
   }
   // 与真实页面一致：当前章节带有额外的选中样式
-  const catalog = entries
+  const catalog = scenario.emptyCatalog ? "" : entries
     .map((entry) => {
       const cls = entry.ch === ch ? "readerCatalog_list_item readerCatalog_list_item_selected" : "readerCatalog_list_item";
       return `<li class="${cls}" onclick="location.href='${base}/reader?book=${book}&ch=${entry.ch}'">${entry.label}</li>`;

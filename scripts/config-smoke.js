@@ -101,6 +101,7 @@ const scenarios = [
     rejects(() => panelOptionsFromEnv({ PANEL_FORCE_PASSWORD_LOGIN: "ture" }), /PANEL_FORCE_PASSWORD_LOGIN 只能是 true 或 false/);
     assert.strictEqual(panelOptionsFromEnv({ PANEL_BASE_PATH: "weread" }).basePath, "/weread/");
     rejects(() => panelOptionsFromEnv({ PANEL_BASE_PATH: "/a b/" }), /PANEL_BASE_PATH 含有不支持的字符/);
+    rejects(() => panelOptionsFromEnv({ PANEL_BASE_PATH: "/weread/../x/" }), /不能包含 \. 或 \.\. 路径段/);
     assert.strictEqual(panelOptionsFromEnv({}).publicUrl, "");
     assert.strictEqual(panelOptionsFromEnv({ PANEL_PUBLIC_URL: "https://example.com/weread" }).publicUrl, "https://example.com/weread/");
     assert.strictEqual(panelOptionsFromEnv({ PANEL_PUBLIC_URL: " http://nas.local:26868/#/x " }).publicUrl, "http://nas.local:26868/");
@@ -108,10 +109,14 @@ const scenarios = [
     rejects(() => panelOptionsFromEnv({ PANEL_PUBLIC_URL: "ftp://example.com/" }), /PANEL_PUBLIC_URL 应为/);
     rejects(() => panelOptionsFromEnv({ PANEL_PUBLIC_URL: "https://u:p@example.com/" }), /PANEL_PUBLIC_URL 应为/);
     const warningFor = (env) => publicUrlWarning(panelOptionsFromEnv(env));
-    assert.strictEqual(warningFor({ PANEL_PUBLIC_URL: "https://example.com/weread/", PANEL_BASE_PATH: "/weread/" }), "");
+    const proxied = { PANEL_TRUST_PROXY: "true" };
+    assert.strictEqual(warningFor({ ...proxied, PANEL_PUBLIC_URL: "https://example.com/weread/", PANEL_BASE_PATH: "/weread/" }), "");
     // 反向代理去掉了前缀
-    assert.strictEqual(warningFor({ PANEL_PUBLIC_URL: "https://example.com/weread/" }), "");
-    assert.match(warningFor({ PANEL_PUBLIC_URL: "https://example.com/", PANEL_BASE_PATH: "/weread/" }), /路径不以 PANEL_BASE_PATH（\/weread\/）结尾/);
+    assert.strictEqual(warningFor({ ...proxied, PANEL_PUBLIC_URL: "https://example.com/weread/" }), "");
+    assert.match(warningFor({ ...proxied, PANEL_PUBLIC_URL: "https://example.com/", PANEL_BASE_PATH: "/weread/" }), /路径不以 PANEL_BASE_PATH（\/weread\/）结尾/);
+    // https 地址却不信任代理：会话 cookie 不带 Secure
+    assert.match(warningFor({ PANEL_PUBLIC_URL: "https://example.com/" }), /没有设置 PANEL_TRUST_PROXY/);
+    assert.strictEqual(warningFor({ PANEL_PUBLIC_URL: "http://192.168.1.2:26868/" }), "");
     // 命令行按账号运行只读取数据目录
     assert.strictEqual(panelDataDirFromEnv({ PANEL_PUBLIC_URL: "not a url", PANEL_DATA_DIR: "/srv/wa" }), "/srv/wa");
     assert.strictEqual(panelDataDirFromEnv({}), "data");

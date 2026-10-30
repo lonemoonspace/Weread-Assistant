@@ -15,7 +15,7 @@ const path = require("path");
 const zlib = require("zlib");
 
 const { startPanel } = require(path.resolve(__dirname, "..", "src", "panel", "server"));
-const { SESSION_TTL_MS, createAuth, hashPassword } = require(path.resolve(__dirname, "..", "src", "panel", "auth"));
+const { SESSION_MAX_AGE_MS, SESSION_TTL_MS, createAuth, hashPassword, verifyPassword } = require(path.resolve(__dirname, "..", "src", "panel", "auth"));
 const { SECRET_MASK, resolveAccountConfig } = require(path.resolve(__dirname, "..", "src", "panel", "config"));
 const { CHILD_ENV_KEYS } = require(path.resolve(__dirname, "..", "src", "panel", "runner"));
 const { describeSchedule, nextRuns, normalizeSchedules, schedulePatterns } = require(
@@ -36,8 +36,9 @@ const STUB_WORKER = path.resolve(__dirname, "fixtures", "stub-worker.js");
 
 const tempDirs = [];
 
-function tempDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "panel-smoke-"));
+function tempDir(base = os.tmpdir()) {
+  fs.mkdirSync(base, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(base, "panel-smoke-"));
   tempDirs.push(dir);
   return dir;
 }
@@ -365,18 +366,54 @@ async function main() {
       assert.doesNotMatch(ok.headers.get("set-cookie"), /Secure/i);
     });
 
-    await scenario("所有 IP 累计失败达到上限后暂停全部登录", async () => {
+    await scenario("所有 IP 累计失败达到上限后暂停未登录过的 IP 登录；登录成功过的 IP 不受影响，管理员不会被挡在面板外", async () => {
       const panel = await start({
         password: "correct-horse",
         trustProxy: 1,
         limits: { globalMaxFailures: 3, globalWindowMs: 500 },
       });
+      const admin = { "X-Forwarded-For": "192.0.2.10" };
+      assert.strictEqual((await login(panel, "correct-horse", admin)).status, 204);
       for (let i = 1; i <= 3; i += 1) {
         await login(panel, "wrong", { "X-Forwarded-For": `198.51.100.${i}` });
       }
       assert.strictEqual((await login(panel, "correct-horse", { "X-Forwarded-For": "198.51.100.99" })).status, 429);
+      assert.strictEqual((await login(panel, "wrong", { "X-Forwarded-For": "198.51.100.98" })).status, 429, "暂停期间不校验密码");
+      assert.strictEqual((await login(panel, "correct-horse", admin)).status, 204, "登录成功过的 IP 不受全局暂停影响");
       await new Promise((resolve) => setTimeout(resolve, 550));
       assert.strictEqual((await login(panel, "correct-horse", { "X-Forwarded-For": "198.51.100.99" })).status, 204);
+    });
+
+    await scenario("密码哈希被改坏时：任何密码都不能通过、不会抛出；面板拒绝启动并说明恢复办法", async () => {
+      const key = Buffer.alloc(64, 1).toString("base64");
+      const salt = Buffer.alloc(16, 2).toString("base64");
+      for (const bad of [
+        "scrypt$16384$8$1$$",
+        `scrypt$16384$8$1$${salt}$`,
+        `scrypt$16384$8$1$${salt}$AAAA`,
+        `scrypt$notanumber$8$1$${salt}$${key}`,
+        `scrypt$1000$8$1$${salt}$${key}`,
+        `scrypt$1048576$64$1$${salt}$${key}`,
+        // N=1、内存占用刚好超过上限：scrypt 会拒绝这些参数，不能让面板启动后任何密码都校验不过
+        `scrypt$1$8$1$${salt}$${key}`,
+        `scrypt$65536$8$1$${salt}$${key}`,
+        `scrypt$16384$8$1$!!$${key}`,
+      ]) {
+        assert.strictEqual(await verifyPassword("anything", bad), false, bad);
+        assert.strictEqual(await verifyPassword("", bad), false, bad);
+      }
+      const good = await hashPassword("correct-horse");
+      assert.strictEqual(await verifyPassword("correct-horse", good), true);
+
+      const dataDir = tempDir();
+      fs.writeFileSync(path.join(dataDir, "panel.json"), JSON.stringify({ version: 1, auth: { passwordHash: "scrypt$16384$8$1$$" } }), { mode: 0o600 });
+      await assert.rejects(start({ dataDir }), /密码哈希（auth\.passwordHash）无效/);
+      fs.writeFileSync(path.join(dataDir, "panel.json"), JSON.stringify({ version: 1, auth: { passwordHash: `scrypt$65536$8$1$${salt}$${key}` } }), { mode: 0o600 });
+      await assert.rejects(start({ dataDir }), /密码哈希（auth\.passwordHash）无效/);
+      // 设置 PANEL_PASSWORD 时以它为准，可以照常启动
+      const panel = await start({ dataDir, password: "correct-horse" });
+      assert.strictEqual((await login(panel, "wrong")).status, 401);
+      assert.strictEqual((await login(panel, "correct-horse")).status, 204);
     });
 
     await scenario("部署在子路径：/weread 重定向到 /weread/，cookie 限定在该路径", async () => {
@@ -403,6 +440,35 @@ async function main() {
       t += SESSION_TTL_MS + 1;
       assert.ok((await auth.login("127.0.0.1", "correct-horse")).ok);
       assert.ok(ended, "过期的会话应在下次登录时回收");
+    });
+
+    await scenario("会话按访问续期，但从登录起最长 30 天", async () => {
+      let t = Date.now();
+      const auth = createAuth({ store: { get: () => ({ auth: { passwordHash: "" } }) }, envPassword: "correct-horse", now: () => t });
+      await auth.init();
+      const { token } = await auth.login("127.0.0.1", "correct-horse");
+      while (t + SESSION_TTL_MS / 2 < Date.now() + SESSION_MAX_AGE_MS) {
+        t += SESSION_TTL_MS / 2;
+        assert.ok(auth.touchSession(token), "有效期内使用时续期");
+      }
+      t = Date.now() + SESSION_MAX_AGE_MS;
+      assert.strictEqual(auth.touchSession(token), null, "超过最长有效期后失效");
+    });
+
+    await scenario("修改密码时当前密码错误与登录共用按 IP 的失败计数：连续失败后返回 429", async () => {
+      const panel = await start({ limits: { lockoutBaseMs: 60000 } });
+      const original = panel.generatedPassword;
+      const cookie = sessionCookie(await login(panel, original));
+      const change = (current) =>
+        panel.request("api/auth/password", { method: "POST", body: { current, next: "new-password-1" }, headers: CSRF, cookie });
+      for (let i = 0; i < 5; i += 1) {
+        assert.strictEqual((await change("wrong")).json.error, "wrong_password");
+      }
+      const locked = await change(original);
+      assert.strictEqual(locked.status, 429);
+      assert.strictEqual(locked.json.error, "too_many_attempts");
+      assert.ok(Number(locked.headers.get("retry-after")) >= 1);
+      assert.strictEqual((await login(panel, original)).status, 429, "同一 IP 的登录也被锁定");
     });
 
     await scenario("环境变量中的密码少于 8 位时拒绝启动", async () => {
@@ -1158,7 +1224,7 @@ async function main() {
       assert.strictEqual(panel.generatedPassword, "");
       assert.strictEqual((await login(panel, "old-password")).status, 204);
       const upgraded = JSON.parse(fs.readFileSync(file, "utf8"));
-      assert.deepStrictEqual(Object.keys(upgraded), ["version", "auth", "settings", "defaults", "accounts"]);
+      assert.deepStrictEqual(Object.keys(upgraded), ["version", "auth", "settings", "defaults", "accounts", "migrations"]);
       assert.deepStrictEqual(upgraded.defaults, { seleniumUrl: "http://selenium:4444" });
       assert.deepStrictEqual(upgraded.accounts, []);
     });
@@ -1192,7 +1258,15 @@ async function main() {
           ["plain", undefined],
         ]
       );
+      assert.deepStrictEqual(migrated.migrations, ["legacy-selenium-url"]);
       await panel.close();
+
+      // 迁移只做一次：之后在面板中主动填写的同一地址重启后保留
+      const again = await startAuthed({ dataDir });
+      assert.strictEqual((await again.call("PATCH", "api/settings", { defaults: { seleniumUrl: "http://selenium:4444" } })).status, 200);
+      await again.close();
+      await (await start({ dataDir })).close();
+      assert.strictEqual(JSON.parse(fs.readFileSync(file, "utf8")).defaults.seleniumUrl, "http://selenium:4444", "迁移过一次后不再清空");
     });
 
     await scenario("panel.json 修改前保存上一版；损坏时备份损坏文件并从上一版恢复，上一版也不可用时拒绝启动", async () => {
@@ -1253,6 +1327,31 @@ async function main() {
         await assert.rejects(start({ dataDir, password: "correct-horse" }), /也没有可用的上一版/, JSON.stringify(broken));
         assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, "utf8")), broken, "结构不对的文件不应被改写");
       }
+    });
+
+    await scenario("panel.json 中手工写入的设置取值无效时恢复默认值：时区无效不会让账号接口出错，并发数为 0 不会让运行一直排队", async () => {
+      const dataDir = tempDir();
+      const file = path.join(dataDir, "panel.json");
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          version: 1,
+          auth: { passwordHash: "" },
+          settings: { timezone: "Mars/Olympus", maxConcurrentRuns: 0, logRetentionDays: "abc", screenshotRetentionRuns: 5 },
+        }),
+        { mode: 0o600 }
+      );
+      const panel = await startAuthed({ dataDir });
+      const stored = JSON.parse(fs.readFileSync(file, "utf8")).settings;
+      assert.strictEqual(stored.timezone, "Asia/Shanghai");
+      assert.strictEqual(stored.maxConcurrentRuns, 1);
+      assert.strictEqual(stored.logRetentionDays, 30);
+      assert.strictEqual(stored.screenshotRetentionRuns, 5, "有效的设置保持不变");
+      await panel.call("POST", "api/accounts", { id: "login-tz" });
+      assert.strictEqual((await panel.call("GET", "api/accounts")).status, 200);
+      assert.strictEqual((await panel.call("GET", "api/accounts/login-tz")).status, 200);
+      const { run } = (await panel.call("POST", "api/accounts/login-tz/runs", { mode: "login" })).json;
+      assert.notStrictEqual(run.status, "queued", "并发数恢复为 1 后应立即启动");
     });
 
     await scenario("panel.json 中手工写入的无效账号 ID 在启动时拒绝", async () => {
@@ -1629,6 +1728,11 @@ async function main() {
       assert.deepStrictEqual([firstMeta.status, firstMeta.error], ["interrupted", "面板停止时运行被中断"]);
       const secondMeta = runFiles(panel, "slow-2", second.id).meta();
       assert.deepStrictEqual([secondMeta.status, secondMeta.error], ["interrupted", "面板停止时仍在排队"]);
+      // close() 返回时运行日志已经写入磁盘，最后一行是结束原因
+      for (const [accountId, run] of [["slow-1", first], ["slow-2", second]]) {
+        const lines = fs.readFileSync(path.join(runFiles(panel, accountId, run.id).dir, "output.log"), "utf8").trim().split("\n");
+        assert.match(lines.at(-1), /运行结束：中断/, accountId);
+      }
 
       // 断电等情况下面板来不及处理，记录停留在进行中
       const leftover = runFiles(panel, "slow-1", "20261001T000000Z-abcd");
@@ -1663,7 +1767,7 @@ async function main() {
       assert.strictEqual(logEvent.data.accountId, "ok-1");
       const leak = stream.events.find((event) => event.event === "log" && event.data.line.includes("模拟泄露"));
       assert.ok(leak && !leak.data.line.includes("ok-1-uid") && leak.data.line.includes(`uid=${SECRET_MASK}`), "推送的日志同样替换掩码");
-      await until(() => stream.events.some((event) => event.comment), { message: "没有收到心跳" });
+      await until(() => stream.events.some((event) => event.event === "ping"), { message: "没有收到心跳" });
 
       // 进行中的运行带最近的日志，供中途连接时显示
       await panel.call("POST", "api/accounts", { id: "slow-1" });
@@ -1829,7 +1933,8 @@ async function main() {
     });
 
     await scenario("Selenium 状态：地址为空时检查内置浏览器，显示浏览器版本；找不到、无法运行或 chromedriver 与浏览器主版本不一致时为 unreachable 并附带原因", async () => {
-      const binDir = tempDir();
+      // 假的 chromedriver 与 Chromium 要能执行：放在 node_modules/.cache 下，不放系统临时目录（可能以 noexec 挂载）
+      const binDir = tempDir(path.join(__dirname, "..", "node_modules", ".cache"));
       const fake = (name, output) => {
         const file = path.join(binDir, name);
         fs.writeFileSync(file, `#!/bin/sh\necho "${output}"\n`, { mode: 0o755 });

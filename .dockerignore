@@ -11,3 +11,6 @@
 node_modules
 data
 npm-debug.log
+# 本地凭据与 compose 变量，不需要进入构建上下文
+.env
+.env.*

@@ -1,4 +1,4 @@
-const { By, until } = require("selenium-webdriver");
+const { By, until, error: webdriverErrors } = require("selenium-webdriver");
 
 // 隐式等待为 0，元素不存在时 findElements 立即返回；需要等元素出现的地方都用这里的显式等待
 
@@ -48,6 +48,52 @@ function randomBetween(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+// 会话已经不存在或连不上浏览器：重试与等待都没有意义，需要原样抛出，不能当作“元素没找到”
+function isSessionLost(e) {
+  return (
+    e instanceof webdriverErrors.NoSuchSessionError ||
+    /ECONNREFUSED|ECONNRESET|socket hang up/i.test(String(e && e.message))
+  );
+}
+
+// 点击元素；直接点击失败（被遮挡、不可交互等）时依次改用脚本点击与 Actions 点击，返回是否点击成功。
+// 会话已断开时直接抛出
+async function safeClickElement(driver, element, description = "元素") {
+  const attempts = [
+    ["直接点击", async () => {
+      if (!(await element.isDisplayed())) {
+        console.warn(`${description}不可见，尝试滚动到元素位置`);
+        await driver.executeScript("arguments[0].scrollIntoView({block: 'center'});", element);
+        await sleep(500);
+      }
+      await element.click();
+    }],
+    ["使用JavaScript点击", () => driver.executeScript("arguments[0].click();", element)],
+    ["使用Actions类点击", () => driver.actions({ bridge: true }).move({ origin: element }).click().perform()],
+  ];
+  for (const [method, click] of attempts) {
+    try {
+      await click();
+      console.info(`${method}${description}成功`);
+      return true;
+    } catch (e) {
+      if (isSessionLost(e)) {
+        throw e;
+      }
+      console.warn(`${method}${description}失败: ${e.message}`);
+    }
+  }
+  console.error(`所有点击方法都失败: ${description}`);
+  return false;
+}
+
+// 同 safeClickElement，都失败时抛出错误
+async function clickOrThrow(driver, element, description) {
+  if (!(await safeClickElement(driver, element, description))) {
+    throw new Error(`无法点击${description}`);
+  }
+}
+
 function toBy(locator) {
   return locator.css ? By.css(locator.css) : By.xpath(locator.xpath);
 }
@@ -61,7 +107,10 @@ async function xpathsExist(driver, xpaths) {
 async function findElementsWithin(driver, xpath, timeoutMs) {
   try {
     await driver.wait(until.elementLocated(By.xpath(xpath)), timeoutMs);
-  } catch (_) {
+  } catch (e) {
+    if (isSessionLost(e)) {
+      throw e;
+    }
     return [];
   }
   return driver.findElements(By.xpath(xpath));
@@ -74,7 +123,11 @@ async function findVisible(driver, xpath) {
       if (await element.isDisplayed()) {
         return element;
       }
-    } catch (_) {}
+    } catch (e) {
+      if (isSessionLost(e)) {
+        throw e;
+      }
+    }
   }
   return null;
 }
@@ -83,7 +136,10 @@ async function findVisible(driver, xpath) {
 async function waitForVisible(driver, xpath, timeoutMs) {
   try {
     return await driver.wait(() => findVisible(driver, xpath), timeoutMs);
-  } catch (_) {
+  } catch (e) {
+    if (isSessionLost(e)) {
+      throw e;
+    }
     return null;
   }
 }
@@ -102,9 +158,12 @@ async function waitForAnyXpath(driver, xpaths, timeoutMs, pollMs = 500) {
 
 module.exports = {
   RunStoppedError,
+  clickOrThrow,
   findElementsWithin,
   findVisible,
+  isSessionLost,
   randomBetween,
+  safeClickElement,
   sleep,
   throwIfStopped,
   toBy,

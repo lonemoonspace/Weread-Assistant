@@ -44,9 +44,9 @@ async function startPanelCommand(args) {
   const options = panelOptionsFromEnv(process.env);
   ensureDir(path.resolve(options.dataDir));
   initLogFile(path.join(path.resolve(options.dataDir), "panel.log"));
-  const warning = publicUrlWarning(options);
-  if (warning) {
-    console.warn(warning);
+  // 每条提示单独输出，都带上级别与时间前缀
+  for (const line of publicUrlWarning(options).split("\n").filter(Boolean)) {
+    console.warn(line);
   }
 
   const { startPanel } = require("./panel/server");

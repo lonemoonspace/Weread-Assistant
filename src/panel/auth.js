@@ -5,9 +5,13 @@ const scrypt = promisify(crypto.scrypt);
 
 const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 };
 const KEY_LENGTH = 64;
+const SCRYPT_MAXMEM = 64 * 1024 * 1024;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// 会话从登录起最长有效期：滑动续期不超过这个时长，被窃取的令牌不会因为一直被使用而永久有效
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 // 会话按访问滑动延期；cookie 最多每小时重新下发一次
 const COOKIE_REFRESH_MS = 60 * 60 * 1000;
+const MAX_TRUSTED_IPS = 100;
 // 添加、删除 passkey 等敏感操作要求会话在这段时间内登录或二次验证过，被盗用的会话不能给自己添加 passkey
 const REAUTH_WINDOW_MS = 5 * 60 * 1000;
 const MIN_PASSWORD_LENGTH = 8;
@@ -16,8 +20,10 @@ const GENERATED_PASSWORD_LENGTH = 16;
 const PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
 
 // 同一 IP 连续失败 maxFailures 次后锁定，锁定时长从 lockoutBaseMs 开始翻倍，最长 lockoutMaxMs；
-// 所有 IP 在 globalWindowMs 内累计失败 globalMaxFailures 次后暂停全部登录，
-// 防止反向代理配置不当时攻击者伪造 X-Forwarded-For 绕过按 IP 限速。reauthWindowMs 为二次验证的有效期
+// 所有 IP 在 globalWindowMs 内累计失败 globalMaxFailures 次后暂停其他 IP 的登录，
+// 防止反向代理配置不当时攻击者伪造 X-Forwarded-For 绕过按 IP 限速。
+// 最近 SESSION_MAX_AGE_MS 内登录（密码或 passkey）或二次验证成功过的 IP 不受全局暂停影响（仍按 IP 限速），
+// 未认证的请求不能借全局暂停把管理员挡在面板外；暂停只在内存中，重启面板即解除。reauthWindowMs 为二次验证的有效期
 const DEFAULT_LIMITS = {
   maxFailures: 5,
   lockoutBaseMs: 30 * 1000,
@@ -34,19 +40,47 @@ async function hashPassword(password) {
   return ["scrypt", N, r, p, salt.toString("base64"), key.toString("base64")].join("$");
 }
 
-async function verifyPassword(password, storedHash) {
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const isPositiveInteger = (text) => /^[1-9][0-9]{0,9}$/.test(text);
+
+// 解析 hashPassword 生成的哈希；格式或参数不对时返回 null。key 长度必须为 KEY_LENGTH：
+// 空的 key 会让 scrypt 返回空 Buffer，与任何密码比较都相等
+function parsePasswordHash(storedHash) {
   const parts = String(storedHash || "").split("$");
   if (parts.length !== 6 || parts[0] !== "scrypt") {
-    return false;
+    return null;
   }
   const [, N, r, p, saltB64, keyB64] = parts;
-  const expected = Buffer.from(keyB64, "base64");
-  const key = await scrypt(String(password), Buffer.from(saltB64, "base64"), expected.length, {
-    N: Number(N),
-    r: Number(r),
-    p: Number(p),
-  });
-  return crypto.timingSafeEqual(key, expected);
+  if (![N, r, p].every(isPositiveInteger) || !BASE64.test(saltB64) || !BASE64.test(keyB64)) {
+    return null;
+  }
+  const params = { N: Number(N), r: Number(r), p: Number(p) };
+  const salt = Buffer.from(saltB64, "base64");
+  const key = Buffer.from(keyB64, "base64");
+  // N 必须是大于 1 的 2 的幂；内存占用（OpenSSL 按 128 * r * (N + p + 2) 计算）超过 SCRYPT_MAXMEM 时
+  // scrypt 会抛出错误，这里一并视为无效，避免面板能启动却任何密码都校验不过
+  const { N: n, r: blockSize, p: parallel } = params;
+  if (n < 2 || (n & (n - 1)) !== 0 || parallel > 16 || 128 * blockSize * (n + parallel + 2) > SCRYPT_MAXMEM) {
+    return null;
+  }
+  if (salt.length < 8 || key.length !== KEY_LENGTH) {
+    return null;
+  }
+  return { params, salt, key };
+}
+
+// 哈希无效（panel.json 被手工改坏）时一律不通过，不会因为异常放行或返回 500
+async function verifyPassword(password, storedHash) {
+  const parsed = parsePasswordHash(storedHash);
+  if (!parsed) {
+    return false;
+  }
+  try {
+    const key = await scrypt(String(password), parsed.salt, KEY_LENGTH, { ...parsed.params, maxmem: SCRYPT_MAXMEM });
+    return crypto.timingSafeEqual(key, parsed.key);
+  } catch (_) {
+    return false;
+  }
 }
 
 function generatePassword(length = GENERATED_PASSWORD_LENGTH) {
@@ -68,6 +102,8 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
   // 令牌哈希 → 会话结束时的回调；供实时推送在退出登录、修改密码时立即断开
   const sessionWatchers = new Map();
   const attempts = new Map();
+  // IP → 最近一次登录成功的时间，这些 IP 不受全局暂停影响
+  const trustedIps = new Map();
   let globalFailures = [];
   let globalLockedUntil = 0;
   let envPasswordHash = "";
@@ -105,8 +141,30 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
         endSession(key);
       }
     }
-    sessions.set(hashToken(token), { expiresAt: t + SESSION_TTL_MS, cookieSetAt: t, method, credentialId, verifiedAt: t, verifiedBy: method });
+    sessions.set(hashToken(token), {
+      expiresAt: t + SESSION_TTL_MS,
+      cookieSetAt: t,
+      createdAt: t,
+      method,
+      credentialId,
+      verifiedAt: t,
+      verifiedBy: method,
+    });
     return token;
+  }
+
+  function isTrusted(ip, t) {
+    const at = trustedIps.get(ip);
+    return at !== undefined && at > t - SESSION_MAX_AGE_MS;
+  }
+
+  function trustIp(ip) {
+    trustedIps.delete(ip);
+    trustedIps.set(ip, now());
+    // 只保留最近登录成功的若干个 IP
+    while (trustedIps.size > MAX_TRUSTED_IPS) {
+      trustedIps.delete(trustedIps.keys().next().value);
+    }
   }
 
   // 有效的会话；无效或已过期时返回 null（不延长有效期）
@@ -115,7 +173,8 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     return session && session.expiresAt > now() ? session : null;
   }
 
-  // verify() 校验凭据（密码或 passkey），成功时返回真值。被限速时不调用；失败计入限速
+  // verify() 校验凭据（密码或 passkey），成功时返回真值。被限速时不调用；失败计入限速。
+  // 成功后该 IP 不再受全局暂停影响（登录与二次验证都经过这里）
   async function attempt(ip, verify) {
     const wait = retryAfterMs(ip);
     if (wait > 0) {
@@ -124,6 +183,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     const result = await verify();
     if (result) {
       attempts.delete(ip);
+      trustIp(ip);
       return { ok: true, result };
     }
     recordFailure(ip);
@@ -136,7 +196,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     const t = now();
     const record = attempts.get(ip);
     const ipWait = record && record.lockedUntil > t ? record.lockedUntil - t : 0;
-    const globalWait = globalLockedUntil > t ? globalLockedUntil - t : 0;
+    const globalWait = globalLockedUntil > t && !isTrusted(ip, t) ? globalLockedUntil - t : 0;
     return Math.max(ipWait, globalWait);
   }
 
@@ -157,7 +217,9 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     if (globalFailures.length >= cfg.globalMaxFailures) {
       globalLockedUntil = t + cfg.globalWindowMs;
       globalFailures = [];
-      console.warn(`面板登录：短时间内失败次数过多，暂停所有登录 ${Math.ceil(cfg.globalWindowMs / 60000)} 分钟`);
+      console.warn(
+        `面板登录：短时间内失败次数过多，暂停 ${Math.ceil(cfg.globalWindowMs / 60000)} 分钟内未登录过的 IP 登录（重启面板可立即解除）`
+      );
     }
 
     // 清理早已解锁且一小时内没有再失败的记录
@@ -216,7 +278,14 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
         envPasswordHash = await hashPassword(envPassword);
         return "";
       }
-      if (store.get().auth.passwordHash) {
+      const storedHash = store.get().auth.passwordHash;
+      if (storedHash) {
+        if (!parsePasswordHash(storedHash)) {
+          throw new Error(
+            "panel.json 中的面板密码哈希（auth.passwordHash）无效，可能被手工改坏：设置 PANEL_PASSWORD 后重新启动，" +
+              "或删除 panel.json 中的 passwordHash 后重新启动（会生成新的初始密码），账号与设置不受影响"
+          );
+        }
         return "";
       }
       const generated = generatePassword();
@@ -299,7 +368,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
         endSession(key);
         return null;
       }
-      session.expiresAt = t + SESSION_TTL_MS;
+      session.expiresAt = Math.min(t + SESSION_TTL_MS, session.createdAt + SESSION_MAX_AGE_MS);
       const refreshCookie = t - session.cookieSetAt >= COOKIE_REFRESH_MS;
       if (refreshCookie) {
         session.cookieSetAt = t;
@@ -344,22 +413,30 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
       }
     },
 
-    // 返回 { ok: true, token } 或 { ok: false, error: "password_from_env" | "wrong_password" | "password_too_short" }。
+    // 返回 { ok: true, token } 或 { ok: false, error: "password_from_env" | "wrong_password" | "password_too_short" }，
+    // 当前密码错误次数过多时为 { ok: false, error: "too_many_attempts", retryAfterMs }：与登录共用按 IP 的失败计数与锁定，
+    // 持有会话也不能借这里无限尝试当前密码。
     // 修改成功后所有会话失效，并为调用者创建新会话。多个请求依次处理，后到的请求按新密码校验
-    changePassword(currentPassword, nextPassword) {
-      const run = passwordChange.then(() => applyPasswordChange(currentPassword, nextPassword));
+    changePassword(ip, currentPassword, nextPassword) {
+      const run = passwordChange.then(() => applyPasswordChange(ip, currentPassword, nextPassword));
       passwordChange = run.catch(() => {});
       return run;
     },
   };
 
-  async function applyPasswordChange(currentPassword, nextPassword) {
+  async function applyPasswordChange(ip, currentPassword, nextPassword) {
     if (envPassword) {
       return { ok: false, error: "password_from_env" };
     }
+    const wait = retryAfterMs(ip);
+    if (wait > 0) {
+      return { ok: false, error: "too_many_attempts", retryAfterMs: wait };
+    }
     if (!(await verifyPassword(String(currentPassword || ""), currentHash()))) {
+      recordFailure(ip);
       return { ok: false, error: "wrong_password" };
     }
+    attempts.delete(ip);
     if (typeof nextPassword !== "string" || nextPassword.length < MIN_PASSWORD_LENGTH) {
       return { ok: false, error: "password_too_short" };
     }
@@ -376,6 +453,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
 
 module.exports = {
   MIN_PASSWORD_LENGTH,
+  SESSION_MAX_AGE_MS,
   SESSION_TTL_MS,
   createAuth,
   hashPassword,
