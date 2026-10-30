@@ -666,8 +666,9 @@ async function passkeys(h, driver, results) {
     await h.clickButton("使用 passkey 验证", reopenDialog);
     await h.waitText(".notice", "已打开密码登录");
     assert.strictEqual(await (await passwordSwitch()).isSelected(), true);
-    await h.waitText("main", "再次输入新密码");
-    step("打开密码登录：用 passkey 验证后恢复，修改密码表单重新出现");
+    // 这个面板的密码来自 PANEL_PASSWORD，“面板密码”一节恢复为对应的说明
+    await h.waitText("main", "面板密码由环境变量 PANEL_PASSWORD 设置");
+    step("打开密码登录：用 passkey 验证后恢复，“面板密码”一节恢复原样");
 
     await h.go("#/settings");
     await h.waitText(".passkey-table", "UI 测试设备");
