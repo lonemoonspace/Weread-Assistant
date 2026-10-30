@@ -18,7 +18,7 @@ const fs = require("fs");
 const net = require("net");
 const os = require("os");
 const path = require("path");
-const { Builder, By, Key, logging, until } = require("selenium-webdriver");
+const { Builder, By, Key, error: webdriverError, logging, until } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
 const { Protocol, Transport, VirtualAuthenticatorOptions } = require("selenium-webdriver/lib/virtual_authenticator");
 
@@ -128,12 +128,22 @@ function helpers(driver, prefix) {
     async waitFor(css, timeout = 10000) {
       return driver.wait(until.elementLocated(By.css(css)), timeout, `等待元素 ${css}`);
     },
+    // 等待过程中页面可能跳转或重新渲染（例如登录后从登录页进入面板），找到的元素失效时重新查找
     async waitText(css, text, timeout = 10000) {
       let found;
       await driver.wait(
         async () => {
           for (const el of await driver.findElements(By.css(css))) {
-            if ((await el.getText()).includes(text)) {
+            let content;
+            try {
+              content = await el.getText();
+            } catch (e) {
+              if (e instanceof webdriverError.StaleElementReferenceError) {
+                return false;
+              }
+              throw e;
+            }
+            if (content.includes(text)) {
               found = el;
               return true;
             }
