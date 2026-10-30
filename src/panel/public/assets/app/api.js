@@ -4,6 +4,7 @@ export class ApiError extends Error {
     super((data && data.message) || (status === 0 ? "无法连接面板" : `请求失败（HTTP ${status}）`));
     this.status = status;
     this.code = data && data.error;
+    this.data = data || {};
   }
 }
 

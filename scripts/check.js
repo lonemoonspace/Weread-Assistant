@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * 仓库自查：CI 中最先运行，不需要浏览器与 Docker。
- * - 语法：src/ 与 scripts/ 下的脚本按 CommonJS 检查；面板页面的 ES 模块（assets/app/）按模块检查。
+ * - 语法：src/ 与 scripts/ 下的脚本按 CommonJS 检查；面板页面的 ES 模块（assets/app/，以及页面以 type="module" 引用的脚本）按模块检查。
  *   node --check 检查没有声明为模块的 .js 文件时，遇到 import 语句会直接跳过而不报错，因此经标准输入以模块方式检查
  * - 面板第三方文件（assets/vendor/）与其中 README 记录的 SHA-256 一致，且每个文件都有记录
  * - 面板页面没有内联脚本、内联样式与内联事件处理；模板中不使用 v-html 与样式绑定
@@ -34,14 +34,35 @@ function listFiles(dir, predicate) {
   return files.sort();
 }
 
+// 标签中某个属性的值：双引号、单引号或不带引号都可以，大小写不敏感；没有这个属性时为 null
+function tagAttribute(tag, name) {
+  const match = tag.match(new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'<>\`]+))`, "i"));
+  return match ? (match[1] ?? match[2] ?? match[3]).trim() : null;
+}
+
+// 页面以 type="module" 引用的脚本，例如登录页的 assets/login.js。属性的顺序与引号不限，地址中的查询参数与片段忽略
+function pageModules() {
+  const files = new Set();
+  for (const page of listFiles(PUBLIC_DIR, (file) => file.endsWith(".html"))) {
+    for (const [tag] of fs.readFileSync(page, "utf8").matchAll(/<script\b[^>]*>/gi)) {
+      const src = tagAttribute(tag, "src");
+      if (src && (tagAttribute(tag, "type") || "").toLowerCase() === "module") {
+        files.add(path.join(path.dirname(page), src.replace(/[?#].*$/, "")));
+      }
+    }
+  }
+  return files;
+}
+
 function checkSyntax() {
   const problems = [];
+  const modules = pageModules();
   const scripts = [
     ...listFiles(path.join(ROOT, "src"), (file) => file.endsWith(".js") && !file.startsWith(VENDOR_DIR + path.sep)),
     ...listFiles(path.join(ROOT, "scripts"), (file) => file.endsWith(".js")),
   ];
   for (const file of scripts) {
-    const isModule = file.startsWith(APP_DIR + path.sep);
+    const isModule = file.startsWith(APP_DIR + path.sep) || modules.has(file);
     const result = isModule
       ? spawnSync(process.execPath, ["--input-type=module", "--check"], { input: fs.readFileSync(file), encoding: "utf8" })
       : spawnSync(process.execPath, ["--check", file], { encoding: "utf8" });
