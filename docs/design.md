@@ -106,7 +106,7 @@ flowchart LR
 
 | 页面 | 内容 |
 | --- | --- |
-| 登录 | 面板密码登录；配置了 HTTPS 外网地址时也可用 passkey 登录 |
+| 登录 | 面板密码登录；配置了 HTTPS 外网地址时也可用 passkey 登录，密码登录关闭后只显示 passkey |
 | 总览 | 顶部 Selenium 状态（就绪、已用/总会话数）与运行队列；每个账号一张卡片：状态、今日已读分钟与是否达标、下次运行时间、运行 / 仅登录 / 停止按钮；需要扫码的账号置顶并直接显示二维码 |
 | 账号 · 实时 | 实时日志、最新截图、二维码、"正在读《书名》第 23/68 分钟"；手机访问时提供"复制登录链接" |
 | 账号 · 历史 | 运行列表（触发方式、起止时间、结果、阅读分钟）、日志查看与下载、截图回看 |
@@ -249,7 +249,7 @@ sequenceDiagram
 | 项目 | 措施 |
 | --- | --- |
 | 面板密码 | 至少 8 位；优先使用 `PANEL_PASSWORD`（不足 8 位时拒绝启动）；未设置时首次启动随机生成并只在日志中打印一次；scrypt 哈希存储；可在界面修改（设置了 `PANEL_PASSWORD` 时以环境变量为准） |
-| passkey | 可选。`PANEL_PUBLIC_URL` 为 HTTPS 地址时可在设置中添加，之后用指纹、面容或 PIN 登录；域名与 origin 只取自该变量，要求用户验证，服务端只保存公钥；添加、删除要求 5 分钟内登录或二次验证过 |
+| passkey | 可选。`PANEL_PUBLIC_URL` 为 HTTPS 地址时可在设置中添加，之后用指纹、面容或 PIN 登录；域名与 origin 只取自该变量，要求用户验证，服务端只保存公钥；添加、删除要求 5 分钟内登录或二次验证过。添加后可以在设置中关闭密码登录（要求用 passkey 验证，不能删除最后一个可用的 passkey）；用不了 passkey 时用 `PANEL_FORCE_PASSWORD_LOGIN=true` 重启临时恢复，换了域名时自动恢复 |
 | 登录限速 | 按 IP 连续失败 5 次后指数退避，最长 15 分钟；另设全局失败上限，防止 `X-Forwarded-For` 配置错误时被绕过；密码与 passkey 共用 |
 | 会话 | 服务端随机令牌，7 天滑动过期；cookie `HttpOnly`、`SameSite=Strict`、HTTPS 时 `Secure`、`Path` 为面板路径；修改密码后所有会话失效 |
 | CSRF | `SameSite=Strict` + 修改类请求必须带自定义请求头与 JSON `Content-Type` |
@@ -272,6 +272,7 @@ sequenceDiagram
 | `PANEL_TRUST_PROXY` | `false` | 设为 `true` 后信任 `X-Forwarded-For` / `X-Forwarded-Proto`，用于识别真实 IP 与 HTTPS |
 | `PANEL_PUBLIC_URL` | 空 | 面板的外网地址，扫码推送附带该账号实时页面的链接（解析不出登录链接时只推送面板链接）；为 HTTPS 地址时可以使用 passkey；与 `PANEL_BASE_PATH` 明显不一致时启动日志给出提示 |
 | `PANEL_PASSWORD` | 空 | 面板密码，至少 8 位（不足时拒绝启动） |
+| `PANEL_FORCE_PASSWORD_LOGIN` | `false` | 应急恢复：设置中关闭了密码登录时临时允许用密码登录，不修改设置 |
 | `SELENIUM_URL` | 空 | 首次启动时写入全局配置；为空时使用内置浏览器。没有设置时，面板启动时把配置中旧版的 `http://selenium:4444` 清空 |
 
 | 注意事项 | 说明 |

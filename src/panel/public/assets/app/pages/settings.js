@@ -102,14 +102,56 @@ export const SettingsPage = {
     const onPasskeyOrigin = computed(() => originMatches(passkeyInfo.value));
     const supported = passkeySupported();
 
+    // 添加、删除 passkey 后密码登录的实际状态可能改变（例如没有可用的 passkey 时自动允许密码登录），一并刷新会话信息
     async function loadPasskeys() {
       try {
-        passkeys.value = (await api("auth/passkeys")).passkeys;
+        const [list, session] = await Promise.all([api("auth/passkeys"), api("auth/session")]);
+        passkeys.value = list.passkeys;
+        state.session = session;
       } catch (error) {
         notify(error.message, "error");
       }
     }
     onMounted(loadPasskeys);
+
+    // 密码登录：设置中的开关（enabled）与实际是否允许（active），见服务端 passwordLoginState
+    const loginState = computed(() => state.session.passwordLogin || { enabled: true, active: true, forced: false, reason: null });
+    const canDisablePassword = computed(() => onPasskeyOrigin.value && supported && passkeys.value.some((item) => item.usable));
+    const savingPasswordLogin = ref(false);
+
+    // 关闭前确认后果，之后需要用 passkey 验证一次（服务端要求）；打开只需要 5 分钟内验证过
+    async function setPasswordLogin(event) {
+      const enabled = event.target.checked;
+      // 保存成功前保持原状态，取消或失败时不需要再改回来
+      event.target.checked = loginState.value.enabled;
+      if (
+        !enabled &&
+        !window.confirm(
+          `关闭密码登录后：\n· 只能在 ${passkeyInfo.value.origin} 上用 passkey 登录，用内网 IP 等其他地址打开面板将无法登录\n` +
+            "· 其他用密码登录的设备会立即退出\n" +
+            "· 丢失所有 passkey 时，设置环境变量 PANEL_FORCE_PASSWORD_LOGIN=true 并重启面板，临时用密码登录\n\n" +
+            "接下来需要用 passkey 验证一次。确定关闭？"
+        )
+      ) {
+        return;
+      }
+      savingPasswordLogin.value = true;
+      try {
+        const result = await withReauth(() => api("auth/password-login", { method: "PATCH", body: { enabled } }));
+        state.session.passwordLogin = result.passwordLogin;
+        if (enabled) {
+          notify("已打开密码登录");
+        } else {
+          notify(result.passwordLogin.active ? "已在设置中关闭密码登录，PANEL_FORCE_PASSWORD_LOGIN 生效期间仍可用密码登录" : "已关闭密码登录，其他用密码登录的设备已退出");
+        }
+      } catch (error) {
+        if (!(error instanceof ReauthCancelled)) {
+          notify(error.message, "error");
+        }
+      } finally {
+        savingPasswordLogin.value = false;
+      }
+    }
 
     async function addPasskey() {
       addingPasskey.value = true;
@@ -194,6 +236,10 @@ export const SettingsPage = {
       saveRename,
       cancelRename: () => Object.assign(editing, { id: "", name: "" }),
       removePasskey,
+      loginState,
+      canDisablePassword,
+      savingPasswordLogin,
+      setPasswordLogin,
       formatDateTime,
       timezone,
     };
@@ -275,8 +321,21 @@ export const SettingsPage = {
       <p v-else-if="onPasskeyOrigin" class="muted">这个浏览器不支持 passkey。</p>
       <reauth-dialog :passkeys="passkeys" />
 
+      <h4>密码登录</h4>
+      <label class="switch-line">
+        <input type="checkbox" role="switch" :checked="loginState.enabled" :disabled="savingPasswordLogin || (loginState.enabled && !canDisablePassword)" @change="setPasswordLogin">
+        允许用面板密码登录
+      </label>
+      <p v-if="loginState.reason === 'forced'" class="callout callout-warn">PANEL_FORCE_PASSWORD_LOGIN 已生效：密码登录在设置中已关闭，现在临时允许用密码登录。处理完后删掉这个变量并重启面板。</p>
+      <p v-else-if="loginState.reason === 'no_usable_passkey'" class="callout callout-warn">密码登录在设置中已关闭，但当前域名下没有可用的 passkey，暂时允许用密码登录。添加 passkey 后恢复。</p>
+      <p v-else-if="loginState.forced" class="callout callout-warn">设置了 PANEL_FORCE_PASSWORD_LOGIN，但密码登录本来就是打开的，可以删掉这个变量。</p>
+      <p v-if="!loginState.enabled && !loginState.active" class="muted">密码登录已关闭，只能用 passkey 登录。丢失所有 passkey 时，设置环境变量 PANEL_FORCE_PASSWORD_LOGIN=true 并重启面板，临时用密码登录。</p>
+      <p v-else-if="loginState.enabled && canDisablePassword" class="muted">关闭后只能在 {{ passkeyInfo.origin }} 上用 passkey 登录，用内网 IP 等其他地址打开面板将无法登录。</p>
+      <p v-else-if="loginState.enabled" class="muted">在 passkey 的地址上添加 passkey 后，才能关闭密码登录。</p>
+
       <h4>面板密码</h4>
-      <p v-if="state.session.passwordFromEnv" class="muted">面板密码由环境变量 PANEL_PASSWORD 设置，请修改该变量后重启面板。</p>
+      <p v-if="!loginState.active" class="muted">密码登录已关闭，打开后才能修改密码。</p>
+      <p v-else-if="state.session.passwordFromEnv" class="muted">面板密码由环境变量 PANEL_PASSWORD 设置，请修改该变量后重启面板。</p>
       <form v-else class="narrow" @submit.prevent="changePassword">
         <label>当前密码<input type="password" v-model="password.current" autocomplete="current-password" required></label>
         <label>新密码<input type="password" v-model="password.next" autocomplete="new-password" :minlength="state.session.minPasswordLength" required></label>

@@ -95,7 +95,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
   }
 
   // method 为登录方式（password 或 passkey），passkey 登录时 credentialId 为所用 passkey 的 ID；
-  // verifiedAt 为最近一次登录或二次验证的时间
+  // verifiedAt 为最近一次登录或二次验证的时间，verifiedBy 为那一次所用的方式
   function createSession(method = "password", credentialId = "") {
     const token = crypto.randomBytes(32).toString("base64url");
     const t = now();
@@ -105,7 +105,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
         endSession(key);
       }
     }
-    sessions.set(hashToken(token), { expiresAt: t + SESSION_TTL_MS, cookieSetAt: t, method, credentialId, verifiedAt: t });
+    sessions.set(hashToken(token), { expiresAt: t + SESSION_TTL_MS, cookieSetAt: t, method, credentialId, verifiedAt: t, verifiedBy: method });
     return token;
   }
 
@@ -170,7 +170,20 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     }
   }
 
-  async function reauth(ip, token, verify) {
+  // 结束符合条件的会话，keepToken 对应的会话除外。返回结束的数量
+  function endSessions(predicate, keepToken = "") {
+    const keep = keepToken ? hashToken(keepToken) : "";
+    let count = 0;
+    for (const [key, session] of [...sessions]) {
+      if (key !== keep && predicate(session)) {
+        endSession(key);
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async function reauth(ip, token, method, verify) {
     if (!activeSession(token)) {
       return { ok: false, retryAfterMs: 0 };
     }
@@ -184,6 +197,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
       return { ok: false, retryAfterMs: 0 };
     }
     session.verifiedAt = now();
+    session.verifiedBy = method;
     return { ok: true };
   }
 
@@ -234,40 +248,43 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     // 二次验证：用密码或 passkey 再次确认身份，成功后会话在二次验证的有效期内（默认 5 分钟）可以进行敏感操作。
     // 失败与登录失败一样计入限速。返回 { ok: true } 或与 login 相同的失败结果
     async reauthWithPassword(ip, token, password) {
-      return reauth(ip, token, () => checkPassword(password));
+      return reauth(ip, token, "password", () => checkPassword(password));
     },
 
     async reauthWithPasskey(ip, token, verify) {
-      return reauth(ip, token, verify);
+      return reauth(ip, token, "passkey", verify);
     },
 
-    // 会话在二次验证的有效期内登录或二次验证过
-    isRecentlyVerified(token) {
+    // 会话在二次验证的有效期内登录或二次验证过；指定 method 时还要求那一次用的是这种方式
+    // （关闭密码登录要求用 passkey 验证过，确认它在当前域名下能用）
+    isRecentlyVerified(token, method = "") {
       const session = activeSession(token);
-      return Boolean(session && now() - session.verifiedAt < cfg.reauthWindowMs);
+      return Boolean(session && now() - session.verifiedAt < cfg.reauthWindowMs && (!method || session.verifiedBy === method));
     },
 
-    // 当前会话的登录方式与二次验证的有效期（ISO 时间，已过期时为 null）
+    // 当前会话的登录方式、二次验证的有效期（ISO 时间，已过期时为 null）与验证所用的方式
     sessionInfo(token) {
       const session = activeSession(token);
       if (!session) {
         return null;
       }
       const verifiedUntil = session.verifiedAt + cfg.reauthWindowMs;
-      return { method: session.method, verifiedUntil: verifiedUntil > now() ? new Date(verifiedUntil).toISOString() : null };
+      const verified = verifiedUntil > now();
+      return {
+        method: session.method,
+        verifiedUntil: verified ? new Date(verifiedUntil).toISOString() : null,
+        verifiedBy: verified ? session.verifiedBy : null,
+      };
     },
 
     // 结束用某个 passkey 登录的会话（删除 passkey 后），keepToken 对应的会话除外。返回结束的数量
     endPasskeySessions(credentialId, keepToken = "") {
-      const keep = keepToken ? hashToken(keepToken) : "";
-      let count = 0;
-      for (const [key, session] of [...sessions]) {
-        if (key !== keep && session.method === "passkey" && session.credentialId === credentialId) {
-          endSession(key);
-          count += 1;
-        }
-      }
-      return count;
+      return endSessions((session) => session.method === "passkey" && session.credentialId === credentialId, keepToken);
+    },
+
+    // 结束用密码登录的会话（关闭密码登录后），keepToken 对应的会话除外。返回结束的数量
+    endPasswordSessions(keepToken = "") {
+      return endSessions((session) => session.method === "password", keepToken);
     },
 
     // 校验并延长会话。返回 null 表示无效；refreshCookie 表示需要重新下发 cookie

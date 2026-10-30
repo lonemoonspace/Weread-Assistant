@@ -60,7 +60,7 @@ docker compose logs app | grep 面板初始密码
 2. “新建账号”，填写账号 ID（如 `me`）与名称；进入账号页面后点“仅登录”，用微信扫描页面上的二维码
 3. 在账号的“调度”中添加运行时间，例如每天 06:00；保存后立即生效，总览显示下次运行时间
 4. 需要通知时，在“设置 → 全局默认配置”或账号的“配置”中填写 Bark、ntfy 或邮件，点“发送测试通知”确认
-5. 通过 HTTPS 从外网打开面板时，可以在 `docker-compose.yml` 的 `app` 中把 `PANEL_PUBLIC_URL` 设为面板的 HTTPS 地址，然后在“设置 → 登录方式”中添加 passkey，之后用指纹、面容或设备 PIN 登录，见 [docs/panel.md](docs/panel.md#passkey)
+5. 通过 HTTPS 从外网打开面板时，可以在 `docker-compose.yml` 的 `app` 中把 `PANEL_PUBLIC_URL` 设为面板的 HTTPS 地址，然后在“设置 → 登录方式”中添加 passkey，之后用指纹、面容或设备 PIN 登录；还可以关闭密码登录，只用 passkey，见 [docs/panel.md](docs/panel.md#passkey)
 
 登录状态保存在 cookies 中，过期后运行会提示需要扫码（开启通知时会推送），在面板中重新扫码即可。
 
@@ -87,6 +87,7 @@ docker compose up -d --remove-orphans
 | 问题 | 处理 |
 | --- | --- |
 | 登录页没有“使用 passkey 登录” | passkey 需要 `PANEL_PUBLIC_URL` 为 HTTPS 地址，并且从这个地址打开面板；用内网 IP 打开时只能用密码登录。更换域名后原来的 passkey 不能再用，用密码登录后重新添加 |
+| 关闭了密码登录，passkey 却用不了 | 在 `docker-compose.yml` 的 `app` 中加上 `PANEL_FORCE_PASSWORD_LOGIN=true` 后执行 `docker compose up -d`，临时用密码登录；添加新的 passkey 后删掉这个变量，再执行一次 `docker compose up -d`。同时忘了密码时再加上 `PANEL_PASSWORD=新密码`，见 [docs/panel.md](docs/panel.md#关闭密码登录) |
 | 忘记面板密码 | 在 `docker-compose.yml` 的 `app` 中设置环境变量 `PANEL_PASSWORD=新密码`（至少 8 位） 后执行 `docker compose up -d`。设置该变量时面板以它为准（界面中不能再修改密码），需要一直保留；去掉后恢复为原来保存的密码 |
 | 总览显示“无法连接 Selenium” | 设置中的 Selenium 地址指向的服务连不上。使用内置浏览器时把“全局默认配置”中的 Selenium 地址清空（账号的“配置”中填写过的也清空）；使用自己部署的 Selenium 时确认它在运行、地址正确 |
 | 同时运行多个账号 | 调大设置中的“同时运行的账号数”。使用内置浏览器时每个账号单独启动一个浏览器，各约占 600MB 内存，按设备内存设置；使用自己部署的 Selenium 时与它的 `SE_NODE_MAX_SESSIONS` 保持一致 |

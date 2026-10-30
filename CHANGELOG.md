@@ -4,12 +4,13 @@
 
 ## 未发布
 
-面板支持 passkey 登录：用手机或电脑的指纹、面容、PIN 登录，不用输入密码，也不会被钓鱼网站骗走。密码登录保持不变。
+面板支持 passkey 登录：用手机或电脑的指纹、面容、PIN 登录，不用输入密码，也不会被钓鱼网站骗走。默认密码登录照常可用；添加 passkey 后可以在设置中关闭密码登录。
 
 升级说明：
 
 - 执行 `docker compose pull && docker compose up -d` 即可，不设置任何变量时与之前完全相同
 - 想使用 passkey：在 `docker-compose.yml` 的 `app` 中把 `PANEL_PUBLIC_URL` 设为面板的 HTTPS 地址（例如 `https://example.com/weread/`），建议同时设置 `PANEL_TRUST_PROXY`，然后从这个地址打开面板，在“设置 → 登录方式”中添加
+- 关闭了密码登录后，**退回旧版本会重新允许密码登录**（旧版本不认这个设置）
 
 变更：
 
@@ -17,6 +18,8 @@
 - 设置中新增“登录方式”：添加（最多 20 个）、改名、删除 passkey，显示添加与最近使用时间、是否已同步；更换域名后原来的 passkey 标为“当前域名不可用”，启动日志给出提示
 - 添加、删除 passkey 前需要在 5 分钟内登录或二次验证过（用 passkey 或密码），防止他人借用已登录的浏览器添加自己的 passkey
 - 删除 passkey 后，用它登录的其他会话立即退出；passkey 的失败同样计入登录限速
+- 设置中新增“允许用面板密码登录”开关：关闭前说明后果并要求用 passkey 验证一次；关闭后登录页只显示 passkey，二次验证只能用 passkey，不能修改密码，其他用密码登录的会话立即退出；不能删除最后一个可用的 passkey
+- 应急恢复：设置环境变量 `PANEL_FORCE_PASSWORD_LOGIN=true` 后重启，临时允许用密码登录（不修改设置）；换了域名或去掉 `PANEL_PUBLIC_URL`、当前域名下没有可用的 passkey 时自动允许密码登录。两种情况都在启动日志与设置页说明
 - 新增依赖 `@simplewebauthn/server` 14.0.3，用于校验 passkey；`panel.json` 中只保存公钥
 
 ## 0.2.0

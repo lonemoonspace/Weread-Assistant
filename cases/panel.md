@@ -4,7 +4,7 @@
 
 | 场景 | 前置条件 / 输入 | 预期结果 |
 | --- | --- | --- |
-| smoke 自查 | 执行 `npm run test:panel` | 63 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
+| smoke 自查 | 执行 `npm run test:panel` | 65 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
 | 首次启动生成密码 | 空数据目录、未设置 `PANEL_PASSWORD` | 生成 16 位密码；`panel.json` 只保存 scrypt 哈希且权限为 0600；再次启动不再生成，原密码可登录 |
 | 未登录访问 | 不带会话 | `healthz` 返回 `{"status":"ok"}`；`/` 302 到 `login`；登录页与静态资源可访问；`api/auth/session` 返回 401 |
 | 登录与退出 | 设置 `PANEL_PASSWORD` | 错误密码 401；正确密码 204，`Set-Cookie` 带 `HttpOnly`、`SameSite=Strict`、`Path=/`，HTTP 下不带 `Secure`；登录后可访问首页；退出后会话失效 |
@@ -23,7 +23,9 @@
 | 删除 passkey | 两个 passkey；用 A 登录两个会话（其中一个连着实时推送）、用 B 登录一个，另有密码会话；在 A 的一个会话中删除 A | 推送连接 1 秒内断开；用 A 登录的另一个会话失效，删除者的会话、用 B 登录的会话与密码会话保留；A 不能再登录，B 可以 |
 | passkey 与域名绑定 | 在 `https://example.com/` 下添加后，先去掉 `PANEL_PUBLIC_URL` 重启，再换为 `https://other.example/` 重启；另在 `https://example.com:9443/other-path/` 下登录 | 两次启动日志分别提示“PANEL_PUBLIC_URL 没有设置为 HTTPS 地址”与“都不是在 other.example 下添加的”；列表中 `usable` 为 false，二次验证参数不列出它，不能登录，仍可删除；换端口与路径时 RP ID 不变，可以登录 |
 | passkey challenge 有效期与数量 | 时间推进 5 分钟；连续申请 101 个登录参数；用其他会话的令牌提交添加结果 | 过期与被挤掉的最早 challenge 校验失败，新的成功；添加的 challenge 绑定会话 |
-| `auth.passkeys` 格式 | 没有上一版的 `panel.json` 中 `auth.passkeys` 为对象、字符串、`[null]`、缺少公钥的对象 | 视为损坏，不会被清空为空列表；没有上一版可恢复，拒绝启动并报错 `auth.passkeys 必须是…` |
+| `auth.passkeys` 与 `auth.passwordLogin` 格式 | 没有上一版的 `panel.json` 中 `auth.passkeys` 为对象、字符串、`[null]`、缺少公钥的对象；`auth.passwordLogin` 为 `"false"`、0、null | 视为损坏，不会被清空或改成默认值；没有上一版可恢复，拒绝启动并分别报错 `auth.passkeys 必须是…`、`auth.passwordLogin 必须是 true 或 false` |
+| 关闭密码登录 | 没有 passkey 时关闭；添加 passkey 后提交非布尔值或多余字段；用密码登录后、用密码二次验证后关闭；另一个密码会话连着实时推送，再用 passkey 登录一个会话；用 passkey 二次验证后关闭；关闭后用正确与错误的密码登录、用密码二次验证、修改密码；删除唯一可用的 passkey；再添加一个后删除；打开密码登录 | 会话中 `passwordLogin` 默认为 `{ enabled: true, active: true, forced: false, reason: null }`；没有 passkey 时 409 `no_usable_passkey`；参数非法 400；只用密码验证过时 403 `reauth_required` 且 `method` 为 `passkey`；用 passkey 验证后 200，`passwordLogin` 为关闭，`panel.json` 中 `passwordLogin` 为 false；推送连接 1 秒内断开，另一个密码会话失效，passkey 会话与当前会话保留；`api/auth/methods` 的 `password` 为 false；登录都返回 403 `password_login_disabled` 且不下发 cookie；密码二次验证 403，修改密码 409；删除唯一可用的 passkey 409 `last_passkey`，有两个时可以删一个；打开后 200，原密码可以登录，最后一个 passkey 也可以删除 |
+| 应急恢复与自动放开 | 二次验证有效期 0.3 秒；用 passkey 验证后关闭密码登录，过期后打开；带 `PANEL_FORCE_PASSWORD_LOGIN` 重启；去掉变量重启；`PANEL_PUBLIC_URL` 换为 `https://other.example/` 重启并删除旧 passkey；去掉 `PANEL_PUBLIC_URL` 重启；另在密码登录打开时带该变量启动 | 过期后打开返回 403 `reauth_required`（不带 `method`）；带变量时启动日志提示“PANEL_FORCE_PASSWORD_LOGIN 已生效”，密码可以登录，`passwordLogin` 为 `{ enabled: false, active: true, forced: true, reason: "forced" }`，`panel.json` 不变；去掉变量后密码登录 403；换域名后日志提示“当前域名下没有可用的 passkey，暂时允许用密码登录”，可以登录，`reason` 为 `no_usable_passkey`，不可用的 passkey 可以删除；去掉外网地址后可以登录；密码登录本来打开时日志提示可以删掉该变量 |
 | 收紧已有文件权限 | 启动前 `panel.json` 权限为 0644 | 启动后权限为 0600，日志提示已修改 |
 | 全局设置与默认配置 | 修改时区、并发数与默认阅读时长；提交非法时区、并发数 0、阅读时长 0 或 400 位数字、选书方式 9、未知项、`dataDir` | 合法值生效；非法值返回 400，`message` 指出字段名称与原因；一项非法时整个请求不生效；`null` 恢复默认 |
 | SELENIUM_URL 只写入一次 | 首次启动设置 `SELENIUM_URL`，在面板中改为其他地址后用新的 `SELENIUM_URL` 重启 | 全局默认中的 Selenium 地址保持面板中的设置 |

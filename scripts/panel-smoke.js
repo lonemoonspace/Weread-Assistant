@@ -749,13 +749,138 @@ async function main() {
       assert.ok(await passkeys.verifyLogin(authenticator.assert(latest)));
     });
 
-    await scenario("panel.json 中 auth.passkeys 格式不对时视为损坏，不会被清空", async () => {
+    await scenario("panel.json 中 auth.passkeys、auth.passwordLogin 格式不对时视为损坏，不会被清空", async () => {
       const dataDir = tempDir();
       const file = path.join(dataDir, "panel.json");
       for (const passkeys of [{}, "x", [null], [{ id: "a" }]]) {
         fs.writeFileSync(file, JSON.stringify({ version: 1, auth: { passwordHash: "", passkeys } }), { mode: 0o600 });
         await assert.rejects(start({ dataDir, password: "correct-horse" }), /auth\.passkeys 必须是/);
       }
+      for (const passwordLogin of ["false", 0, null]) {
+        fs.writeFileSync(file, JSON.stringify({ version: 1, auth: { passwordHash: "", passwordLogin } }), { mode: 0o600 });
+        await assert.rejects(start({ dataDir, password: "correct-horse" }), /auth\.passwordLogin 必须是 true 或 false/);
+      }
+    });
+
+    await scenario("关闭密码登录：要求有可用的 passkey 并在 5 分钟内用它验证过；关闭后密码登录、密码二次验证与修改密码都被拒绝，其他密码会话立即失效", async () => {
+      const panel = await startAuthed({ publicUrl: PASSKEY_URL, sseHeartbeatMs: 60000 });
+      const toggle = (enabled, cookie = panel.cookie) => callAs(panel, cookie, "PATCH", "api/auth/password-login", { enabled });
+      assert.deepStrictEqual((await panel.call("GET", "api/auth/session")).json.passwordLogin, {
+        enabled: true,
+        active: true,
+        forced: false,
+        reason: null,
+      });
+      const none = await toggle(false);
+      assert.strictEqual(none.status, 409);
+      assert.strictEqual(none.json.error, "no_usable_passkey");
+      const authenticator = await addPasskey(panel);
+      assert.strictEqual((await panel.call("PATCH", "api/auth/password-login", { enabled: "no" })).status, 400);
+      assert.strictEqual((await panel.call("PATCH", "api/auth/password-login", { enabled: false, extra: 1 })).status, 400);
+
+      // 用密码登录或用密码二次验证过都不够，要求用 passkey 验证
+      const byPassword = await toggle(false);
+      assert.strictEqual(byPassword.status, 403);
+      assert.deepStrictEqual([byPassword.json.error, byPassword.json.method], ["reauth_required", "passkey"]);
+      assert.strictEqual((await panel.call("POST", "api/auth/reauth", { password: "correct-horse" })).status, 204);
+      assert.strictEqual((await panel.call("GET", "api/auth/session")).json.verifiedBy, "password");
+      assert.strictEqual((await toggle(false)).status, 403);
+
+      const other = sessionCookie(await login(panel, "correct-horse"));
+      const events = await openEvents(panel.port, other);
+      await until(() => events.events.length > 0);
+      const viaPasskey = sessionCookie(await passkeyLogin(panel, authenticator));
+      const options = await panel.call("POST", "api/auth/passkey/options", { purpose: "reauth" });
+      assert.strictEqual((await panel.call("POST", "api/auth/reauth", { passkey: authenticator.assert(options.json) })).status, 204);
+      const off = await toggle(false);
+      assert.strictEqual(off.status, 200, JSON.stringify(off.json));
+      assert.deepStrictEqual(off.json.passwordLogin, { enabled: false, active: false, forced: false, reason: null });
+      await Promise.race([events.closed, new Promise((_, reject) => setTimeout(() => reject(new Error("推送连接没有立即断开")), 1000))]);
+      assert.strictEqual((await callAs(panel, other, "GET", "api/auth/session")).status, 401, "其他密码会话失效");
+      assert.strictEqual((await callAs(panel, viaPasskey, "GET", "api/auth/session")).status, 200, "passkey 会话保留");
+      assert.strictEqual((await panel.call("GET", "api/auth/session")).status, 200, "当前会话保留");
+      assert.strictEqual(JSON.parse(fs.readFileSync(path.join(panel.options.dataDir, "panel.json"), "utf8")).auth.passwordLogin, false);
+
+      assert.strictEqual((await panel.request("api/auth/methods")).json.password, false);
+      for (const password of ["correct-horse", "wrong"]) {
+        const denied = await login(panel, password);
+        assert.strictEqual(denied.status, 403);
+        assert.strictEqual(denied.json.error, "password_login_disabled");
+        assert.strictEqual(sessionCookie(denied), "");
+      }
+      const reauthByPassword = await panel.call("POST", "api/auth/reauth", { password: "correct-horse" });
+      assert.strictEqual(reauthByPassword.status, 403);
+      assert.strictEqual(reauthByPassword.json.error, "password_login_disabled");
+      const change = await panel.call("POST", "api/auth/password", { current: "correct-horse", next: "another-horse" });
+      assert.strictEqual(change.status, 409);
+      assert.strictEqual(change.json.error, "password_login_disabled");
+
+      // 不能删除最后一个可用的 passkey；还有其他可用的时可以删
+      const last = await panel.call("DELETE", `api/auth/passkeys/${authenticator.id}`);
+      assert.strictEqual(last.status, 409);
+      assert.strictEqual(last.json.error, "last_passkey");
+      const second = await addPasskey(panel, "第二个");
+      assert.strictEqual((await panel.call("DELETE", `api/auth/passkeys/${authenticator.id}`)).status, 204);
+      assert.strictEqual((await panel.call("DELETE", `api/auth/passkeys/${second.id}`)).status, 409);
+
+      // 打开密码登录只要求 5 分钟内验证过；打开后恢复原来的密码，最后一个 passkey 也可以删除
+      const on = await toggle(true);
+      assert.strictEqual(on.status, 200);
+      assert.strictEqual(on.json.passwordLogin.active, true);
+      assert.strictEqual((await login(panel, "correct-horse")).status, 204);
+      assert.strictEqual((await panel.call("DELETE", `api/auth/passkeys/${second.id}`)).status, 204);
+    });
+
+    await scenario("密码登录关闭后的应急恢复：PANEL_FORCE_PASSWORD_LOGIN、换了域名或去掉 PANEL_PUBLIC_URL 时仍允许密码登录并提示，不修改设置", async (logs) => {
+      const panel = await startAuthed({ publicUrl: PASSKEY_URL, limits: { reauthWindowMs: 300 } });
+      const authenticator = await addPasskey(panel);
+      // 二次验证过期后打开密码登录同样需要验证；密码登录关闭时只能用 passkey 验证
+      const options = await panel.call("POST", "api/auth/passkey/options", { purpose: "reauth" });
+      assert.strictEqual((await panel.call("POST", "api/auth/reauth", { passkey: authenticator.assert(options.json) })).status, 204);
+      assert.strictEqual((await panel.call("PATCH", "api/auth/password-login", { enabled: false })).status, 200);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      const expired = await panel.call("PATCH", "api/auth/password-login", { enabled: true });
+      assert.strictEqual(expired.status, 403);
+      assert.strictEqual(expired.json.error, "reauth_required");
+      assert.strictEqual(expired.json.method, undefined);
+      const { dataDir } = panel.options;
+      await panel.close();
+      const restart = (overrides) => start({ dataDir, password: "correct-horse", ...overrides });
+
+      const forced = await restart({ publicUrl: PASSKEY_URL, forcePasswordLogin: true });
+      assert.ok(logs.some((line) => /PANEL_FORCE_PASSWORD_LOGIN 已生效/.test(line)));
+      const forcedLogin = await login(forced, "correct-horse");
+      assert.strictEqual(forcedLogin.status, 204);
+      assert.deepStrictEqual((await callAs(forced, sessionCookie(forcedLogin), "GET", "api/auth/session")).json.passwordLogin, {
+        enabled: false,
+        active: true,
+        forced: true,
+        reason: "forced",
+      });
+      assert.strictEqual((await forced.request("api/auth/methods")).json.password, true);
+      assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dataDir, "panel.json"), "utf8")).auth.passwordLogin, false, "不修改设置");
+      await forced.close();
+
+      const normal = await restart({ publicUrl: PASSKEY_URL });
+      assert.strictEqual((await login(normal, "correct-horse")).status, 403, "去掉变量后恢复原来的设置");
+      await normal.close();
+
+      const moved = await restart({ publicUrl: "https://other.example/" });
+      assert.ok(logs.some((line) => /当前域名下没有可用的 passkey，暂时允许用密码登录/.test(line)));
+      const movedLogin = await login(moved, "correct-horse");
+      assert.strictEqual(movedLogin.status, 204);
+      const movedCookie = sessionCookie(movedLogin);
+      assert.strictEqual((await callAs(moved, movedCookie, "GET", "api/auth/session")).json.passwordLogin.reason, "no_usable_passkey");
+      // 换了域名后旧的 passkey 不可用，不受“最后一个”的限制
+      assert.strictEqual((await callAs(moved, movedCookie, "DELETE", `api/auth/passkeys/${authenticator.id}`)).status, 204);
+      await moved.close();
+
+      const withoutUrl = await restart({ publicUrl: "" });
+      assert.strictEqual((await login(withoutUrl, "correct-horse")).status, 204);
+
+      // 密码登录本来就打开时设置 PANEL_FORCE_PASSWORD_LOGIN 只给出提示
+      await start({ password: "correct-horse", forcePasswordLogin: true });
+      assert.ok(logs.some((line) => /密码登录本来就是打开的/.test(line)));
     });
 
     await scenario("页面与接口带安全响应头，接口禁止缓存；只有主页面允许 'unsafe-eval'", async () => {

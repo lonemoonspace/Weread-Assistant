@@ -91,11 +91,14 @@ const scenarios = [
     rejects(() => panelOptionsFromEnv({ PANEL_PORT: "70000" }), /PANEL_PORT 必须在 1–65535 之间/);
   }],
 
-  ["代理层数、子路径与外网地址", () => {
+  ["代理层数、应急密码登录、子路径与外网地址", () => {
     assert.strictEqual(panelOptionsFromEnv({ PANEL_TRUST_PROXY: "true" }).trustProxy, 1);
     assert.strictEqual(panelOptionsFromEnv({ PANEL_TRUST_PROXY: "2" }).trustProxy, 2);
     assert.strictEqual(panelOptionsFromEnv({ PANEL_TRUST_PROXY: "false" }).trustProxy, false);
     rejects(() => panelOptionsFromEnv({ PANEL_TRUST_PROXY: "maybe" }), /PANEL_TRUST_PROXY 只能是/);
+    assert.strictEqual(panelOptionsFromEnv({}).forcePasswordLogin, false);
+    assert.strictEqual(panelOptionsFromEnv({ PANEL_FORCE_PASSWORD_LOGIN: "true" }).forcePasswordLogin, true);
+    rejects(() => panelOptionsFromEnv({ PANEL_FORCE_PASSWORD_LOGIN: "ture" }), /PANEL_FORCE_PASSWORD_LOGIN 只能是 true 或 false/);
     assert.strictEqual(panelOptionsFromEnv({ PANEL_BASE_PATH: "weread" }).basePath, "/weread/");
     rejects(() => panelOptionsFromEnv({ PANEL_BASE_PATH: "/a b/" }), /PANEL_BASE_PATH 含有不支持的字符/);
     assert.strictEqual(panelOptionsFromEnv({}).publicUrl, "");

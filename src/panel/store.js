@@ -37,6 +37,10 @@ function parseData(text) {
   ) {
     throw new Error("auth.passkeys 必须是由带 id 与 publicKey 的对象组成的数组");
   }
+  const passwordLogin = raw.auth && raw.auth.passwordLogin;
+  if (passwordLogin !== undefined && typeof passwordLogin !== "boolean") {
+    throw new Error("auth.passwordLogin 必须是 true 或 false");
+  }
   if (Object.hasOwn(raw, "accounts") && !(Array.isArray(raw.accounts) && raw.accounts.every(isPlainObject))) {
     throw new Error("accounts 必须是由对象组成的数组");
   }
@@ -53,7 +57,7 @@ function parseData(text) {
 function normalizeData(raw, seedDefaults) {
   return {
     version: STORE_VERSION,
-    auth: { passwordHash: "", passkeys: [], ...(raw.auth || {}) },
+    auth: { passwordHash: "", passwordLogin: true, passkeys: [], ...(raw.auth || {}) },
     settings: { ...DEFAULT_SETTINGS, ...(raw.settings || {}) },
     defaults: raw.defaults || { ...seedDefaults },
     accounts: (raw.accounts || []).map((account) => ({

@@ -120,6 +120,9 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
   const settingsView = (data) => ({ settings: data.settings, defaults: maskValues(data.defaults) });
   // passkey 是否可用，以及可用时面板的地址（origin）：页面不在这个地址打开时不能使用 passkey
   const passkeyView = () => (passkeys.available ? { available: true, origin: passkeys.relyingParty.origin } : { available: false });
+  const passwordLogin = () => passwordLoginState(store, passkeys, options.forcePasswordLogin);
+  const passwordLoginDisabled = (res, status) =>
+    res.status(status).json({ error: "password_login_disabled", message: "密码登录已关闭，请用 passkey 登录" });
   // 账号信息附带今天的阅读分钟数与最近一次运行，供总览使用
   const accountView = (account, timezone = store.get().settings.timezone) => ({
     ...publicAccount(account, panelDataDir, timezone),
@@ -235,7 +238,12 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
     res.status(status).json({ error });
   };
 
+  // 密码登录关闭时直接拒绝，不校验密码，也不计入限速
   api.post("/auth/login", async (req, res) => {
+    if (!passwordLogin().active) {
+      passwordLoginDisabled(res, 403);
+      return;
+    }
     const result = await auth.login(req.ip, req.body && req.body.password);
     if (result.ok) {
       setSessionCookie(req, res, result.token);
@@ -249,9 +257,9 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
     sendAuthFailure(res, result, 401, "wrong_password");
   });
 
-  // 登录页据此决定显示哪些登录方式。只说明是否提供 passkey 与它所在的地址，不透露添加了哪些 passkey
+  // 登录页据此决定显示哪些登录方式：是否允许密码登录、是否提供 passkey 与它所在的地址，不透露添加了哪些 passkey
   api.get("/auth/methods", (req, res) => {
-    res.json({ password: true, passkey: passkeyView() });
+    res.json({ password: passwordLogin().active, passkey: passkeyView() });
   });
 
   // { purpose: "login" | "reauth" }：passkey 登录或二次验证的参数。登录不需要会话，被限速时 429；二次验证需要已登录
@@ -307,6 +315,7 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
       passwordFromEnv: auth.passwordFromEnv,
       minPasswordLength: MIN_PASSWORD_LENGTH,
       passkey: passkeyView(),
+      passwordLogin: passwordLogin(),
       ...auth.sessionInfo(req.sessionToken),
     });
   });
@@ -316,6 +325,10 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
   api.post("/auth/reauth", async (req, res) => {
     const body = requireObject(req.body);
     const usePasskey = body.passkey !== undefined;
+    if (!usePasskey && !passwordLogin().active) {
+      passwordLoginDisabled(res, 403);
+      return;
+    }
     const result = usePasskey
       ? await auth.reauthWithPasskey(req.ip, req.sessionToken, () => passkeys.verifyReauth(body.passkey, req.sessionToken))
       : await auth.reauthWithPassword(req.ip, req.sessionToken, body.password);
@@ -329,10 +342,13 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
     sendAuthFailure(res, result, 400, usePasskey ? "passkey_failed" : "wrong_password");
   });
 
-  // 敏感操作要求会话在 5 分钟内登录或二次验证过，否则 403 reauth_required，页面据此弹出验证对话框后重试
+  // 敏感操作要求会话在 5 分钟内登录或二次验证过，否则 403 reauth_required，页面据此弹出验证对话框后重试；
+  // method 为 passkey 时还要求那一次用的是 passkey（响应中带 method，对话框只提供 passkey 验证）
+  const reauthRequired = (res, method) =>
+    res.status(403).json({ error: "reauth_required", ...(method ? { method } : {}), message: "需要再验证一次身份" });
   const requireRecentAuth = (req, res, next) => {
     if (!auth.isRecentlyVerified(req.sessionToken)) {
-      res.status(403).json({ error: "reauth_required" });
+      reauthRequired(res);
       return;
     }
     next();
@@ -367,6 +383,39 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
     res.status(204).end();
   });
 
+  // { enabled }：在设置中打开或关闭密码登录。关闭要求 5 分钟内用 passkey 验证过（确认它在当前域名下能用），
+  // 并且当前域名下至少有一个可用的 passkey；关闭后其他用密码登录的会话立即失效。打开只要求 5 分钟内验证过
+  api.patch("/auth/password-login", async (req, res) => {
+    const body = requireObject(req.body);
+    const unknown = Object.keys(body).filter((key) => key !== "enabled");
+    if (typeof body.enabled !== "boolean" || unknown.length > 0) {
+      throw badRequest("只能提交 { enabled: true | false }");
+    }
+    if (!body.enabled) {
+      if (passkeys.usableCount() === 0) {
+        throw new PanelError(409, "no_usable_passkey", "当前域名下没有可用的 passkey，添加后才能关闭密码登录");
+      }
+      if (!auth.isRecentlyVerified(req.sessionToken, "passkey")) {
+        reauthRequired(res, "passkey");
+        return;
+      }
+    } else if (!auth.isRecentlyVerified(req.sessionToken)) {
+      reauthRequired(res);
+      return;
+    }
+    await store.update((data) => {
+      data.auth.passwordLogin = body.enabled;
+    });
+    const state = passwordLogin();
+    if (body.enabled) {
+      console.info("已打开密码登录");
+    } else {
+      const ended = state.active ? 0 : auth.endPasswordSessions(req.sessionToken);
+      console.info(`已关闭密码登录${ended > 0 ? `，结束了用密码登录的 ${ended} 个会话` : ""}${state.forced ? "（PANEL_FORCE_PASSWORD_LOGIN 生效期间仍可用密码登录）" : ""}`);
+    }
+    res.json({ passwordLogin: state });
+  });
+
   api.post("/auth/logout", (req, res) => {
     auth.destroySession(req.sessionToken);
     res.clearCookie(SESSION_COOKIE, cookieOptions(req));
@@ -374,6 +423,10 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
   });
 
   api.post("/auth/password", async (req, res) => {
+    if (!passwordLogin().active) {
+      passwordLoginDisabled(res, 409);
+      return;
+    }
     const body = req.body || {};
     const result = await auth.changePassword(body.current, body.next);
     if (result.ok) {
@@ -707,6 +760,32 @@ async function migrateLegacySeleniumUrl(store) {
   console.warn(`没有设置 SELENIUM_URL，已把配置中的 Selenium 地址 ${LEGACY_SELENIUM_URL} 清空，改用内置浏览器`);
 }
 
+// 密码登录的状态。enabled：设置中是否打开；active：实际是否允许。设置中关闭后，以下情况仍然允许，避免把自己锁在外面：
+// 设置了 PANEL_FORCE_PASSWORD_LOGIN（forced），或当前域名下没有可用的 passkey（换了域名、去掉了 PANEL_PUBLIC_URL）。
+// reason 为设置中关闭、实际仍允许的原因（forced / no_usable_passkey），其他情况为 null
+function passwordLoginState(store, passkeys, forced = false) {
+  const enabled = store.get().auth.passwordLogin !== false;
+  const noPasskey = passkeys.usableCount() === 0;
+  const active = enabled || Boolean(forced) || noPasskey;
+  let reason = null;
+  if (!enabled && active) {
+    reason = forced ? "forced" : "no_usable_passkey";
+  }
+  return { enabled, active, forced: Boolean(forced), reason };
+}
+
+// 设置中关闭了密码登录、实际仍然允许时提示原因；PANEL_FORCE_PASSWORD_LOGIN 用完后应删掉
+function warnPasswordLogin(store, passkeys, forced) {
+  const state = passwordLoginState(store, passkeys, forced);
+  if (state.reason === "forced") {
+    console.warn("PANEL_FORCE_PASSWORD_LOGIN 已生效：密码登录在设置中已关闭，现在临时允许用密码登录。处理完后删掉这个变量并重启面板");
+  } else if (state.reason === "no_usable_passkey") {
+    console.warn("密码登录在设置中已关闭，但当前域名下没有可用的 passkey，暂时允许用密码登录；用密码登录后重新添加 passkey 即可恢复");
+  } else if (forced) {
+    console.warn("设置了 PANEL_FORCE_PASSWORD_LOGIN，但密码登录本来就是打开的，可以删掉这个变量");
+  }
+}
+
 // 已添加的 passkey 在当前地址下都用不了（PANEL_PUBLIC_URL 未设置、不是 HTTPS 或换了域名）时提示，密码登录不受影响
 function warnUnusablePasskeys(store, passkeys) {
   const total = store.get().auth.passkeys.length;
@@ -739,6 +818,7 @@ async function startPanel(options) {
     const generatedPassword = await auth.init();
     const passkeys = createPasskeys({ store, relyingParty: passkeyRelyingParty(options.publicUrl) });
     warnUnusablePasskeys(store, passkeys);
+    warnPasswordLogin(store, passkeys, options.forcePasswordLogin);
     restrictRunDirs(options.dataDir);
     markInterruptedRuns(options.dataDir);
     // 按保留策略清理截图与日志；进行中的运行不清理

@@ -3,9 +3,9 @@ import { ApiError, api } from "../api.js";
 import { state } from "../store.js";
 import { getPasskey, originMatches, passkeyErrorMessage, passkeySupported } from "../webauthn.js";
 
-// 二次验证：添加、删除 passkey 要求会话在 5 分钟内登录或验证过。接口返回 403 reauth_required 时
-// 弹出对话框，用密码或 passkey 验证后重试原请求
-const dialogState = reactive({ open: false });
+// 二次验证：添加、删除 passkey 与切换密码登录要求会话在 5 分钟内登录或验证过。接口返回 403 reauth_required 时
+// 弹出对话框，用密码或 passkey 验证后重试原请求。响应中 method 为 passkey 时（关闭密码登录）只能用 passkey 验证
+const dialogState = reactive({ open: false, passkeyOnly: false });
 let resolver = null;
 
 // 用户在对话框中取消了验证；调用方忽略它即可
@@ -32,6 +32,7 @@ export async function withReauth(action) {
     if (!(error instanceof ApiError) || error.code !== "reauth_required") {
       throw error;
     }
+    dialogState.passkeyOnly = error.data.method === "passkey";
   }
   dialogState.open = true;
   const ok = await new Promise((resolve) => {
@@ -53,6 +54,9 @@ function failureText(error) {
   if (error.code === "too_many_attempts") {
     return "尝试次数过多，请稍后再试";
   }
+  if (error.code === "password_login_disabled") {
+    return "密码登录已关闭，请用 passkey 验证";
+  }
   return error.message;
 }
 
@@ -67,6 +71,11 @@ export const ReauthDialog = {
     const canUsePasskey = computed(
       () => passkeySupported() && originMatches(state.session.passkey) && (props.passkeys || []).some((item) => item.usable)
     );
+    // 密码登录关闭时密码也不能用于二次验证
+    const canUsePassword = computed(
+      () => !dialogState.passkeyOnly && !(state.session.passwordLogin && state.session.passwordLogin.active === false)
+    );
+    const passkeyOrigin = computed(() => (state.session.passkey && state.session.passkey.origin) || "");
 
     watch(
       () => dialogState.open,
@@ -115,6 +124,9 @@ export const ReauthDialog = {
       error,
       busy,
       canUsePasskey,
+      canUsePassword,
+      passkeyOnly: computed(() => dialogState.passkeyOnly),
+      passkeyOrigin,
       verifyPassword: () => verify({ password: password.value }),
       verifyPasskey,
       cancel: () => finish(false),
@@ -124,9 +136,11 @@ export const ReauthDialog = {
     <dialog ref="dialog" class="reauth-dialog" @close="cancel">
       <article>
         <header><strong>确认身份</strong></header>
-        <p>添加或删除 passkey 前需要再验证一次身份，验证后 5 分钟内有效。</p>
+        <p v-if="passkeyOnly">关闭密码登录前需要用 passkey 验证一次，确认它在当前域名下能用；验证后 5 分钟内有效。</p>
+        <p v-else>这项操作需要再验证一次身份，验证后 5 分钟内有效。</p>
         <button v-if="canUsePasskey" type="button" :aria-busy="busy" :disabled="busy" @click="verifyPasskey">使用 passkey 验证</button>
-        <form @submit.prevent="verifyPassword">
+        <p v-else-if="!canUsePassword" class="muted">当前页面不能使用 passkey，请从 {{ passkeyOrigin }} 打开面板后再试。</p>
+        <form v-if="canUsePassword" @submit.prevent="verifyPassword">
           <label>面板密码<input type="password" v-model="password" autocomplete="current-password" required></label>
           <button type="submit" :class="{ secondary: canUsePasskey }" :disabled="busy">用密码验证</button>
         </form>

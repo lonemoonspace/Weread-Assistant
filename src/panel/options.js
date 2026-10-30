@@ -62,6 +62,15 @@ function parseTrustProxy(raw) {
   }
 }
 
+// 应急恢复：在设置中关闭了密码登录、又用不了 passkey 时，设置为 true 后重启面板，临时允许用密码登录（不修改设置）
+function parseForcePasswordLogin(raw) {
+  try {
+    return parseBooleanValue(raw, false, true);
+  } catch (_) {
+    throw new Error(`PANEL_FORCE_PASSWORD_LOGIN 只能是 true 或 false：${raw}`);
+  }
+}
+
 // 端口只从 PANEL_PORT 读取，与镜像健康检查保持一致；0（随机端口）只供测试直接调用 startPanel 时使用
 function parsePort(raw) {
   const port = parseIntegerValue(raw, "PANEL_PORT");
@@ -94,6 +103,7 @@ function panelOptionsFromEnv(env = process.env) {
     trustProxy: parseTrustProxy(env.PANEL_TRUST_PROXY),
     publicUrl: normalizePublicUrl(env.PANEL_PUBLIC_URL),
     password: env.PANEL_PASSWORD || "",
+    forcePasswordLogin: parseForcePasswordLogin(env.PANEL_FORCE_PASSWORD_LOGIN),
     dataDir: panelDataDirFromEnv(env),
     // 首次启动时写入全局默认配置，之后以面板中的设置为准
     seleniumUrl: env.SELENIUM_URL || "",

@@ -1,16 +1,19 @@
 import { getPasskey, originMatches, passkeyErrorMessage, passkeySupported } from "./app/webauthn.js";
 
-// 登录页：密码登录，以及面板提供 passkey 时的 passkey 登录。api() 来自 api.js
+// 登录页：密码登录，以及面板提供 passkey 时的 passkey 登录；密码登录关闭时只显示 passkey。api() 来自 api.js
 const form = document.getElementById("login-form");
 const message = document.getElementById("message");
 const passkeyBox = document.getElementById("passkey-login");
 const passkeyButton = document.getElementById("passkey-button");
 const passkeyHint = document.getElementById("passkey-hint");
+const passwordNote = document.getElementById("password-note");
 
 // 登录失败的提示：被限速时说明等待时间
 function showFailure({ status, retryAfter }, wrongText) {
   if (status === 429) {
     message.textContent = `尝试次数过多，请 ${retryAfter} 秒后再试`;
+  } else if (status === 403) {
+    message.textContent = "密码登录已关闭，请用 passkey 登录";
   } else if (status === 401) {
     message.textContent = retryAfter ? `${wrongText}，请 ${retryAfter} 秒后再试` : wrongText;
   } else {
@@ -71,7 +74,15 @@ async function loginWithPasskey() {
 
 passkeyButton.addEventListener("click", loginWithPasskey);
 
-// 面板提供 passkey 时显示按钮；页面不是从面板的外网地址打开时说明去哪里打开
+const RECOVERY_HINT = "丢失 passkey 时，设置环境变量 PANEL_FORCE_PASSWORD_LOGIN=true 并重启面板，临时用密码登录。";
+
+function showHint(text) {
+  passkeyHint.textContent = text;
+  passkeyHint.hidden = false;
+}
+
+// 面板提供 passkey 时显示按钮；页面不是从面板的外网地址打开时说明去哪里打开。
+// 密码登录关闭时隐藏密码表单，passkey 按钮改为主按钮；两种方式都用不了时说明应急恢复的办法
 async function setupPasskey() {
   let methods;
   try {
@@ -79,17 +90,33 @@ async function setupPasskey() {
   } catch (_) {
     return;
   }
-  const passkey = methods.status === 200 && methods.data.passkey;
+  if (methods.status !== 200) {
+    return;
+  }
+  const { passkey } = methods.data;
+  const passwordOff = methods.data.password === false;
+  if (passwordOff) {
+    form.hidden = true;
+    passwordNote.hidden = true;
+    passkeyButton.classList.remove("secondary");
+  }
   if (!passkey || !passkey.available) {
+    if (passwordOff) {
+      showHint(`密码登录已关闭。${RECOVERY_HINT}`);
+    }
     return;
   }
   if (!originMatches(passkey)) {
-    passkeyHint.textContent = `passkey 只能在 ${passkey.origin} 上使用。`;
-    passkeyHint.hidden = false;
+    showHint(passwordOff ? `密码登录已关闭，只能在 ${passkey.origin} 上用 passkey 登录。` : `passkey 只能在 ${passkey.origin} 上使用。`);
     return;
   }
   if (passkeySupported()) {
     passkeyBox.hidden = false;
+    if (passwordOff) {
+      passkeyButton.focus();
+    }
+  } else if (passwordOff) {
+    showHint(`密码登录已关闭，这个浏览器不支持 passkey。${RECOVERY_HINT}`);
   }
 }
 

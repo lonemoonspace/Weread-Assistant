@@ -260,13 +260,17 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
       return publicPasskey(renamed);
     },
 
-    // 返回删除的 passkey
+    // 返回删除的 passkey。密码登录已关闭时不能删除当前域名下最后一个可用的 passkey：
+    // 删掉后会自动重新允许密码登录，与关闭它的本意相反，需要先在设置中打开密码登录
     async remove(id) {
       let removed;
       await store.update((data) => {
         removed = data.auth.passkeys.find((item) => item.id === id);
         if (!removed) {
           throw notFound(id);
+        }
+        if (data.auth.passwordLogin === false && usable(removed) && data.auth.passkeys.filter(usable).length === 1) {
+          throw new PanelError(409, "last_passkey", "密码登录已关闭，不能删除最后一个可用的 passkey；先在设置中打开密码登录");
         }
         data.auth.passkeys = data.auth.passkeys.filter((item) => item.id !== id);
       });

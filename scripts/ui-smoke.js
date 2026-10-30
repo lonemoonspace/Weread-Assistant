@@ -551,7 +551,7 @@ function freePort() {
 }
 
 // 单独启动一个外网地址为 http://localhost:<端口>/ 的面板，用浏览器的虚拟认证器（支持可发现凭据与用户验证）
-// 走一遍：添加、改名、退出后用 passkey 登录、二次验证后删除；从 IP 地址打开时登录页说明去哪里用 passkey
+// 走一遍：添加、改名、退出后用 passkey 登录、关闭再打开密码登录、二次验证后删除；从 IP 地址打开时登录页说明去哪里用 passkey
 async function passkeys(h, driver, results) {
   const step = (name) => {
     results.push(name);
@@ -630,6 +630,45 @@ async function passkeys(h, driver, results) {
     assert.strictEqual(session.method, "passkey");
     step("passkey 登录：退出后在登录页用 passkey 登录");
 
+    // 关闭密码登录：确认后果后只能用 passkey 验证；之后登录页只剩 passkey
+    const passwordSwitch = () => driver.findElement(By.xpath("//label[contains(., '允许用面板密码登录')]/input"));
+    await h.go("#/settings");
+    await h.waitText(".passkey-table", "UI 测试设备");
+    await driver.sleep(3500);
+    await h.click(await passwordSwitch());
+    await driver.wait(until.alertIsPresent(), 5000);
+    const warning = await driver.switchTo().alert();
+    assert.match(await warning.getText(), /PANEL_FORCE_PASSWORD_LOGIN/);
+    await warning.accept();
+    const passkeyOnlyDialog = await h.waitFor("dialog.reauth-dialog[open]");
+    await h.waitText("dialog.reauth-dialog", "关闭密码登录前需要用 passkey 验证一次");
+    assert.strictEqual((await passkeyOnlyDialog.findElements(By.css("input[type=password]"))).length, 0, "只能用 passkey 验证");
+    await h.shot("04-reauth-passkey");
+    await h.clickButton("使用 passkey 验证", passkeyOnlyDialog);
+    await h.waitText(".notice", "已关闭密码登录");
+    assert.strictEqual(await (await passwordSwitch()).isSelected(), false);
+    await h.waitText("main", "密码登录已关闭，打开后才能修改密码");
+    await h.click(await h.waitText("header nav a", "退出"));
+    await driver.wait(async () => (await h.waitFor("#passkey-login")).isDisplayed(), 10000, "应显示 passkey 登录按钮");
+    assert.strictEqual(await (await h.waitFor("#login-form")).isDisplayed(), false, "密码登录关闭后不显示密码表单");
+    await h.shot("05-login-passkey-only");
+    await h.click(await h.waitFor("#passkey-button"));
+    await h.waitText("main", "还没有账号");
+    step("关闭密码登录：确认后用 passkey 验证，登录页只剩 passkey，修改密码隐藏");
+
+    // 打开密码登录：密码登录关闭期间只能用 passkey 验证
+    await h.go("#/settings");
+    await h.waitText(".passkey-table", "UI 测试设备");
+    await driver.sleep(3500);
+    await h.click(await passwordSwitch());
+    const reopenDialog = await h.waitFor("dialog.reauth-dialog[open]");
+    assert.strictEqual((await reopenDialog.findElements(By.css("input[type=password]"))).length, 0, "密码登录关闭时不能用密码验证");
+    await h.clickButton("使用 passkey 验证", reopenDialog);
+    await h.waitText(".notice", "已打开密码登录");
+    assert.strictEqual(await (await passwordSwitch()).isSelected(), true);
+    await h.waitText("main", "再次输入新密码");
+    step("打开密码登录：用 passkey 验证后恢复，修改密码表单重新出现");
+
     await h.go("#/settings");
     await h.waitText(".passkey-table", "UI 测试设备");
     // 等二次验证过期，删除时弹出验证对话框，用 passkey 验证后完成删除
@@ -646,9 +685,9 @@ async function passkeys(h, driver, results) {
     assert.strictEqual((await driver.findElements(By.css("dialog.reauth-dialog[open]"))).length, 0, "验证后对话框关闭");
     step("二次验证：超过有效期后删除 passkey 时弹出验证对话框，用 passkey 验证后完成删除");
 
-    // 需要二次验证时接口返回 403、验证密码错误时返回 400，浏览器会记请求失败；只允许这两种
+    // 需要二次验证时接口返回 403（添加、删除 passkey 与切换密码登录）、验证密码错误时返回 400，浏览器会记请求失败；只允许这两种
     const errors = (await h.consoleErrors()).filter(
-      (line) => !/api\/auth\/passkeys\S* .*403/.test(line) && !/api\/auth\/reauth .*400/.test(line)
+      (line) => !/api\/auth\/(passkeys|password-login)\S* .*403/.test(line) && !/api\/auth\/reauth .*400/.test(line)
     );
     assert.deepStrictEqual(errors, [], `浏览器控制台不应有错误或警告：\n${errors.join("\n")}`);
   } finally {
