@@ -54,8 +54,10 @@ function parsePasswordHash(storedHash) {
   const params = { N: Number(N), r: Number(r), p: Number(p) };
   const salt = Buffer.from(saltB64, "base64");
   const key = Buffer.from(keyB64, "base64");
-  // N 必须是 2 的幂；内存占用（128 * N * r）超过 SCRYPT_MAXMEM 时 scrypt 会抛出错误，这里一并视为无效
-  if ((params.N & (params.N - 1)) !== 0 || 128 * params.N * params.r > SCRYPT_MAXMEM || params.p > 16) {
+  // N 必须是大于 1 的 2 的幂；内存占用（OpenSSL 按 128 * r * (N + p + 2) 计算）超过 SCRYPT_MAXMEM 时
+  // scrypt 会抛出错误，这里一并视为无效，避免面板能启动却任何密码都校验不过
+  const { N: n, r: blockSize, p: parallel } = params;
+  if (n < 2 || (n & (n - 1)) !== 0 || parallel > 16 || 128 * blockSize * (n + parallel + 2) > SCRYPT_MAXMEM) {
     return null;
   }
   if (salt.length < 8 || key.length !== KEY_LENGTH) {

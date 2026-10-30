@@ -124,7 +124,8 @@ async function recoverFinished(accountId, run) {
 let source = null;
 let retryTimer = null;
 let idleTimer = null;
-// 服务端每 15 秒发送一次心跳；这段时间内什么都没收到时认为连接已经半开（代理静默丢包、休眠唤醒），主动重连
+// 服务端每 15 秒发送一次心跳 ping（server.js 的 SSE_HEARTBEAT_MS），这里取它的 3 倍：这段时间内什么都没收到时
+// 认为连接已经半开（代理静默丢包、休眠唤醒），主动重连。修改心跳间隔时同步修改这里
 const EVENTS_IDLE_MS = 45000;
 
 function resetIdleTimer() {

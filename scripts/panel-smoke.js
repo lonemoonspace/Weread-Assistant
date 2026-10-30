@@ -365,6 +365,9 @@ async function main() {
         `scrypt$notanumber$8$1$${salt}$${key}`,
         `scrypt$1000$8$1$${salt}$${key}`,
         `scrypt$1048576$64$1$${salt}$${key}`,
+        // N=1、内存占用刚好超过上限：scrypt 会拒绝这些参数，不能让面板启动后任何密码都校验不过
+        `scrypt$1$8$1$${salt}$${key}`,
+        `scrypt$65536$8$1$${salt}$${key}`,
         `scrypt$16384$8$1$!!$${key}`,
       ]) {
         assert.strictEqual(await verifyPassword("anything", bad), false, bad);
@@ -375,6 +378,8 @@ async function main() {
 
       const dataDir = tempDir();
       fs.writeFileSync(path.join(dataDir, "panel.json"), JSON.stringify({ version: 1, auth: { passwordHash: "scrypt$16384$8$1$$" } }), { mode: 0o600 });
+      await assert.rejects(start({ dataDir }), /密码哈希（auth\.passwordHash）无效/);
+      fs.writeFileSync(path.join(dataDir, "panel.json"), JSON.stringify({ version: 1, auth: { passwordHash: `scrypt$65536$8$1$${salt}$${key}` } }), { mode: 0o600 });
       await assert.rejects(start({ dataDir }), /密码哈希（auth\.passwordHash）无效/);
       // 设置 PANEL_PASSWORD 时以它为准，可以照常启动
       const panel = await start({ dataDir, password: "correct-horse" });

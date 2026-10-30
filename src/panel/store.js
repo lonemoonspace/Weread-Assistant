@@ -45,7 +45,7 @@ function parseData(text) {
 function normalizeData(raw, seedDefaults) {
   const { settings, invalid } = sanitizeSettings(raw.settings || {});
   if (invalid.length > 0) {
-    const values = invalid.map((key) => `${key}=${JSON.stringify(raw.settings[key])}`).join(", ");
+    const values = invalid.map((key) => `${key}=${JSON.stringify((raw.settings || {})[key])}`).join(", ");
     console.warn(`panel.json 中的设置取值无效，已恢复默认值：${values}`);
   }
   return {

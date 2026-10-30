@@ -31,7 +31,9 @@ export const HistoryTab = {
         runs.value = more ? [...runs.value, ...data.runs] : data.runs;
         nextBefore.value = data.nextBefore;
       } catch (error) {
-        notify(error.message, "error");
+        if (request === latest) {
+          notify(error.message, "error");
+        }
       } finally {
         if (request === latest) {
           loading.value = false;
