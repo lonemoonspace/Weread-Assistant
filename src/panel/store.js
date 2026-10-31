@@ -151,7 +151,7 @@ function createStore(dataDir, { seedDefaults = {}, readOnly = false } = {}) {
     restored = true;
     console.warn(`${filePath} 不存在，改用上一版 ${backupPath}`);
   } else {
-    fs.mkdirSync(dataDir, { recursive: true });
+    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   }
 
   let data = normalizeData(raw, seedDefaults);

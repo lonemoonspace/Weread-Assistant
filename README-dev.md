@@ -10,9 +10,10 @@ npm install
 # 本机 PATH 中有 chromedriver 与 chromium-browser / chromium 时直接使用（也可用 CHROMEDRIVER_PATH、CHROME_BIN 指定）
 npm start
 
-# 或连接 Selenium（Chromium 在容器中运行，http://localhost:7900/ 可查看画面，VNC 默认密码 secret；
-# 在面板设置中填写该地址后，总览会显示 noVNC 链接）。SELENIUM_URL 只在首次启动时写入面板的全局配置，之后在面板中修改
-docker run -d --name selenium -p 4444:4444 -p 127.0.0.1:7900:7900 --shm-size 2g selenium/standalone-chromium:4.51.0-20261010
+# 或连接 Selenium（Chromium 在容器中运行，http://localhost:7900/ 可查看画面；在面板设置中填写该地址后，总览会显示 noVNC 链接）。
+# 两个端口都只绑定本机：Selenium 没有认证，能访问 4444 的人都可以驱动这个浏览器；用 SE_VNC_PASSWORD 改掉默认的 VNC 密码。
+# SELENIUM_URL 只在首次启动时写入面板的全局配置，之后在面板中修改
+docker run -d --name selenium -p 127.0.0.1:4444:4444 -p 127.0.0.1:7900:7900 -e SE_VNC_PASSWORD=换成你的密码 --shm-size 2g selenium/standalone-chromium:4.51.0-20261010
 SELENIUM_URL=http://localhost:4444 npm start
 
 # 用 Docker 启动面板：docker-compose.yml 只拉取发布的镜像，测试本地改动时先构建同名镜像

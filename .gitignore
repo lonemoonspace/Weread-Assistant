@@ -2,3 +2,5 @@ node_modules/
 data/
 .env
 .env.local
+# 本地测试用的 chromedriver
+chromedriver/

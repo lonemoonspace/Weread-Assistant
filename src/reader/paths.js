@@ -17,9 +17,10 @@ function getDataPaths(config, { screenshotDir } = {}) {
   };
 }
 
+// 新建的目录只有属主可访问（0700），其中有账号与运行目录、面板设置与日志；已有的目录不改权限
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
 }
 

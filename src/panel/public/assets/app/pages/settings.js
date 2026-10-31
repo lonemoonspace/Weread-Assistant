@@ -189,11 +189,13 @@ export const SettingsPage = {
 
     async function saveRename() {
       try {
-        await api(`auth/passkeys/${encodeURIComponent(editing.id)}`, { method: "PATCH", body: { name: editing.name } });
+        await withReauth(() => api(`auth/passkeys/${encodeURIComponent(editing.id)}`, { method: "PATCH", body: { name: editing.name } }));
         Object.assign(editing, { id: "", name: "" });
         await loadPasskeys();
       } catch (error) {
-        notify(error.message, "error");
+        if (!(error instanceof ReauthCancelled)) {
+          notify(error.message, "error");
+        }
       }
     }
 

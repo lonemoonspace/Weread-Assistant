@@ -174,9 +174,11 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
   }
 
   // verify() 校验凭据（密码或 passkey），成功时返回真值。被限速时不调用；失败计入限速。
-  // 成功后该 IP 不再受全局暂停影响（登录与二次验证都经过这里）
-  async function attempt(ip, verify) {
-    const wait = retryAfterMs(ip);
+  // 成功后该 IP 不再受全局暂停影响（登录与二次验证都经过这里）。
+  // global 为 false 时只按 IP 限速、不受全局暂停影响：全局暂停是为分散在多个 IP 上的密码猜测设的，
+  // passkey 无法被猜中，二次验证需要已登录的会话，暂停它们只会把管理员挡在外面
+  async function attempt(ip, verify, { global = true } = {}) {
+    const wait = retryAfterMs(ip, { global });
     if (wait > 0) {
       return { ok: false, locked: true, retryAfterMs: wait };
     }
@@ -187,16 +189,16 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
       return { ok: true, result };
     }
     recordFailure(ip);
-    return { ok: false, retryAfterMs: retryAfterMs(ip) };
+    return { ok: false, retryAfterMs: retryAfterMs(ip, { global }) };
   }
 
   const checkPassword = (password) => typeof password === "string" && password.length > 0 && verifyPassword(password, currentHash());
 
-  function retryAfterMs(ip) {
+  function retryAfterMs(ip, { global = true } = {}) {
     const t = now();
     const record = attempts.get(ip);
     const ipWait = record && record.lockedUntil > t ? record.lockedUntil - t : 0;
-    const globalWait = globalLockedUntil > t && !isTrusted(ip, t) ? globalLockedUntil - t : 0;
+    const globalWait = global && globalLockedUntil > t && !isTrusted(ip, t) ? globalLockedUntil - t : 0;
     return Math.max(ipWait, globalWait);
   }
 
@@ -249,7 +251,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     if (!activeSession(token)) {
       return { ok: false, retryAfterMs: 0 };
     }
-    const outcome = await attempt(ip, verify);
+    const outcome = await attempt(ip, verify, { global: false });
     if (!outcome.ok) {
       return outcome;
     }
@@ -305,13 +307,13 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     // passkey 登录。verify() 校验成功时返回所用的 passkey，失败返回 null；失败与密码错误一样计入限速。
     // 返回 { ok: true, token, passkey } 或与 login 相同的失败结果
     async loginWithPasskey(ip, verify) {
-      const outcome = await attempt(ip, verify);
+      const outcome = await attempt(ip, verify, { global: false });
       return outcome.ok ? { ok: true, token: createSession("passkey", outcome.result.id), passkey: outcome.result } : outcome;
     },
 
-    // 距离解除限速的毫秒数，0 表示没有被限速；未登录申请 passkey 登录参数时检查
-    loginRetryAfterMs(ip) {
-      return retryAfterMs(ip);
+    // 距离解除限速的毫秒数，0 表示没有被限速；未登录申请 passkey 登录参数时检查（与 passkey 登录一样不受全局暂停影响）
+    passkeyRetryAfterMs(ip) {
+      return retryAfterMs(ip, { global: false });
     },
 
     // 二次验证：用密码或 passkey 再次确认身份，成功后会话在二次验证的有效期内（默认 5 分钟）可以进行敏感操作。

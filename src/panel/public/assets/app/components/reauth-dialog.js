@@ -3,7 +3,7 @@ import { ApiError, api } from "../api.js";
 import { state } from "../store.js";
 import { getPasskey, originMatches, passkeyErrorMessage, passkeySupported } from "../webauthn.js";
 
-// 二次验证：添加、删除 passkey 与切换密码登录要求会话在 5 分钟内登录或验证过。接口返回 403 reauth_required 时
+// 二次验证：添加、改名、删除 passkey 与切换密码登录要求会话在 5 分钟内登录或验证过。接口返回 403 reauth_required 时
 // 弹出对话框，用密码或 passkey 验证后重试原请求。响应中 method 为 passkey 时（关闭密码登录）只能用 passkey 验证
 const dialogState = reactive({ open: false, passkeyOnly: false });
 let resolver = null;

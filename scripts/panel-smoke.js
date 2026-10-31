@@ -384,6 +384,87 @@ async function main() {
       assert.strictEqual((await login(panel, "correct-horse", { "X-Forwarded-For": "198.51.100.99" })).status, 204);
     });
 
+    await scenario("全局暂停只挡密码登录：passkey 登录与已登录会话的二次验证照常可用，仍按 IP 限速", async () => {
+      const panel = await startAuthed({
+        publicUrl: PASSKEY_URL,
+        trustProxy: 1,
+        limits: { globalMaxFailures: 3, globalWindowMs: 60000, lockoutBaseMs: 60000 },
+      });
+      const authenticator = await addPasskey(panel);
+      for (let i = 1; i <= 3; i += 1) {
+        await login(panel, "wrong", { "X-Forwarded-For": `198.51.100.${i}` });
+      }
+      const fresh = { "X-Forwarded-For": "203.0.113.50" };
+      assert.strictEqual((await login(panel, "correct-horse", fresh)).status, 429, "未登录过的 IP 不能用密码登录");
+      const options = await panel.request("api/auth/passkey/options", { method: "POST", body: { purpose: "login" }, headers: { ...CSRF, ...fresh } });
+      assert.strictEqual(options.status, 200, "暂停期间仍可申请 passkey 登录参数");
+      const loggedIn = await panel.request("api/auth/passkey/login", {
+        method: "POST",
+        body: { response: authenticator.assert(options.json) },
+        headers: { ...CSRF, ...fresh },
+      });
+      assert.strictEqual(loggedIn.status, 204, "暂停期间仍可用 passkey 登录");
+      const cookie = sessionCookie(loggedIn);
+      // 已登录的会话换到另一个 IP 后仍可二次验证
+      const elsewhere = { ...CSRF, "X-Forwarded-For": "203.0.113.51" };
+      const reauth = await panel.request("api/auth/reauth", { method: "POST", cookie, body: { password: "correct-horse" }, headers: elsewhere });
+      assert.strictEqual(reauth.status, 204);
+      // 按 IP 的限速仍然生效
+      const attacker = { "X-Forwarded-For": "203.0.113.60" };
+      for (let i = 0; i < 5; i += 1) {
+        const bad = await panel.request("api/auth/passkey/options", { method: "POST", body: { purpose: "login" }, headers: { ...CSRF, ...attacker } });
+        await panel.request("api/auth/passkey/login", {
+          method: "POST",
+          body: { response: authenticator.assert(bad.json, { badSignature: true }) },
+          headers: { ...CSRF, ...attacker },
+        });
+      }
+      assert.strictEqual(
+        (await panel.request("api/auth/passkey/options", { method: "POST", body: { purpose: "login" }, headers: { ...CSRF, ...attacker } })).status,
+        429
+      );
+    });
+
+    await scenario("会话 cookie：在 https 的 PANEL_PUBLIC_URL 域名下访问时总带 Secure 并下发 HSTS，内网 IP 经 HTTP 访问时不带", async () => {
+      const panel = await start({ password: "correct-horse", publicUrl: "https://Panel.Example.com/weread/", basePath: "/weread/" });
+      const viaHost = (host) =>
+        new Promise((resolve, reject) => {
+          const body = JSON.stringify({ password: "correct-horse" });
+          const req = http.request(
+            {
+              host: "127.0.0.1",
+              port: panel.port,
+              path: "/weread/api/auth/login",
+              method: "POST",
+              headers: { Host: host, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body), ...CSRF },
+            },
+            (res) => {
+              res.resume();
+              res.on("end", () => resolve(res));
+            }
+          );
+          req.on("error", reject);
+          req.end(body);
+        });
+      const proxied = await viaHost("panel.example.com.");
+      assert.strictEqual(proxied.statusCode, 204);
+      assert.match(proxied.headers["set-cookie"].join(";"), /;\s*Secure/i);
+      assert.strictEqual(proxied.headers["strict-transport-security"], "max-age=15552000");
+      const lan = await viaHost("192.168.1.20:26868");
+      assert.strictEqual(lan.statusCode, 204);
+      assert.doesNotMatch(lan.headers["set-cookie"].join(";"), /Secure/i);
+      assert.strictEqual(lan.headers["strict-transport-security"], undefined);
+    });
+
+    await scenario("同名 cookie：其他应用设置的 wa_session 顶不掉真实会话", async () => {
+      const panel = await start({ password: "correct-horse" });
+      const real = sessionCookie(await login(panel, "correct-horse"));
+      for (const cookie of [`wa_session=forged; ${real}`, `${real}; wa_session=forged`, `wa_session=%E0%A4%A; ${real}`]) {
+        assert.strictEqual((await panel.request("api/auth/session", { cookie })).status, 200, cookie);
+      }
+      assert.strictEqual((await panel.request("api/auth/session", { cookie: "wa_session=forged; wa_session=other" })).status, 401);
+    });
+
     await scenario("密码哈希被改坏时：任何密码都不能通过、不会抛出；面板拒绝启动并说明恢复办法", async () => {
       const key = Buffer.alloc(64, 1).toString("base64");
       const salt = Buffer.alloc(16, 2).toString("base64");
@@ -712,8 +793,10 @@ async function main() {
       assert.strictEqual(expired.status, 403);
       assert.strictEqual(expired.json.error, "reauth_required");
       assert.strictEqual((await panel.call("DELETE", `api/auth/passkeys/${authenticator.id}`)).status, 403);
-      // 改名不需要二次验证
-      assert.strictEqual((await panel.call("PATCH", `api/auth/passkeys/${authenticator.id}`, { name: "新名字" })).status, 200);
+      // 改名同样需要二次验证
+      const rename = await panel.call("PATCH", `api/auth/passkeys/${authenticator.id}`, { name: "新名字" });
+      assert.strictEqual(rename.status, 403);
+      assert.strictEqual(rename.json.error, "reauth_required");
 
       // 密码：错误时 400（不是 401，页面不会当作会话失效），正确后可以添加
       const wrong = await panel.call("POST", "api/auth/reauth", { password: "wrong" });
@@ -722,6 +805,7 @@ async function main() {
       assert.strictEqual((await panel.call("POST", "api/auth/reauth", { password: "correct-horse" })).status, 204);
       assert.ok(Date.parse((await panel.call("GET", "api/auth/session")).json.verifiedUntil) > Date.now());
       assert.strictEqual((await panel.call("POST", "api/auth/passkeys/options")).status, 200);
+      assert.strictEqual((await panel.call("PATCH", `api/auth/passkeys/${authenticator.id}`, { name: "新名字" })).status, 200);
 
       // passkey：参数只列出可用的 passkey，challenge 绑定申请它的会话
       await new Promise((resolve) => setTimeout(resolve, 350));
@@ -1016,6 +1100,11 @@ async function main() {
       assert.strictEqual(page.headers.get("x-content-type-options"), "nosniff");
       assert.strictEqual(page.headers.get("x-powered-by"), null);
       assert.strictEqual((await panel.request("api/auth/session")).headers.get("cache-control"), "no-store");
+      // 页面是否可见取决于会话：主页面与登录页都不缓存；经 HTTP 访问时不发 HSTS
+      assert.strictEqual(index.headers.get("cache-control"), "no-store");
+      assert.strictEqual(page.headers.get("cache-control"), "no-store");
+      assert.strictEqual(page.headers.get("strict-transport-security"), null);
+      assert.match((await panel.request("assets/app/main.js")).headers.get("cache-control"), /max-age/, "静态文件照常缓存");
     });
 
     await scenario("全局设置与默认配置：校验取值、整体生效或整体不生效、null 恢复默认", async () => {
@@ -1088,6 +1177,13 @@ async function main() {
         assert.strictEqual((await panel.call("POST", "api/accounts", { id })).status, 400, id);
       }
       assert.strictEqual((await panel.call("POST", "api/accounts", { id: "long", name: "名".repeat(33) })).status, 400);
+      // 名称会进入推送标题与日志：换行、控制字符与文字方向控制符都拒绝
+      for (const name of ["我\r\n伪造", "a\u0000b", "abc\u202Efdp"]) {
+        const bad = await panel.call("POST", "api/accounts", { id: "ctrl", name });
+        assert.strictEqual(bad.status, 400, JSON.stringify(name));
+        assert.match(bad.json.message, /账号名称不能包含换行/);
+      }
+      assert.strictEqual((await panel.call("PATCH", "api/accounts/me", { name: "我\n你" })).status, 400);
       assert.strictEqual((await panel.call("POST", "api/accounts", "null")).status, 400);
       const typo = await panel.call("POST", "api/accounts", { id: "typo", nmae: "拼错" });
       assert.deepStrictEqual([typo.status, typo.json.message], [400, "不支持的字段：nmae"]);

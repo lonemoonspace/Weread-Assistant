@@ -2,6 +2,34 @@
 
 版本号与 `package.json` 一致；推送 `v<版本号>` tag 时，发布流程把对应一节作为 GitHub Release 的说明。
 
+## 未发布
+
+修复 2026-10-31 安全审阅（#30）中核实的问题。
+
+升级说明：
+
+- 执行 `docker compose pull && docker compose up -d` 即可，`docker-compose.yml` 与数据目录无需改动
+- 给 passkey 改名现在也需要 5 分钟内登录或二次验证过，与添加、删除一致
+
+安全：
+
+- 登录的全局失败上限触发后，换了 IP 的管理员连 passkey 也登录不了；现在全局暂停只挡密码登录，passkey 登录（含申请登录参数）与已登录会话的二次验证不受影响，仍按 IP 限速
+- 设置了 https 的 `PANEL_PUBLIC_URL`、但没有设置 `PANEL_TRUST_PROXY` 时，会话 cookie 不带 `Secure`；现在在该域名下访问时总带 `Secure`，并下发 HSTS（`max-age=15552000`，不含子域名）。用内网 IP 经 HTTP 打开时照旧，仍可用密码登录
+- 面板主页面与登录页返回 `Cache-Control: no-store`
+- 请求带多个名为 `wa_session` 的 cookie 时取第一个有效的，同主机其他应用设置的同名 cookie 不能再把登录态顶掉
+- 账号名称不能再包含换行、控制字符与文字方向控制符（与 passkey 名称一致），避免打乱推送标题与日志
+- ntfy 服务器地址不是 `http://` 或 `https://` 时不发送（与 Bark 一致）
+- 新建的数据目录权限为 0700（已有目录不改）
+
+镜像：
+
+- 入口脚本不再递归改写整个数据目录的属主：只处理数据目录本身与面板写入的 `panel.json`、`panel.json.bak`、`panel.lock`、`panel.log`、`accounts/`、`runs/`，用户自己放进去的文件不改
+- `npm ci` 加 `--ignore-scripts`，构建时不以 root 运行依赖的安装脚本（当前依赖都没有安装脚本）
+
+文档：
+
+- 开发文档中的 Selenium 示例把 4444 端口也只绑定本机，并提示用 `SE_VNC_PASSWORD` 修改默认 VNC 密码
+
 ## 0.3.0
 
 面板支持 passkey 登录：用手机或电脑的指纹、面容、PIN 登录，不用输入密码，也不会被钓鱼网站骗走。默认密码登录照常可用；添加 passkey 后可以在设置中关闭密码登录。另外修复了 2026-10-30 代码审阅中核实的问题。

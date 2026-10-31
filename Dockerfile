@@ -13,7 +13,8 @@ RUN apk add --no-cache su-exec tini chromium chromium-chromedriver font-wqy-zenh
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# 生产依赖都不需要安装脚本：不运行，避免以 root 执行依赖中的代码
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY src ./src
 COPY docker-entrypoint.sh /usr/local/bin/weread-entrypoint.sh
 RUN chmod 755 /usr/local/bin/weread-entrypoint.sh

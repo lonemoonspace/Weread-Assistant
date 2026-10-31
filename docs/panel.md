@@ -374,19 +374,19 @@ data/
 | `PANEL_PUBLIC_URL` | 必须设置为面板的 HTTPS 地址（本机调试时可以是 `http://localhost:<端口>/`）。passkey 绑定这个地址的域名（RP ID）与 origin，二者只取自该变量，不按请求的 Host 推断；域名末尾的点会去掉（`https://example.com./` 按 `https://example.com` 提供）。没有设置、不是 HTTPS 或是 IP 地址时不提供 passkey，设置页说明原因，已添加的仍可查看与删除 |
 | 打开面板的地址 | 只能在 `PANEL_PUBLIC_URL` 的地址上用 passkey，用内网 IP 或其他域名打开时只能用密码登录（登录页给出提示） |
 | 子路径 | 部署在子路径下（`PANEL_BASE_PATH`）不影响 passkey，域名相同即可 |
-| 反向代理 | 建议设置 `PANEL_TRUST_PROXY`，使会话 cookie 带 `Secure`，并按真实客户端 IP 限速 |
+| 反向代理 | 建议设置 `PANEL_TRUST_PROXY`，按真实客户端 IP 限速（经 https 的 `PANEL_PUBLIC_URL` 访问时会话 cookie 总会带 `Secure`） |
 | 更换域名 | 已添加的 passkey 只在添加时的域名下可用：更换域名后它们在设置页标为“当前域名不可用”，启动日志给出提示，需要用密码登录后重新添加，并删除旧的 |
 
 使用方法：在“设置 → 登录方式”中填写名称（例如“我的 iPhone”）后点“添加 passkey”，按浏览器提示验证；之后登录页出现“使用 passkey 登录”。最多添加 20 个。
 
 | 规则 | 说明 |
 | --- | --- |
-| 二次验证 | 添加、删除 passkey 与切换密码登录要求当前会话在 5 分钟内登录或二次验证过，否则先用 passkey 或密码再验证一次；改名不需要 |
+| 二次验证 | 添加、改名、删除 passkey 与切换密码登录要求当前会话在 5 分钟内登录或二次验证过，否则先用 passkey 或密码再验证一次 |
 | 验证要求 | 要求可发现凭据（登录时不用输入用户名）与用户验证（指纹、面容或 PIN）；不要求证明设备型号（attestation 为 none）；算法为 EdDSA、ES256、RS256 |
 | challenge | 只保存在内存中，5 分钟内有效、只能使用一次，只能用于申请时的用途；二次验证与添加还绑定申请时的会话。登录用的与二次验证、添加用的分开存放，各自同时有效的最多 100 个，超出时丢弃最早的；登录用的同一 IP 最多 5 个，超出时丢弃它自己最早的，未登录的请求挤不掉二次验证与添加用的。面板重启后需重新发起 |
 | 签名计数 | 每次登录记录认证器返回的签名计数，计数不增反减时拒绝（同步的 passkey 计数始终为 0，不受影响） |
 | 删除 | 删除 passkey 后，用它登录的其他会话立即失效；修改面板密码时所有会话失效，与登录方式无关 |
-| 限速 | passkey 登录与二次验证的失败同样计入登录限速 |
+| 限速 | passkey 登录与二次验证的失败同样计入按 IP 的登录限速；它们不受全局暂停影响（见“安全”中的登录限速） |
 | 备份 | `panel.json` 中只有公钥，泄露后不能用来登录；从备份恢复 `panel.json` 时 passkey 与“允许密码登录”的设置一并恢复 |
 
 #### 关闭密码登录
@@ -417,16 +417,16 @@ data/
 | 项目 | 做法 |
 | --- | --- |
 | 密码 | scrypt（N=16384, r=8, p=1）加盐哈希，比较使用定长时间比较；新密码至少 8 位 |
-| 会话 | 32 字节随机令牌；cookie `wa_session` 为 `HttpOnly`、`SameSite=Strict`，HTTPS 时加 `Secure`，`Path` 为面板子路径；7 天滑动过期，从登录起最长 30 天，cookie 最多每小时重新下发一次 |
+| 会话 | 32 字节随机令牌；cookie `wa_session` 为 `HttpOnly`、`SameSite=Strict`，经 HTTPS 访问或在 https 的 `PANEL_PUBLIC_URL` 的域名下访问时加 `Secure`（不依赖 `PANEL_TRUST_PROXY`，代理需转发 `Host`），`Path` 为面板子路径；请求带多个同名 cookie 时取第一个有效的，同主机其他应用设置的同名 cookie 顶不掉真实会话；7 天滑动过期，从登录起最长 30 天，cookie 最多每小时重新下发一次 |
 | passkey | 公钥签名验证，域名与 origin 只取自 `PANEL_PUBLIC_URL`，要求用户验证；见上文“passkey” |
-| 二次验证 | 添加、删除 passkey 与切换密码登录要求 5 分钟内登录或二次验证过，防止被他人借用已登录的浏览器添加自己的 passkey 或打开密码登录；关闭密码登录要求用 passkey 验证 |
+| 二次验证 | 添加、改名、删除 passkey 与切换密码登录要求 5 分钟内登录或二次验证过，防止被他人借用已登录的浏览器添加自己的 passkey、打开密码登录或改名误导；关闭密码登录要求用 passkey 验证 |
 | 关闭密码登录 | 可选，见上文“关闭密码登录”；关闭后密码泄露也不能用来登录 |
-| 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；所有 IP 在 15 分钟内累计失败 100 次后暂停 15 分钟，暂停期间只有本次启动以来、最近 30 天内登录或二次验证成功过的 IP 可以登录（仍按 IP 限速），未认证的请求不能借此挡住这些 IP；这份名单与暂停都只在内存中，面板重启后或管理员换了 IP 时仍可能被暂停挡住，重启面板即解除。密码与 passkey 的登录、二次验证以及修改密码时的当前密码共用同一套失败计数与锁定（按 IP 计数，也计入全局上限） |
+| 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；所有 IP 在 15 分钟内累计失败 100 次后暂停 15 分钟，暂停期间只有本次启动以来、最近 30 天内登录或二次验证成功过的 IP 可以用密码登录（仍按 IP 限速），未认证的请求不能借此挡住这些 IP；passkey 登录（含申请登录参数）与已登录会话的二次验证不受暂停影响，只按 IP 限速：passkey 猜不中，暂停只为分散的密码猜测而设。这份名单与暂停都只在内存中，面板重启后或管理员换了 IP 时密码登录仍可能被暂停挡住，用 passkey 登录或重启面板即可。密码与 passkey 的登录、二次验证以及修改密码时的当前密码共用同一套失败计数与锁定（按 IP 计数，也计入全局上限） |
 | 密码哈希 | `panel.json` 中的哈希格式或参数无效（例如被手工改坏）时拒绝启动并提示恢复办法，校验时一律不通过 |
 | 跨站请求伪造 | 修改类请求必须带 `X-WA-Request: 1` 请求头且为 JSON，配合 `SameSite=Strict` |
-| 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`、`Permissions-Policy`（关闭摄像头、麦克风、定位等用不到的能力）；接口响应 `Cache-Control: no-store` |
-| 文件 | `panel.json` 权限 0600，已有文件在启动时收紧；账号数据目录 0700，`cookies.json` 与登录二维码图片 0600（等同于登录状态）；初始密码不写入日志文件 |
-| 容器 | 面板进程以 `node` 用户运行：入口脚本以 root 把数据目录中不属于 `node` 的文件改过来后再降权。镜像的 `HEALTHCHECK` 由 Docker 以镜像默认用户（root）执行，只请求本机的 `/healthz`，不读写数据目录 |
+| 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`、`Permissions-Policy`（关闭摄像头、麦克风、定位等用不到的能力）；经 HTTPS 访问时（判断方式与会话 cookie 的 `Secure` 相同）`Strict-Transport-Security: max-age=15552000`（不含子域名）；接口响应与面板主页面、登录页 `Cache-Control: no-store` |
+| 文件 | 新建的数据目录 0700（已有的不改）；`panel.json` 权限 0600，已有文件在启动时收紧；账号数据目录 0700，`cookies.json` 与登录二维码图片 0600（等同于登录状态）；初始密码不写入日志文件 |
+| 容器 | 面板进程以 `node` 用户运行：入口脚本以 root 把数据目录本身与面板写入的 `panel.json`、`panel.json.bak`、`panel.lock`、`panel.log`、`accounts/`、`runs/` 中不属于 `node` 的改过来后再降权，数据目录中的其他文件不改。镜像的 `HEALTHCHECK` 由 Docker 以镜像默认用户（root）执行，只请求本机的 `/healthz`，不读写数据目录 |
 
 ### 反向代理
 
@@ -454,7 +454,7 @@ location /weread/api/events {
 | 注意事项 | 说明 |
 | --- | --- |
 | 代理层数 | `PANEL_TRUST_PROXY` 填面板前面的代理层数。面板取 `X-Forwarded-For` 中从右往左数第 N 个地址作为客户端 IP，客户端自己伪造的部分会被忽略 |
-| 不信任代理时 | 忽略 `X-Forwarded-*` 请求头，按连接地址限速，cookie 不加 `Secure` |
+| 不信任代理时 | 忽略 `X-Forwarded-*` 请求头，按连接地址限速；cookie 只在请求的域名就是 https 的 `PANEL_PUBLIC_URL` 的域名时加 `Secure` |
 | 端口映射 | 代理与面板在同一主机时映射为 `127.0.0.1:26868:26868`，不直接暴露到公网。设置了 `PANEL_TRUST_PROXY` 时面板端口只能让代理访问：能直连面板的客户端可以伪造 `X-Forwarded-For`，绕过按 IP 的登录限速，或冒充登录过的 IP 绕过全局暂停 |
 | 额外防护 | 建议在代理层再加一层认证（Basic Auth、Cloudflare Access 等） |
 
