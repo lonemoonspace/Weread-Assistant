@@ -3,7 +3,7 @@ services:
   # 首次启动的初始密码：docker compose logs app | grep 面板初始密码
   # 镜像中已包含浏览器（Chromium 与 chromedriver，无界面模式），不需要单独的 Selenium 容器
   app:
-    # 固定版本时在同目录的 .env 中写 WEREAD_ASSISTANT_TAG=0.3.0；dev 为 main 分支的最新构建
+    # 固定版本时在同目录的 .env 中写 WEREAD_ASSISTANT_TAG=0.3.1；dev 为 main 分支的最新构建
     image: lonemoonspace/weread-assistant:${WEREAD_ASSISTANT_TAG:-latest}
     restart: unless-stopped
     # 停止时面板先结束进行中的阅读（关闭浏览器，最长 15 秒）
