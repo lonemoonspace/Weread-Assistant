@@ -250,7 +250,7 @@ sequenceDiagram
 | 项目 | 措施 |
 | --- | --- |
 | 面板密码 | 至少 8 位；优先使用 `PANEL_PASSWORD`（不足 8 位时拒绝启动）；未设置时首次启动随机生成并只在日志中打印一次；scrypt 哈希存储；可在界面修改（设置了 `PANEL_PASSWORD` 时以环境变量为准） |
-| passkey | 可选。`PANEL_PUBLIC_URL` 为 HTTPS 地址时可在设置中添加，之后用指纹、面容或 PIN 登录；域名与 origin 只取自该变量，要求用户验证，服务端只保存公钥；添加、删除要求 5 分钟内登录或二次验证过。添加后可以在设置中关闭密码登录（要求用 passkey 验证，不能删除最后一个可用的 passkey）；用不了 passkey 时用 `PANEL_FORCE_PASSWORD_LOGIN=true` 重启临时恢复，换了域名时自动恢复 |
+| passkey | 可选。`PANEL_PUBLIC_URL` 为 HTTPS 地址时可在设置中添加，之后用指纹、面容或 PIN 登录；域名与 origin 只取自该变量，要求用户验证，服务端只保存公钥；添加、改名、删除要求 5 分钟内登录或二次验证过。添加后可以在设置中关闭密码登录（要求用 passkey 验证，不能删除最后一个可用的 passkey）；用不了 passkey 时用 `PANEL_FORCE_PASSWORD_LOGIN=true` 重启临时恢复，换了域名时自动恢复 |
 | 登录限速 | 按 IP 连续失败 5 次后指数退避，最长 15 分钟；另设全局失败上限，防止 `X-Forwarded-For` 配置错误时被绕过，达到上限时登录成功过的 IP 不受影响；密码与 passkey 共用，修改密码时当前密码错误也计入（按 IP，也计入全局上限） |
 | 会话 | 服务端随机令牌，7 天滑动过期、从登录起最长 30 天；cookie `HttpOnly`、`SameSite=Strict`、经 HTTPS 或 https 的 `PANEL_PUBLIC_URL` 访问时 `Secure`、`Path` 为面板路径；修改密码后所有会话失效 |
 | CSRF | `SameSite=Strict` + 修改类请求必须带自定义请求头与 JSON `Content-Type` |

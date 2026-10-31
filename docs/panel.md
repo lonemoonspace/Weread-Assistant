@@ -73,7 +73,7 @@ docker compose logs app | grep 面板初始密码
 | `GET api/auth/passkeys` | 是 | `{ passkey, passkeys }`：每个 passkey 的 ID、名称、添加与最近使用时间、是否已同步备份 `backedUp`、在当前域名下是否可用 `usable`；不返回公钥 |
 | `POST api/auth/passkeys/options` | 是，需二次验证 | 添加 passkey 的参数；最多 20 个，已满 409 `too_many_passkeys`；5 分钟内没有登录或二次验证过时 403 `reauth_required` |
 | `POST api/auth/passkeys` | 是，需二次验证 | `{ name?, response }`：校验并保存，成功 201 `{ passkey }`；校验失败 400 `passkey_failed`，已添加过 409 `passkey_exists`；名称 1–64 个字符，不能含换行、控制字符与文字方向控制符，不填时为“passkey 日期” |
-| `PATCH api/auth/passkeys/:id` | 是 | `{ name }`：改名，名称规则同添加；不存在 404 `passkey_not_found` |
+| `PATCH api/auth/passkeys/:id` | 是，需二次验证 | `{ name }`：改名，名称规则同添加；不存在 404 `passkey_not_found`；5 分钟内没有登录或二次验证过时 403 `reauth_required` |
 | `DELETE api/auth/passkeys/:id` | 是，需二次验证 | 删除 passkey，用它登录的其他会话立即失效（当前会话保留）；不存在 404；密码登录在设置中关闭时，不能删除当前域名下最后一个可用的 passkey，返回 409 `last_passkey` |
 | `PATCH api/auth/password-login` | 是，需二次验证 | `{ enabled }`：在设置中打开或关闭密码登录，返回 `{ passwordLogin }`。关闭要求当前域名下有可用的 passkey（否则 409 `no_usable_passkey`），并且 5 分钟内用 passkey 验证过（否则 403 `reauth_required`，带 `method: "passkey"`）；关闭后其他用密码登录的会话立即失效（当前会话保留）。打开只要求 5 分钟内验证过 |
 | `POST api/auth/logout` | 是 | 注销当前会话 |
@@ -127,7 +127,7 @@ docker compose logs app | grep 面板初始密码
 | 二维码 | 由登录链接在浏览器本地生成（不经过第三方服务）；手机上可复制登录链接发到微信中打开，非 HTTPS 访问时浏览器不允许写剪贴板，改为显示链接供手动复制 |
 | 密钥 | 表单中只显示“已设置 / 未设置”，留空表示不修改，点“清除”删除 |
 | 手机 | 390px 宽度下各页面没有横向滚动；表格在自身区域内横向滚动 |
-| 二次验证 | 添加、删除 passkey 或切换密码登录时接口返回 403 `reauth_required` 则弹出“确认身份”对话框，用 passkey 或面板密码验证后自动重试；关闭密码登录、或密码登录已关闭时只提供 passkey；取消时不做修改 |
+| 二次验证 | 添加、改名、删除 passkey 或切换密码登录时接口返回 403 `reauth_required` 则弹出“确认身份”对话框，用 passkey 或面板密码验证后自动重试；关闭密码登录、或密码登录已关闭时只提供 passkey；取消时不做修改 |
 | CSP | 面板主页面在浏览器内编译模板，需要 `'unsafe-eval'`，只对该页面放开（登录页、接口与静态文件不放开）。模板只写在 `assets/app/` 的脚本中，不使用 DOM 模板，不用 `v-html` 渲染内容 |
 
 ### 运行队列
@@ -386,7 +386,7 @@ data/
 | challenge | 只保存在内存中，5 分钟内有效、只能使用一次，只能用于申请时的用途；二次验证与添加还绑定申请时的会话。登录用的与二次验证、添加用的分开存放，各自同时有效的最多 100 个，超出时丢弃最早的；登录用的同一 IP 最多 5 个，超出时丢弃它自己最早的，未登录的请求挤不掉二次验证与添加用的。面板重启后需重新发起 |
 | 签名计数 | 每次登录记录认证器返回的签名计数，计数不增反减时拒绝（同步的 passkey 计数始终为 0，不受影响） |
 | 删除 | 删除 passkey 后，用它登录的其他会话立即失效；修改面板密码时所有会话失效，与登录方式无关 |
-| 限速 | passkey 登录与二次验证的失败同样计入按 IP 的登录限速；它们不受全局暂停影响（见“安全”中的登录限速） |
+| 限速 | passkey 登录与二次验证的失败同样计入按 IP 的登录限速；它们不计入全局上限，也不受全局暂停影响（见“安全”中的登录限速） |
 | 备份 | `panel.json` 中只有公钥，泄露后不能用来登录；从备份恢复 `panel.json` 时 passkey 与“允许密码登录”的设置一并恢复 |
 
 #### 关闭密码登录
@@ -421,7 +421,7 @@ data/
 | passkey | 公钥签名验证，域名与 origin 只取自 `PANEL_PUBLIC_URL`，要求用户验证；见上文“passkey” |
 | 二次验证 | 添加、改名、删除 passkey 与切换密码登录要求 5 分钟内登录或二次验证过，防止被他人借用已登录的浏览器添加自己的 passkey、打开密码登录或改名误导；关闭密码登录要求用 passkey 验证 |
 | 关闭密码登录 | 可选，见上文“关闭密码登录”；关闭后密码泄露也不能用来登录 |
-| 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；所有 IP 在 15 分钟内累计失败 100 次后暂停 15 分钟，暂停期间只有本次启动以来、最近 30 天内登录或二次验证成功过的 IP 可以用密码登录（仍按 IP 限速），未认证的请求不能借此挡住这些 IP；passkey 登录（含申请登录参数）与已登录会话的二次验证不受暂停影响，只按 IP 限速：passkey 猜不中，暂停只为分散的密码猜测而设。这份名单与暂停都只在内存中，面板重启后或管理员换了 IP 时密码登录仍可能被暂停挡住，用 passkey 登录或重启面板即可。密码与 passkey 的登录、二次验证以及修改密码时的当前密码共用同一套失败计数与锁定（按 IP 计数，也计入全局上限） |
+| 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；所有 IP 在 15 分钟内累计失败 100 次后暂停 15 分钟，暂停期间只有本次启动以来、最近 30 天内登录或二次验证成功过的 IP 可以用密码登录（仍按 IP 限速），未认证的请求不能借此挡住这些 IP；passkey 登录（含申请登录参数）与已登录会话的二次验证不受暂停影响，只按 IP 限速：passkey 猜不中，暂停只为分散的密码猜测而设。这份名单与暂停都只在内存中，面板重启后或管理员换了 IP 时密码登录仍可能被暂停挡住，用 passkey 登录或重启面板即可。密码与 passkey 的登录、二次验证以及修改密码时的当前密码共用同一套按 IP 的失败计数与锁定；只有密码登录与修改密码时的当前密码计入全局上限 |
 | 密码哈希 | `panel.json` 中的哈希格式或参数无效（例如被手工改坏）时拒绝启动并提示恢复办法，校验时一律不通过 |
 | 跨站请求伪造 | 修改类请求必须带 `X-WA-Request: 1` 请求头且为 JSON，配合 `SameSite=Strict` |
 | 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`、`Permissions-Policy`（关闭摄像头、麦克风、定位等用不到的能力）；经 HTTPS 访问时（判断方式与会话 cookie 的 `Secure` 相同）`Strict-Transport-Security: max-age=15552000`（不含子域名）；接口响应与面板主页面、登录页 `Cache-Control: no-store` |
@@ -455,6 +455,7 @@ location /weread/api/events {
 | --- | --- |
 | 代理层数 | `PANEL_TRUST_PROXY` 填面板前面的代理层数。面板取 `X-Forwarded-For` 中从右往左数第 N 个地址作为客户端 IP，客户端自己伪造的部分会被忽略 |
 | 不信任代理时 | 忽略 `X-Forwarded-*` 请求头，按连接地址限速；cookie 只在请求的域名就是 https 的 `PANEL_PUBLIC_URL` 的域名时加 `Secure` |
+| 只用 HTTPS | `PANEL_PUBLIC_URL` 是 https 地址时，这个域名只能经 HTTPS 打开：经 `http://<该域名>` 打开时 cookie 带 `Secure`，浏览器不保存，登录后会回到登录页。在代理上把 HTTP 跳转到 HTTPS |
 | 端口映射 | 代理与面板在同一主机时映射为 `127.0.0.1:26868:26868`，不直接暴露到公网。设置了 `PANEL_TRUST_PROXY` 时面板端口只能让代理访问：能直连面板的客户端可以伪造 `X-Forwarded-For`，绕过按 IP 的登录限速，或冒充登录过的 IP 绕过全局暂停 |
 | 额外防护 | 建议在代理层再加一层认证（Basic Auth、Cloudflare Access 等） |
 

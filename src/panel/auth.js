@@ -188,7 +188,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
       trustIp(ip);
       return { ok: true, result };
     }
-    recordFailure(ip);
+    recordFailure(ip, { global });
     return { ok: false, retryAfterMs: retryAfterMs(ip, { global }) };
   }
 
@@ -202,7 +202,9 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     return Math.max(ipWait, globalWait);
   }
 
-  function recordFailure(ip) {
+  // global 为 false 时只计入按 IP 的失败（passkey、二次验证），不计入全局上限：它们不受全局暂停影响，
+  // 也不能用来触发全局暂停（passkey 失败不需要 scrypt，比猜密码便宜）
+  function recordFailure(ip, { global = true } = {}) {
     const t = now();
     const record = attempts.get(ip) || { failures: 0, lockedUntil: 0, lastFailureAt: 0 };
     record.failures += 1;
@@ -215,8 +217,10 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     attempts.set(ip, record);
 
     globalFailures = globalFailures.filter((at) => at > t - cfg.globalWindowMs);
-    globalFailures.push(t);
-    if (globalFailures.length >= cfg.globalMaxFailures) {
+    if (global) {
+      globalFailures.push(t);
+    }
+    if (global && globalFailures.length >= cfg.globalMaxFailures) {
       globalLockedUntil = t + cfg.globalWindowMs;
       globalFailures = [];
       console.warn(

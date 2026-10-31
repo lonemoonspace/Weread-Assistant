@@ -13,8 +13,8 @@
 
 安全：
 
-- 登录的全局失败上限触发后，换了 IP 的管理员连 passkey 也登录不了；现在全局暂停只挡密码登录，passkey 登录（含申请登录参数）与已登录会话的二次验证不受影响，仍按 IP 限速
-- 设置了 https 的 `PANEL_PUBLIC_URL`、但没有设置 `PANEL_TRUST_PROXY` 时，会话 cookie 不带 `Secure`；现在在该域名下访问时总带 `Secure`，并下发 HSTS（`max-age=15552000`，不含子域名）。用内网 IP 经 HTTP 打开时照旧，仍可用密码登录
+- 登录的全局失败上限触发后，换了 IP 的管理员连 passkey 也登录不了；现在全局暂停只挡密码登录，passkey 登录（含申请登录参数）与已登录会话的二次验证不受影响，失败也不计入全局上限，仍按 IP 限速
+- 设置了 https 的 `PANEL_PUBLIC_URL`、但没有设置 `PANEL_TRUST_PROXY` 时，会话 cookie 不带 `Secure`；现在在该域名下访问时总带 `Secure`，并下发 HSTS（`max-age=15552000`，不含子域名）。用内网 IP 经 HTTP 打开时照旧，仍可用密码登录；该域名需要只经 HTTPS 打开
 - 面板主页面与登录页返回 `Cache-Control: no-store`
 - 请求带多个名为 `wa_session` 的 cookie 时取第一个有效的，同主机其他应用设置的同名 cookie 不能再把登录态顶掉
 - 账号名称不能再包含换行、控制字符与文字方向控制符（与 passkey 名称一致），避免打乱推送标题与日志

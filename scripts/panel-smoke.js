@@ -425,6 +425,25 @@ async function main() {
       );
     });
 
+    await scenario("passkey 与二次验证的失败不计入全局上限，不能用来触发全局暂停", async () => {
+      const panel = await startAuthed({ publicUrl: PASSKEY_URL, trustProxy: 1, limits: { globalMaxFailures: 3, globalWindowMs: 60000 } });
+      const authenticator = await addPasskey(panel);
+      for (let i = 1; i <= 4; i += 1) {
+        const headers = { ...CSRF, "X-Forwarded-For": `198.51.100.${i}` };
+        const options = await panel.request("api/auth/passkey/options", { method: "POST", body: { purpose: "login" }, headers });
+        const res = await panel.request("api/auth/passkey/login", {
+          method: "POST",
+          body: { response: authenticator.assert(options.json, { badSignature: true }) },
+          headers,
+        });
+        assert.strictEqual(res.status, 401);
+      }
+      for (let i = 0; i < 3; i += 1) {
+        assert.strictEqual((await panel.call("POST", "api/auth/reauth", { password: "wrong" })).status, 400);
+      }
+      assert.strictEqual((await login(panel, "correct-horse", { "X-Forwarded-For": "203.0.113.70" })).status, 204, "新 IP 仍可用密码登录");
+    });
+
     await scenario("会话 cookie：在 https 的 PANEL_PUBLIC_URL 域名下访问时总带 Secure 并下发 HSTS，内网 IP 经 HTTP 访问时不带", async () => {
       const panel = await start({ password: "correct-horse", publicUrl: "https://Panel.Example.com/weread/", basePath: "/weread/" });
       const viaHost = (host) =>
