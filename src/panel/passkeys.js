@@ -5,7 +5,7 @@ const {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } = require("@simplewebauthn/server");
-const { PanelError, badRequest } = require("./errors");
+const { PanelError, badRequest, rejectUnsafeName } = require("./errors");
 
 const RP_NAME = "WeReadAssistant";
 const MAX_PASSKEYS = 20;
@@ -22,9 +22,6 @@ const SUPPORTED_ALGORITHMS = [-8, -7, -257];
 
 const ownerKey = (token) => crypto.createHash("sha256").update(String(token || "")).digest("hex");
 
-// 控制字符（含换行）、行与段落分隔符、文字方向控制符：名称会写入日志并显示在页面上，这些字符会伪造日志行或打乱显示
-const UNSAFE_NAME_CHARS = /[\p{Cc}\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
-
 function normalizeName(rawName, fallback) {
   const name = rawName === undefined || rawName === null ? fallback : String(rawName).trim();
   if (!name) {
@@ -33,9 +30,7 @@ function normalizeName(rawName, fallback) {
   if (name.length > MAX_NAME_LENGTH) {
     throw badRequest(`passkey 名称不能超过 ${MAX_NAME_LENGTH} 个字符`);
   }
-  if (UNSAFE_NAME_CHARS.test(name)) {
-    throw badRequest("passkey 名称不能包含换行、控制字符或文字方向控制符");
-  }
+  rejectUnsafeName(name, "passkey 名称");
   return name;
 }
 

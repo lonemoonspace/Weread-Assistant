@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { PanelError, badRequest } = require("./errors");
+const { PanelError, badRequest, rejectUnsafeName } = require("./errors");
 const { normalizeChallenge } = require("./challenge");
 const { ACCOUNT_ID_PATTERN, accountDataDir, applyConfigPatch, maskValues } = require("./config");
 const { nextRunAt, publicSchedule } = require("./schedules");
@@ -16,6 +16,7 @@ function normalizeName(rawName, fallback) {
   if (name.length > MAX_NAME_LENGTH) {
     throw badRequest(`账号名称不能超过 ${MAX_NAME_LENGTH} 个字符`);
   }
+  rejectUnsafeName(name, "账号名称");
   return name;
 }
 

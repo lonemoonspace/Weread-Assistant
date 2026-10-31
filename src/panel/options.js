@@ -99,11 +99,11 @@ function publicUrlWarning({ publicUrl, basePath, trustProxy = false }) {
   if (basePath !== "/" && !new URL(publicUrl).pathname.endsWith(basePath)) {
     warnings.push(`PANEL_PUBLIC_URL（${publicUrl}）的路径不以 PANEL_BASE_PATH（${basePath}）结尾，推送中的面板链接可能打不开`);
   }
-  // 经 HTTPS 反向代理访问却不信任代理时，面板看到的是 http 与代理的地址：会话 cookie 不带 Secure，登录限速按代理地址计数
+  // 经 HTTPS 反向代理访问却不信任代理时，面板看到的是代理的地址：登录限速按代理地址计数（会话 cookie 按请求的域名带 Secure，见 server.js）
   if (new URL(publicUrl).protocol === "https:" && !trustProxy) {
     warnings.push(
-      "PANEL_PUBLIC_URL 是 https 地址，但没有设置 PANEL_TRUST_PROXY：经反向代理访问时会话 cookie 不带 Secure、" +
-        "登录限速按代理地址计数，请设置 PANEL_TRUST_PROXY=true（面板端口只允许代理访问）"
+      "PANEL_PUBLIC_URL 是 https 地址，但没有设置 PANEL_TRUST_PROXY：经反向代理访问时" +
+        "登录限速按代理地址计数（所有访问者共用一份失败计数），请设置 PANEL_TRUST_PROXY=true（面板端口只允许代理访问）"
     );
   }
   return warnings.join("\n");

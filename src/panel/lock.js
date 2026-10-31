@@ -53,7 +53,7 @@ function acquirePanelLock(dataDir, { heartbeatMs = HEARTBEAT_MS, staleMs = STALE
     throw conflict({ info: me });
   }
 
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const create = () => fs.writeFileSync(file, JSON.stringify(me), { flag: "wx", mode: 0o600 });
   try {
     create();

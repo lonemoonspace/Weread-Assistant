@@ -1,4 +1,4 @@
-const { postJson } = require("../shared/http");
+const { isHttpUrl, postJson } = require("../shared/http");
 
 // ntfy 的 JSON 发布接口（POST /）将 priority 定义为 int，字符串别名只对 X-Priority 请求头有效，
 // 写进 JSON body 会导致整个负载解析失败（400 {"code":40024,"error":"invalid request: request body must be valid JSON"}），
@@ -95,6 +95,10 @@ async function sendNtfy(config, title, body, options = {}) {
   if (!NTFY_TOPIC_PATTERN.test(config.ntfyTopic)) {
     // 不打印主题本身：它等同于密钥
     console.error(`ntfy 主题不合法（${config.ntfyTopic.length} 个字符）：仅支持字母、数字、下划线与短横线，且不超过 64 个字符`);
+    return false;
+  }
+  if (!isHttpUrl(buildNtfyPublishUrl(config.ntfyServer))) {
+    console.error("ntfy 服务器地址无效（需以 http:// 或 https:// 开头）:", config.ntfyServer);
     return false;
   }
 

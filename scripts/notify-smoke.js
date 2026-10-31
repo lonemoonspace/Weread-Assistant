@@ -211,6 +211,15 @@ async function main() {
       assert.ok(!logs.some((line) => line.includes("bark-key-123")), "日志中不应出现 Bark Key");
     });
 
+    await scenario("ntfy 服务器地址不是 http(s) 时直接拦截，不发出请求", async (logs) => {
+      config = resolveConfig({ ntfyTopic: "topic_123", ntfyServer: "ntfy.sh" });
+      assert.strictEqual(await sendNtfy(config, "微信读书挑战", "登录成功"), false);
+      config = resolveConfig({ ntfyTopic: "topic_123", ntfyServer: "file:///etc" });
+      assert.strictEqual(await sendNtfy(config, "微信读书挑战", "登录成功"), false);
+      assert.strictEqual(mock.requests.length, 0);
+      assert.ok(logs.some((line) => line.includes("ntfy 服务器地址无效")));
+    });
+
     await scenario("ntfy 负载映射优先级、标签、点击与附件", async () => {
       config = resolveConfig({
         ntfyTopic: "weread_smoke_topic",

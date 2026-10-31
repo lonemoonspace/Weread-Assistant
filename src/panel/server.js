@@ -76,20 +76,25 @@ const SECURITY_HEADERS = {
   "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
 };
 
-function parseCookies(header = "") {
-  const cookies = {};
+// 请求中名为 name 的全部 cookie 值，按浏览器发送的顺序。同名 cookie 可能有多个（同主机的其他应用可以设置
+// Path 或 Domain 不同的同名 cookie），只取其中一个会让别人用无效的值顶掉真实会话
+function cookieValues(header = "", name) {
+  const values = [];
   for (const part of header.split(";")) {
     const index = part.indexOf("=");
-    if (index > 0) {
+    if (index > 0 && part.slice(0, index).trim() === name) {
       try {
-        cookies[part.slice(0, index).trim()] = decodeURIComponent(part.slice(index + 1).trim());
+        values.push(decodeURIComponent(part.slice(index + 1).trim()));
       } catch (_) {
         // 忽略无法解码的 cookie
       }
     }
   }
-  return cookies;
+  return values;
 }
+
+// HSTS：只在经 HTTPS 访问时下发（经 HTTP 下发会被浏览器忽略）。不带 includeSubDomains，同一域名下的其他站点可能仍是 HTTP
+const HSTS_HEADER = "max-age=15552000";
 
 function csrfGuard(req, res, next) {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) {
@@ -169,10 +174,17 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
     });
   }
 
+  // 经 HTTPS 访问：req.secure（直连或信任代理时），或请求的主机名就是 https 的 PANEL_PUBLIC_URL 的主机名。
+  // 后者让没有设置 PANEL_TRUST_PROXY 时（面板看到的是 http）会话 cookie 也带 Secure；用内网 IP 等其他地址经 HTTP 打开时不加，
+  // 否则浏览器不保存 cookie，无法用密码登录
+  const normalizeHost = (host) => String(host || "").toLowerCase().replace(/\.$/, "");
+  const publicHttpsHost =
+    options.publicUrl && new URL(options.publicUrl).protocol === "https:" ? normalizeHost(new URL(options.publicUrl).hostname) : "";
+  const isHttps = (req) => req.secure || (publicHttpsHost !== "" && normalizeHost(req.hostname) === publicHttpsHost);
   const cookieOptions = (req) => ({
     httpOnly: true,
     sameSite: "strict",
-    secure: req.secure,
+    secure: isHttps(req),
     path: options.basePath,
   });
   const setSessionCookie = (req, res, token) => {
@@ -181,13 +193,21 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
 
   const router = express.Router();
 
-  // 识别会话；有效时按需续期 cookie
+  // 识别会话（有多个同名 cookie 时取第一个有效的）；有效时按需续期 cookie
   router.use((req, res, next) => {
-    const token = parseCookies(req.headers.cookie)[SESSION_COOKIE] || "";
-    const session = auth.touchSession(token);
-    req.sessionToken = session ? token : "";
-    if (session && session.refreshCookie) {
-      setSessionCookie(req, res, token);
+    if (isHttps(req)) {
+      res.set("Strict-Transport-Security", HSTS_HEADER);
+    }
+    req.sessionToken = "";
+    for (const token of cookieValues(req.headers.cookie, SESSION_COOKIE)) {
+      const session = auth.touchSession(token);
+      if (session) {
+        req.sessionToken = token;
+        if (session.refreshCookie) {
+          setSessionCookie(req, res, token);
+        }
+        break;
+      }
     }
     next();
   });
@@ -207,7 +227,9 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
       return;
     }
     res.set("Content-Security-Policy", contentSecurityPolicy({ allowEval: true }));
-    res.sendFile(path.join(PUBLIC_DIR, "index.html"));
+    // 页面是否可见取决于会话，不让浏览器或代理缓存
+    res.set("Cache-Control", "no-store");
+    res.sendFile(path.join(PUBLIC_DIR, "index.html"), { cacheControl: false });
   });
 
   router.get("/login", (req, res) => {
@@ -215,7 +237,8 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
       res.redirect(302, "./");
       return;
     }
-    res.sendFile(path.join(PUBLIC_DIR, "login.html"));
+    res.set("Cache-Control", "no-store");
+    res.sendFile(path.join(PUBLIC_DIR, "login.html"), { cacheControl: false });
   });
 
   const api = express.Router();
@@ -278,7 +301,7 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
     if (purpose !== "login") {
       throw badRequest("purpose 只能是 login 或 reauth");
     }
-    const wait = auth.loginRetryAfterMs(req.ip);
+    const wait = auth.passkeyRetryAfterMs(req.ip);
     if (wait > 0) {
       sendAuthFailure(res, { locked: true, retryAfterMs: wait });
       return;
@@ -372,7 +395,7 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
     res.status(201).json({ passkey });
   });
 
-  api.patch("/auth/passkeys/:id", async (req, res) => {
+  api.patch("/auth/passkeys/:id", requireRecentAuth, async (req, res) => {
     const passkey = await passkeys.rename(req.params.id, requireObject(req.body).name);
     res.json({ passkey });
   });

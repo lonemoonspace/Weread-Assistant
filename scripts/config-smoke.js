@@ -114,7 +114,7 @@ const scenarios = [
     // 反向代理去掉了前缀
     assert.strictEqual(warningFor({ ...proxied, PANEL_PUBLIC_URL: "https://example.com/weread/" }), "");
     assert.match(warningFor({ ...proxied, PANEL_PUBLIC_URL: "https://example.com/", PANEL_BASE_PATH: "/weread/" }), /路径不以 PANEL_BASE_PATH（\/weread\/）结尾/);
-    // https 地址却不信任代理：会话 cookie 不带 Secure
+    // https 地址却不信任代理：登录限速按代理地址计数
     assert.match(warningFor({ PANEL_PUBLIC_URL: "https://example.com/" }), /没有设置 PANEL_TRUST_PROXY/);
     assert.strictEqual(warningFor({ PANEL_PUBLIC_URL: "http://192.168.1.2:26868/" }), "");
     // 命令行按账号运行只读取数据目录
