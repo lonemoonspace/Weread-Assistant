@@ -68,7 +68,15 @@ export const LiveTab = {
           <figcaption class="muted">最新截图：{{ run.screenshot }}</figcaption>
         </figure>
         <div class="log-panel">
-          <h3>日志</h3>
+          <div class="log-panel-header">
+            <span class="log-mac-dots" aria-hidden="true">
+              <span class="log-mac-dot red"></span>
+              <span class="log-mac-dot yellow"></span>
+              <span class="log-mac-dot green"></span>
+            </span>
+            <span class="log-panel-title">实时输出日志</span>
+            <span></span>
+          </div>
           <pre ref="logBox" class="log">{{ logText || "等待日志…" }}</pre>
         </div>
       </div>

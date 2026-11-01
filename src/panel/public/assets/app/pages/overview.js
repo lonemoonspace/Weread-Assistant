@@ -9,8 +9,23 @@ const AccountCard = {
   props: { account: Object },
   setup(props) {
     const run = computed(() => state.runs[props.account.id]);
+    const avatarLetter = computed(() => (props.account.name || props.account.id || "客").slice(0, 1));
+    const avatarClass = computed(() => {
+      if (!props.account.enabled) {
+        return "disabled";
+      }
+      if (run.value && run.value.status === "reading") {
+        return "blue";
+      }
+      if (props.account.today && props.account.today.checkedIn) {
+        return "green";
+      }
+      return "";
+    });
     return {
       run,
+      avatarLetter,
+      avatarClass,
       tz: computed(timezone),
       formatShort,
       STATUS_LABELS,
@@ -19,8 +34,11 @@ const AccountCard = {
   template: `
     <article class="account-card" :class="{ disabled: !account.enabled }">
       <header>
-        <a :href="'#/accounts/' + account.id + '/live'" class="account-name">{{ account.name }}</a>
-        <small class="muted">{{ account.id }}</small>
+        <span class="account-avatar" :class="avatarClass">{{ avatarLetter }}</span>
+        <div class="account-title-wrap">
+          <a :href="'#/accounts/' + account.id + '/live'" class="account-name">{{ account.name }}</a>
+          <small class="muted">{{ account.id }}</small>
+        </div>
         <span v-if="!account.enabled" class="badge status-stopped">已停用</span>
       </header>
       <p class="card-status">
@@ -37,6 +55,9 @@ const AccountCard = {
         </template>
         <span v-else class="muted">还没有运行过</span>
       </p>
+      <div v-if="run && run.status === 'reading' && run.plannedMinutes" class="reading-progress">
+        <progress :value="run.minutes" :max="run.plannedMinutes"></progress>
+      </div>
       <p>
         今天 <strong>{{ account.today.minutes }}</strong> 分钟
         <span v-if="account.today.checkedIn" class="badge status-success">已打卡</span>
@@ -73,9 +94,79 @@ export const OverviewPage = {
       const account = state.accounts.find((item) => item.id === id);
       return account ? account.name : id;
     };
-    return { waiting, queue, accounts, nameOf, MODE_LABELS, TRIGGER_LABELS, state };
+
+    // 概览统计指标
+    const totalAccounts = computed(() => state.accounts.length);
+    const activeAccounts = computed(() => state.accounts.filter((a) => a.enabled).length);
+    const checkedInToday = computed(() => state.accounts.filter((a) => a.today && a.today.checkedIn).length);
+    const totalMinutesToday = computed(() =>
+      state.accounts.reduce((sum, a) => sum + (a.today ? a.today.minutes : 0), 0)
+    );
+    const runningCount = computed(() => Object.values(state.runs).length);
+
+    return {
+      waiting,
+      queue,
+      accounts,
+      nameOf,
+      totalAccounts,
+      activeAccounts,
+      checkedInToday,
+      totalMinutesToday,
+      runningCount,
+      MODE_LABELS,
+      TRIGGER_LABELS,
+      state,
+    };
   },
   template: `
+    <section v-if="totalAccounts" class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-head">
+          <span>托管账号</span>
+        </div>
+        <div class="metric-number">
+          {{ totalAccounts }}<span class="metric-unit">个</span>
+        </div>
+        <div class="metric-tip muted">
+          {{ activeAccounts }} 个启用 · {{ totalAccounts - activeAccounts }} 个停用
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-head">
+          <span>今日打卡</span>
+        </div>
+        <div class="metric-number">
+          {{ checkedInToday }} / {{ totalAccounts }}
+        </div>
+        <div class="metric-tip" :class="checkedInToday === totalAccounts ? 'ok-text' : 'muted'">
+          达成率 {{ totalAccounts ? Math.round((checkedInToday / totalAccounts) * 100) : 0 }}%
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-head">
+          <span>今日总阅读</span>
+        </div>
+        <div class="metric-number">
+          {{ totalMinutesToday }}<span class="metric-unit">分钟</span>
+        </div>
+        <div class="metric-tip muted">
+          约 {{ (totalMinutesToday / 60).toFixed(1) }} 小时
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-head">
+          <span>任务运行</span>
+        </div>
+        <div class="metric-number">
+          {{ runningCount }}<span class="metric-unit">个任务</span>
+        </div>
+        <div class="metric-tip" :class="runningCount > 0 ? 'ok-text' : 'muted'">
+          {{ runningCount > 0 ? '正在调度运行中' : '目前全部任务空闲' }}
+        </div>
+      </div>
+    </section>
+
     <section>
       <selenium-status />
     </section>
