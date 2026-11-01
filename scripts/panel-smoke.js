@@ -1002,7 +1002,7 @@ async function main() {
       assert.strictEqual(res.status, 204);
     });
 
-    await scenario("passkey 的 challenge：5 分钟后过期；登录用的不在服务端保存，申请再多也挤不掉别人的；二次验证与添加用的不受影响", async () => {
+    await scenario("passkey 的 challenge：5 分钟后过期；登录用的不在服务端保存，申请再多也挤不掉别人的，只有校验成功才记为用过；二次验证与添加用的不受影响", async () => {
       let t = Date.parse("2026-01-01T00:00:00Z");
       const dataDir = tempDir();
       const store = createStore(dataDir);
@@ -1057,11 +1057,22 @@ async function main() {
       );
       assert.ok(await passkeys.verifyLogin(authenticator.assert(padded)), "规范写法仍可使用");
 
-      // 用错误签名不断用掉 challenge 时丢弃最早记下的，不拒绝之后的正常登录
+      // 只有校验成功才记为用过：错误签名的请求再多，也挤不掉用过的记录，捕获的合法结果不能重放，之后的正常登录不受影响
+      const captured = authenticator.assert(await passkeys.loginOptions());
+      assert.ok(await passkeys.verifyLogin(captured));
       for (let i = 0; i < 10050; i += 1) {
         await passkeys.verifyLogin(authenticator.assert(await passkeys.loginOptions(), { badSignature: true }));
       }
-      assert.ok(await passkeys.verifyLogin(authenticator.assert(await passkeys.loginOptions())), "记满后仍可登录");
+      assert.strictEqual(await passkeys.verifyLogin(captured), null, "错误签名刷满后仍不能重放");
+      assert.ok(await passkeys.verifyLogin(authenticator.assert(await passkeys.loginOptions())), "之后仍可登录");
+
+      // 签名不对的请求不会用掉别人的 challenge；同一个结果并发提交时只有一个成功
+      const shared = await passkeys.loginOptions();
+      assert.strictEqual(await passkeys.verifyLogin(authenticator.assert(shared, { badSignature: true })), null);
+      const valid = authenticator.assert(shared);
+      const concurrent = await Promise.all([passkeys.verifyLogin(valid), passkeys.verifyLogin(valid), passkeys.verifyLogin(valid)]);
+      assert.strictEqual(concurrent.filter(Boolean).length, 1, "并发重放只成功一次");
+      assert.strictEqual(await passkeys.verifyLogin(valid), null, "用过后不能再用");
     });
 
     await scenario("panel.json 中 auth.passkeys、auth.passwordLogin 格式不对时视为损坏，不会被清空", async () => {

@@ -15,8 +15,8 @@ const CEREMONY_TIMEOUT_MS = 2 * 60 * 1000;
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 // 二次验证、添加用的 challenge 同时有效的数量上限，超出时丢弃最早的（只有已登录的会话能申请）
 const MAX_PENDING_CHALLENGES = 100;
-// 登录用的 challenge 不在服务端保存（见 createPasskeys），只记下用过的；超出这个数量时丢弃最早记下的。
-// 不拒绝新的登录：知道 passkey ID 的人可以用错误的签名不断用掉 challenge，拒绝就等于把所有人挡在外面
+// 登录用的 challenge 不在服务端保存（见 createPasskeys），只记下登录成功用过的（需要私钥才能产生，正常使用远到不了这个数量），
+// 超出时丢弃最早记下的
 const MAX_USED_LOGIN_CHALLENGES = 10000;
 const LOGIN_NONCE_BYTES = 16;
 const LOGIN_MAC_BYTES = 16;
@@ -49,8 +49,11 @@ function notFound(id) {
 function createPasskeys({ store, relyingParty, now = Date.now }) {
   const pending = new Map();
   const loginKey = crypto.randomBytes(32);
-  // 用过的登录 challenge → 过期时间
+  // 登录成功用过的 challenge → 过期时间。只记成功的：校验失败（例如签名不对）的请求不占用这里，
+  // 知道 passkey ID 的人用错误签名再多，也挤不掉真正用过的记录，捕获的合法结果不能借此重放
   const usedLogin = new Map();
+  // 正在校验的登录 challenge：同一个 challenge 并发提交时只有一个进入校验
+  const checkingLogin = new Set();
 
   const usable = (passkey) => Boolean(relyingParty) && passkey.rpId === relyingParty.id;
 
@@ -83,8 +86,9 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
     return new Uint8Array(Buffer.concat([body, loginMac(body)]));
   }
 
-  // 校验并作废登录用的 challenge：HMAC 正确、未过期且没有用过
-  function takeLogin(challenge) {
+  // 校验登录用的 challenge：HMAC 正确、未过期、没有用过也不在校验中。通过时记入 claim 并占住，
+  // 校验结束后由 verifyAssertion 释放，成功时记为用过
+  function takeLogin(challenge, claim) {
     const raw = Buffer.from(String(challenge), "base64url");
     // 解码时会忽略空白等字符，只接受规范的写法，同一个 challenge 不能换种写法再用一次或占用更多内存
     if (raw.length !== 8 + LOGIN_NONCE_BYTES + LOGIN_MAC_BYTES || raw.toString("base64url") !== challenge) {
@@ -96,9 +100,17 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
     }
     const t = now();
     const expiresAt = Number(body.readBigUInt64BE(0));
-    if (expiresAt <= t || usedLogin.has(challenge)) {
+    if (expiresAt <= t || usedLogin.has(challenge) || checkingLogin.has(challenge)) {
       return false;
     }
+    checkingLogin.add(challenge);
+    claim.challenge = challenge;
+    claim.expiresAt = expiresAt;
+    return true;
+  }
+
+  function markLoginUsed({ challenge, expiresAt }) {
+    const t = now();
     for (const [key, at] of usedLogin) {
       if (at <= t) {
         usedLogin.delete(key);
@@ -108,14 +120,10 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
       usedLogin.delete(usedLogin.keys().next().value);
     }
     usedLogin.set(challenge, expiresAt);
-    return true;
   }
 
-  // 校验并作废 challenge：无论是否匹配都只能使用一次
+  // 校验并作废二次验证、添加用的 challenge：无论是否匹配都只能使用一次
   function take(challenge, purpose, owner) {
-    if (purpose === "login") {
-      return takeLogin(challenge);
-    }
     const entry = pending.get(challenge);
     pending.delete(challenge);
     return Boolean(entry) && entry.expiresAt > now() && entry.purpose === purpose && entry.owner === ownerKey(owner);
@@ -162,10 +170,12 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
       return null;
     }
     let verification;
+    // 登录用的 challenge：校验期间占住，校验成功才记为用过
+    const claim = {};
     try {
       verification = await verifyAuthenticationResponse({
         response,
-        expectedChallenge: (challenge) => take(challenge, purpose, owner),
+        expectedChallenge: (challenge) => (purpose === "login" ? takeLogin(challenge, claim) : take(challenge, purpose, owner)),
         expectedOrigin: relyingParty.origin,
         expectedRPID: relyingParty.id,
         credential: {
@@ -179,6 +189,13 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
     } catch (e) {
       console.warn(`passkey「${passkey.name}」校验失败：${e.message}`);
       return null;
+    } finally {
+      if (claim.challenge) {
+        checkingLogin.delete(claim.challenge);
+        if (verification && verification.verified) {
+          markLoginUsed(claim);
+        }
+      }
     }
     if (!verification.verified) {
       console.warn(`passkey「${passkey.name}」校验失败：签名不正确`);
