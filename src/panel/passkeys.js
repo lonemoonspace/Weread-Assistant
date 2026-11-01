@@ -13,10 +13,12 @@ const MAX_NAME_LENGTH = 64;
 // 浏览器等待用户操作的时长（跨设备扫码登录需要多一些时间）；challenge 的有效期略长于它
 const CEREMONY_TIMEOUT_MS = 2 * 60 * 1000;
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
-// 同时有效的 challenge 数量上限，登录用与二次验证、添加用的分开计数，超出时丢弃最早的
+// 二次验证、添加用的 challenge 同时有效的数量上限，超出时丢弃最早的（只有已登录的会话能申请）
 const MAX_PENDING_CHALLENGES = 100;
-// 登录用的 challenge 未登录也能申请，同一 IP 同时有效的数量另有上限，超出时丢弃它自己最早的
-const MAX_PENDING_LOGIN_PER_IP = 5;
+// 登录用的 challenge 不在服务端保存（见 createPasskeys），只记下用过的，用过且未过期的数量上限
+const MAX_USED_LOGIN_CHALLENGES = 10000;
+const LOGIN_NONCE_BYTES = 16;
+const LOGIN_MAC_BYTES = 16;
 // EdDSA、ES256、RS256。固定下来，不随 Node.js 是否支持后量子算法而变化
 const SUPPORTED_ALGORITHMS = [-8, -7, -257];
 
@@ -40,11 +42,14 @@ function notFound(id) {
 
 // 面板的 passkey（WebAuthn）。relyingParty 为 { id, origin }（见 options.js 的 passkeyRelyingParty），为 null 时不提供 passkey，
 // 已保存的 passkey 仍可查看与删除。passkey 保存在 panel.json 的 auth.passkeys 中，只含公钥。
-// challenge 只保存在内存中：5 分钟内有效、只能使用一次，并且只能用于申请时的用途（登录、二次验证或添加）；
-// 二次验证与添加还绑定申请时的会话。登录用的单独存放，未登录的请求再多也挤不掉二次验证与添加用的
+// challenge 5 分钟内有效、只能使用一次，并且只能用于申请时的用途（登录、二次验证或添加）；二次验证与添加还绑定申请时的会话。
+// 二次验证与添加用的保存在内存中。登录用的未登录也能申请，不在服务端保存：challenge 自带过期时间与 HMAC（密钥每次启动随机生成），
+// 校验时验证 HMAC 与过期时间，只记下用过的防止重放。未登录的请求再多也不会挤掉别人（包括管理员）正在使用的 challenge
 function createPasskeys({ store, relyingParty, now = Date.now }) {
-  const pending = { login: new Map(), session: new Map() };
-  const poolFor = (purpose) => (purpose === "login" ? pending.login : pending.session);
+  const pending = new Map();
+  const loginKey = crypto.randomBytes(32);
+  // 用过的登录 challenge → 过期时间
+  const usedLogin = new Map();
 
   const usable = (passkey) => Boolean(relyingParty) && passkey.rpId === relyingParty.id;
 
@@ -54,33 +59,66 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
     }
   }
 
-  // ip 只用于登录用的 challenge
-  function remember(challenge, purpose, owner, ip = "") {
+  function remember(challenge, purpose, owner) {
     const t = now();
-    const pool = poolFor(purpose);
-    const sameIp = [];
-    for (const [key, entry] of pool) {
+    for (const [key, entry] of pending) {
       if (entry.expiresAt <= t) {
-        pool.delete(key);
-      } else if (ip && entry.ip === ip) {
-        sameIp.push(key);
+        pending.delete(key);
       }
     }
-    while (sameIp.length >= MAX_PENDING_LOGIN_PER_IP) {
-      pool.delete(sameIp.shift());
+    while (pending.size >= MAX_PENDING_CHALLENGES) {
+      pending.delete(pending.keys().next().value);
     }
-    while (pool.size >= MAX_PENDING_CHALLENGES) {
-      pool.delete(pool.keys().next().value);
+    pending.set(challenge, { purpose, owner: ownerKey(owner), expiresAt: t + CHALLENGE_TTL_MS });
+  }
+
+  const loginMac = (body) => crypto.createHmac("sha256", loginKey).update("login\0").update(body).digest().subarray(0, LOGIN_MAC_BYTES);
+
+  // 登录用的 challenge：8 字节过期时间 + 随机数 + HMAC
+  function loginChallenge() {
+    const body = Buffer.alloc(8 + LOGIN_NONCE_BYTES);
+    body.writeBigUInt64BE(BigInt(now() + CHALLENGE_TTL_MS), 0);
+    crypto.randomFillSync(body, 8);
+    return new Uint8Array(Buffer.concat([body, loginMac(body)]));
+  }
+
+  // 校验并作废登录用的 challenge：HMAC 正确、未过期且没有用过
+  function takeLogin(challenge) {
+    const raw = Buffer.from(String(challenge), "base64url");
+    if (raw.length !== 8 + LOGIN_NONCE_BYTES + LOGIN_MAC_BYTES) {
+      return false;
     }
-    pool.set(challenge, { purpose, owner: owner ? ownerKey(owner) : "", ip, expiresAt: t + CHALLENGE_TTL_MS });
+    const body = raw.subarray(0, 8 + LOGIN_NONCE_BYTES);
+    if (!crypto.timingSafeEqual(raw.subarray(body.length), loginMac(body))) {
+      return false;
+    }
+    const t = now();
+    const expiresAt = Number(body.readBigUInt64BE(0));
+    if (expiresAt <= t || usedLogin.has(challenge)) {
+      return false;
+    }
+    for (const [key, at] of usedLogin) {
+      if (at <= t) {
+        usedLogin.delete(key);
+      }
+    }
+    // 能走到这里的请求必须带着已添加的 passkey 的 ID，正常使用远到不了这个数量
+    if (usedLogin.size >= MAX_USED_LOGIN_CHALLENGES) {
+      console.warn("passkey 登录：5 分钟内用过的 challenge 过多，暂不接受新的登录");
+      return false;
+    }
+    usedLogin.set(challenge, expiresAt);
+    return true;
   }
 
   // 校验并作废 challenge：无论是否匹配都只能使用一次
   function take(challenge, purpose, owner) {
-    const entry = pending.login.get(challenge) || pending.session.get(challenge);
-    pending.login.delete(challenge);
-    pending.session.delete(challenge);
-    return Boolean(entry) && entry.expiresAt > now() && entry.purpose === purpose && entry.owner === (owner ? ownerKey(owner) : "");
+    if (purpose === "login") {
+      return takeLogin(challenge);
+    }
+    const entry = pending.get(challenge);
+    pending.delete(challenge);
+    return Boolean(entry) && entry.expiresAt > now() && entry.purpose === purpose && entry.owner === ownerKey(owner);
   }
 
   function publicPasskey(passkey) {
@@ -95,10 +133,11 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
   }
 
   // 登录与二次验证的参数。二次验证只列出当前会话可用的 passkey；登录不列出，由浏览器让用户选择（不暴露有哪些 passkey）
-  async function authenticationOptions(purpose, owner, ip) {
+  async function authenticationOptions(purpose, owner) {
     requireAvailable();
     const options = await generateAuthenticationOptions({
       rpID: relyingParty.id,
+      ...(purpose === "login" ? { challenge: loginChallenge() } : {}),
       allowCredentials:
         purpose === "reauth"
           ? store.get().auth.passkeys.filter(usable).map((passkey) => ({ id: passkey.id, transports: passkey.transports }))
@@ -106,7 +145,9 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
       userVerification: "required",
       timeout: CEREMONY_TIMEOUT_MS,
     });
-    remember(options.challenge, purpose, owner, ip);
+    if (purpose !== "login") {
+      remember(options.challenge, purpose, owner);
+    }
     return options;
   }
 
@@ -170,13 +211,24 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
       return store.get().auth.passkeys.filter(usable).length;
     },
 
-    // ip：申请者的地址，用于限制同一 IP 同时有效的数量
-    loginOptions(ip = "") {
-      return authenticationOptions("login", "", ip);
+    loginOptions() {
+      return authenticationOptions("login", "");
     },
 
     reauthOptions(token) {
       return authenticationOptions("reauth", token);
+    },
+
+    // 浏览器返回的结果是否来自当前域名下已添加的 passkey；不是时不可能校验通过，登录接口不把它计入限速
+    // （passkey 的 ID 不对外公开，伪造的请求只能走到这里，计入限速只会让伪造 X-Forwarded-For 的人锁住别人的 IP）
+    isKnownCredential(response) {
+      return Boolean(
+        relyingParty &&
+          response &&
+          typeof response === "object" &&
+          typeof response.id === "string" &&
+          store.get().auth.passkeys.some((item) => item.id === response.id && usable(item))
+      );
     },
 
     verifyLogin(response) {

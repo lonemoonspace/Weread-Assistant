@@ -41,6 +41,36 @@ function publicSchema() {
   };
 }
 
+// 地址中带用户名与密码的配置项（Selenium 地址）：接口返回时把密码换成掩码
+const URL_WITH_PASSWORD_KEYS = new Set(["seleniumUrl"]);
+
+// 把地址拆成「密码之前、密码、密码之后」三段；没有密码时返回 null
+function splitUrlPassword(url) {
+  const match = /^((?:[a-z][a-z0-9+.-]*:\/\/)?)([^/?#]*)(.*)$/is.exec(String(url));
+  const authority = match[2];
+  const at = authority.lastIndexOf("@");
+  const colon = authority.slice(0, Math.max(at, 0)).indexOf(":");
+  if (at < 0 || colon < 0 || colon === at - 1) {
+    return null;
+  }
+  return {
+    before: match[1] + authority.slice(0, colon + 1),
+    password: authority.slice(colon + 1, at),
+    after: authority.slice(at) + match[3],
+  };
+}
+
+function maskValue(field, value) {
+  if (field.secret && value) {
+    return SECRET_MASK;
+  }
+  if (URL_WITH_PASSWORD_KEYS.has(field.key) && value) {
+    const parts = splitUrlPassword(value);
+    return parts ? parts.before + SECRET_MASK + parts.after : value;
+  }
+  return value;
+}
+
 function maskValues(values) {
   const masked = {};
   for (const [key, value] of Object.entries(values)) {
@@ -48,9 +78,23 @@ function maskValues(values) {
     if (!field) {
       continue;
     }
-    masked[key] = field.secret && value ? SECRET_MASK : value;
+    masked[key] = maskValue(field, value);
   }
   return masked;
+}
+
+// 提交的地址中密码为掩码：地址的其余部分（含用户名、主机与端口）与当前值相同时沿用当前的密码，
+// 否则拒绝，不能借掩码把已保存的密码发往别的地址
+function keepMaskedUrlPassword(field, currentValue, rawValue) {
+  const submitted = typeof rawValue === "string" ? splitUrlPassword(rawValue.trim()) : null;
+  if (!submitted || submitted.password !== SECRET_MASK) {
+    return false;
+  }
+  const current = currentValue ? splitUrlPassword(currentValue) : null;
+  if (!current || current.before !== submitted.before || current.after !== submitted.after) {
+    throw badRequest(`${field.label}中的密码是掩码：修改地址或用户名时需要重新填写密码`);
+  }
+  return true;
 }
 
 // 按 patch 修改一组配置值（全局默认或账号覆盖）并返回新对象。
@@ -66,6 +110,9 @@ function applyConfigPatch(current, patch) {
       throw badRequest(`未知的配置项：${key}`);
     }
     if (field.secret && (rawValue === "" || rawValue === SECRET_MASK)) {
+      continue;
+    }
+    if (URL_WITH_PASSWORD_KEYS.has(key) && keepMaskedUrlPassword(field, current[key], rawValue)) {
       continue;
     }
     if (rawValue === null || rawValue === "") {

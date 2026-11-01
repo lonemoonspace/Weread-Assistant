@@ -542,6 +542,65 @@ async function main() {
       assert.ok(ended, "过期的会话应在下次登录时回收");
     });
 
+    await scenario("按 IP 的失败计数：上次失败 15 分钟后从头计数；锁定期间与刚解锁时仍逐次翻倍", async () => {
+      let t = Date.now();
+      const auth = createAuth({ store: { get: () => ({ auth: { passwordHash: "" } }) }, envPassword: "correct-horse", now: () => t });
+      await auth.init();
+      for (let i = 0; i < 4; i += 1) {
+        assert.strictEqual((await auth.login("192.0.2.1", "wrong")).retryAfterMs, 0);
+      }
+      t += 15 * 60 * 1000;
+      assert.strictEqual((await auth.login("192.0.2.1", "wrong")).retryAfterMs, 0, "15 分钟没有再失败，从头计数");
+      for (let i = 0; i < 3; i += 1) {
+        await auth.login("192.0.2.1", "wrong");
+      }
+      assert.strictEqual((await auth.login("192.0.2.1", "wrong")).retryAfterMs, 30 * 1000, "第 5 次失败锁定 30 秒");
+      t += 31 * 1000;
+      assert.strictEqual((await auth.login("192.0.2.1", "wrong")).retryAfterMs, 60 * 1000, "刚解锁就再失败，锁定翻倍");
+      t += 61 * 1000 + 15 * 60 * 1000;
+      assert.strictEqual((await auth.login("192.0.2.1", "wrong")).retryAfterMs, 0, "解锁后 15 分钟没有再失败，从头计数");
+    });
+
+    await scenario("同一 IP 并发登录：校验中的请求预先占用失败名额，一次突发最多校验 5 次", async () => {
+      const auth = createAuth({ store: { get: () => ({ auth: { passwordHash: "" } }) }, envPassword: "correct-horse" });
+      await auth.init();
+      const results = await Promise.all(Array.from({ length: 50 }, () => auth.login("192.0.2.1", "wrong")));
+      assert.strictEqual(results.filter((result) => !result.locked).length, 5, "进入校验的请求数");
+      assert.ok(results.every((result) => !result.ok));
+      assert.ok((await auth.login("192.0.2.1", "correct-horse")).locked, "5 次失败后锁定");
+      // 正确密码与其他请求并发时照常登录，并清除失败计数
+      const other = createAuth({ store: { get: () => ({ auth: { passwordHash: "" } }) }, envPassword: "correct-horse" });
+      await other.init();
+      const mixed = await Promise.all([other.login("192.0.2.2", "wrong"), other.login("192.0.2.2", "correct-horse")]);
+      assert.ok(mixed[1].ok);
+    });
+
+    await scenario("校验旧密码期间密码被修改：这次登录失败，修改密码后不会留下用旧密码建立的会话", async () => {
+      const store = createStore(tempDir());
+      let pendingLogin = null;
+      let armed = false;
+      const auth = createAuth({
+        store: {
+          get: () => store.get(),
+          // 修改密码写入新哈希的同时，有一个用旧密码的登录正在校验
+          update: (fn) => {
+            if (armed && !pendingLogin) {
+              pendingLogin = auth.login("192.0.2.9", original);
+            }
+            return store.update(fn);
+          },
+        },
+      });
+      const original = await auth.init();
+      armed = true;
+      const changed = await auth.changePassword("192.0.2.1", original, "new-password-1");
+      assert.ok(changed.ok);
+      const raced = await pendingLogin;
+      assert.ok(!raced.ok, "旧密码的登录不成功");
+      assert.ok(auth.isSessionValid(changed.token));
+      assert.ok((await auth.login("192.0.2.9", "new-password-1")).ok);
+    });
+
     await scenario("会话按访问续期，但从登录起最长 30 天", async () => {
       let t = Date.now();
       const auth = createAuth({ store: { get: () => ({ auth: { passwordHash: "" } }) }, envPassword: "correct-horse", now: () => t });
@@ -803,6 +862,26 @@ async function main() {
       assert.strictEqual((await login(panel, "correct-horse")).status, 429);
     });
 
+    await scenario("不是已添加的 passkey 的登录请求返回 401，但不计入限速：伪造请求锁不住别人的 IP", async () => {
+      const panel = await startAuthed({ publicUrl: PASSKEY_URL, limits: { lockoutBaseMs: 60000 } });
+      const authenticator = await addPasskey(panel);
+      for (let i = 0; i < 10; i += 1) {
+        const res = await passkeyLogin(panel, createSoftAuthenticator(PASSKEY_RP));
+        assert.strictEqual(res.status, 401);
+        assert.deepStrictEqual(res.json, { error: "passkey_failed" });
+      }
+      for (const response of [null, "x", { id: 1 }]) {
+        const res = await panel.request("api/auth/passkey/login", { method: "POST", body: { response }, headers: CSRF });
+        assert.strictEqual(res.status, 401);
+      }
+      assert.strictEqual((await passkeyLogin(panel, authenticator)).status, 204);
+      // 被锁定的 IP 同样返回 429
+      for (let i = 0; i < 5; i += 1) {
+        await passkeyLogin(panel, authenticator, { badSignature: true });
+      }
+      assert.strictEqual((await panel.request("api/auth/passkey/login", { method: "POST", body: { response: null }, headers: CSRF })).status, 429);
+    });
+
     await scenario("二次验证：添加、删除 passkey 要求会话在有效期内登录或验证过；可用密码或 passkey 验证，失败计入限速", async () => {
       const panel = await startAuthed({ publicUrl: PASSKEY_URL, limits: { reauthWindowMs: 300 } });
       const authenticator = await addPasskey(panel);
@@ -905,7 +984,7 @@ async function main() {
       assert.strictEqual(res.status, 204);
     });
 
-    await scenario("passkey 的 challenge：5 分钟后过期；登录用的数量有上限（同一 IP 另有上限），超出时丢弃最早的，挤不掉二次验证与添加用的", async () => {
+    await scenario("passkey 的 challenge：5 分钟后过期；登录用的不在服务端保存，申请再多也挤不掉别人的；二次验证与添加用的不受影响", async () => {
       let t = Date.parse("2026-01-01T00:00:00Z");
       const dataDir = tempDir();
       const store = createStore(dataDir);
@@ -925,34 +1004,31 @@ async function main() {
       assert.strictEqual(await passkeys.verifyLogin(authenticator.assert(stale)), null, "过期的 challenge");
       const fresh = await passkeys.loginOptions();
       assert.ok(await passkeys.verifyLogin(authenticator.assert(fresh)));
+      assert.strictEqual(await passkeys.verifyLogin(authenticator.assert(fresh)), null, "用过的 challenge");
 
-      const first = await passkeys.loginOptions();
-      for (let i = 0; i < 100; i += 1) {
-        await passkeys.loginOptions();
-      }
-      assert.strictEqual(await passkeys.verifyLogin(authenticator.assert(first)), null, "最早的 challenge 被丢弃");
-      const latest = await passkeys.loginOptions();
-      assert.ok(await passkeys.verifyLogin(authenticator.assert(latest)));
-
-      // 未登录的请求再多，也挤不掉二次验证与添加用的 challenge
+      // 未登录的请求申请再多，管理员手上的登录 challenge 与二次验证、添加用的都不受影响
+      const mine = await passkeys.loginOptions();
       const reauth = await passkeys.reauthOptions(token);
       const registration = await passkeys.registrationOptions(token);
-      for (let i = 0; i < 110; i += 1) {
-        await passkeys.loginOptions(`10.0.${i}.1`);
+      for (let i = 0; i < 1000; i += 1) {
+        await passkeys.loginOptions();
       }
+      assert.ok(await passkeys.verifyLogin(authenticator.assert(mine)), "管理员的登录 challenge 保留");
       assert.ok(await passkeys.verifyReauth(authenticator.assert(reauth), token), "二次验证用的 challenge 保留");
       const added = await passkeys.register(createSoftAuthenticator(PASSKEY_RP).register(registration), "后加的", token);
       assert.strictEqual(added.name, "后加的", "添加用的 challenge 保留");
 
-      // 同一 IP 同时有效的最多 5 个，超出时丢弃它自己最早的，其他 IP 的不受影响
-      const own = await passkeys.loginOptions("192.0.2.1");
-      const flood = [];
-      for (let i = 0; i < 6; i += 1) {
-        flood.push(await passkeys.loginOptions("192.0.2.2"));
-      }
-      assert.strictEqual(await passkeys.verifyLogin(authenticator.assert(flood[0])), null, "同一 IP 最早的被丢弃");
-      assert.ok(await passkeys.verifyLogin(authenticator.assert(flood[1])));
-      assert.ok(await passkeys.verifyLogin(authenticator.assert(own)), "其他 IP 的保留");
+      // 改动过的、其他面板实例签发的登录 challenge 都不接受
+      const other = createPasskeys({ store, relyingParty: { id: "example.com", origin: "https://example.com" }, now: () => t });
+      assert.strictEqual(await passkeys.verifyLogin(authenticator.assert(await other.loginOptions())), null, "其他实例的 challenge");
+      const tampered = await passkeys.loginOptions();
+      const raw = Buffer.from(tampered.challenge, "base64url");
+      raw[0] ^= 1;
+      assert.strictEqual(
+        await passkeys.verifyLogin(authenticator.assert({ ...tampered, challenge: raw.toString("base64url") })),
+        null,
+        "改过过期时间的 challenge"
+      );
     });
 
     await scenario("panel.json 中 auth.passkeys、auth.passwordLogin 格式不对时视为损坏，不会被清空", async () => {
@@ -1124,6 +1200,38 @@ async function main() {
       assert.strictEqual(page.headers.get("cache-control"), "no-store");
       assert.strictEqual(page.headers.get("strict-transport-security"), null);
       assert.match((await panel.request("assets/app/main.js")).headers.get("cache-control"), /max-age/, "静态文件照常缓存");
+    });
+
+    await scenario("Selenium 地址中的密码返回掩码；提交掩码时只在地址其余部分不变时沿用原密码", async () => {
+      const panel = await startAuthed();
+      const file = path.join(panel.options.dataDir, "panel.json");
+      const saved = () => JSON.parse(fs.readFileSync(file, "utf8")).defaults.seleniumUrl;
+      const withPassword = "http://robot:p%40ss@grid.lan:4444/wd/hub";
+      const masked = "http://robot:••••••@grid.lan:4444/wd/hub";
+      const set = await panel.call("PATCH", "api/settings", { defaults: { seleniumUrl: withPassword } });
+      assert.strictEqual(set.status, 200);
+      assert.strictEqual(set.json.defaults.seleniumUrl, masked);
+      assert.strictEqual((await panel.call("GET", "api/settings")).json.defaults.seleniumUrl, masked);
+      // 原样提交掩码：密码不变
+      assert.strictEqual((await panel.call("PATCH", "api/settings", { defaults: { seleniumUrl: masked } })).status, 200);
+      assert.strictEqual(saved(), withPassword);
+      // 换了主机、用户名或路径还提交掩码：拒绝，不能把密码发往别的地址
+      for (const url of ["http://robot:••••••@evil.example:4444/wd/hub", "http://other:••••••@grid.lan:4444/wd/hub", "http://robot:••••••@grid.lan:4444"]) {
+        const res = await panel.call("PATCH", "api/settings", { defaults: { seleniumUrl: url } });
+        assert.strictEqual(res.status, 400, url);
+      }
+      assert.strictEqual(saved(), withPassword);
+      // 重新填写密码可以修改；没有密码的地址原样返回
+      await panel.call("PATCH", "api/settings", { defaults: { seleniumUrl: "http://robot:new@grid2.lan:4444" } });
+      assert.strictEqual(saved(), "http://robot:new@grid2.lan:4444");
+      await panel.call("PATCH", "api/settings", { defaults: { seleniumUrl: "http://grid.lan:4444" } });
+      assert.strictEqual((await panel.call("GET", "api/settings")).json.defaults.seleniumUrl, "http://grid.lan:4444");
+      // 账号覆盖与实际生效的配置同样返回掩码
+      await panel.call("POST", "api/accounts", { id: "sel", name: "sel" });
+      const account = await panel.call("PATCH", "api/accounts/sel", { overrides: { seleniumUrl: withPassword } });
+      assert.strictEqual(account.status, 200, JSON.stringify(account.json));
+      assert.strictEqual(account.json.account.overrides.seleniumUrl, masked);
+      assert.strictEqual((await panel.call("GET", "api/accounts/sel")).json.effective.seleniumUrl, masked);
     });
 
     await scenario("全局设置与默认配置：校验取值、整体生效或整体不生效、null 恢复默认", async () => {

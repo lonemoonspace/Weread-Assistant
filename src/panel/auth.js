@@ -20,10 +20,14 @@ const GENERATED_PASSWORD_LENGTH = 16;
 const PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
 
 // 同一 IP 连续失败 maxFailures 次后锁定，锁定时长从 lockoutBaseMs 开始翻倍，最长 lockoutMaxMs；
+// 锁定结束后 lockoutMaxMs 内没有再失败时从头计数。正在校验中的请求预先占用失败名额，并发的请求不能借校验未完成多试几次；
 // 所有 IP 在 globalWindowMs 内累计失败 globalMaxFailures 次后暂停其他 IP 的登录，
 // 防止反向代理配置不当时攻击者伪造 X-Forwarded-For 绕过按 IP 限速。
 // 最近 SESSION_MAX_AGE_MS 内登录（密码或 passkey）或二次验证成功过的 IP 不受全局暂停影响（仍按 IP 限速），
 // 未认证的请求不能借全局暂停把管理员挡在面板外；暂停只在内存中，重启面板即解除。reauthWindowMs 为二次验证的有效期
+
+// 正在校验的请求占满失败名额时，其他请求等这么久再试
+const PENDING_RETRY_MS = 1000;
 const DEFAULT_LIMITS = {
   maxFailures: 5,
   lockoutBaseMs: 30 * 1000,
@@ -107,6 +111,8 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
   let globalFailures = [];
   let globalLockedUntil = 0;
   let envPasswordHash = "";
+  // 每次修改密码加一：校验旧密码期间密码被修改时，这次登录不算成功（否则会在修改密码结束所有会话之后留下新会话）
+  let passwordVersion = 0;
   // 修改密码串行执行：并发请求都通过旧密码校验时，后完成的会清空先完成者刚创建的会话
   let passwordChange = Promise.resolve();
 
@@ -182,7 +188,19 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     if (wait > 0) {
       return { ok: false, locked: true, retryAfterMs: wait };
     }
-    const result = await verify();
+    // 先占位后校验：同一 IP 正在校验的请求数不超过距离锁定剩余的失败次数（已到上限、锁定刚结束时为 1，下一次失败就再次锁定）
+    const record = failureRecord(ip, now());
+    if (record.pending >= Math.max(1, cfg.maxFailures - record.failures)) {
+      return { ok: false, locked: true, retryAfterMs: PENDING_RETRY_MS };
+    }
+    record.pending += 1;
+    attempts.set(ip, record);
+    let result;
+    try {
+      result = await verify();
+    } finally {
+      record.pending -= 1;
+    }
     if (result) {
       attempts.delete(ip);
       trustIp(ip);
@@ -192,7 +210,22 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     return { ok: false, retryAfterMs: retryAfterMs(ip, { global }) };
   }
 
-  const checkPassword = (password) => typeof password === "string" && password.length > 0 && verifyPassword(password, currentHash());
+  const checkPassword = async (password) => {
+    if (typeof password !== "string" || password.length === 0) {
+      return false;
+    }
+    const version = passwordVersion;
+    return (await verifyPassword(password, currentHash())) && version === passwordVersion;
+  };
+
+  // 按 IP 的失败记录；上次失败已过去 lockoutMaxMs 且不在锁定中时从头计数，偶尔输错不会一直累积到下次一错就锁
+  function failureRecord(ip, t) {
+    const record = attempts.get(ip) || { failures: 0, pending: 0, lockedUntil: 0, lastFailureAt: 0 };
+    if (record.failures > 0 && record.lockedUntil <= t && t - record.lastFailureAt >= cfg.lockoutMaxMs) {
+      record.failures = 0;
+    }
+    return record;
+  }
 
   function retryAfterMs(ip, { global = true } = {}) {
     const t = now();
@@ -206,7 +239,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
   // 也不能用来触发全局暂停（passkey 失败不需要 scrypt，比猜密码便宜）
   function recordFailure(ip, { global = true } = {}) {
     const t = now();
-    const record = attempts.get(ip) || { failures: 0, lockedUntil: 0, lastFailureAt: 0 };
+    const record = failureRecord(ip, t);
     record.failures += 1;
     record.lastFailureAt = t;
     if (record.failures >= cfg.maxFailures) {
@@ -231,7 +264,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     // 清理早已解锁且一小时内没有再失败的记录
     if (attempts.size > 1000) {
       for (const [key, value] of attempts) {
-        if (value.lockedUntil < t && value.lastFailureAt < t - 60 * 60 * 1000) {
+        if (value.pending === 0 && value.lockedUntil < t && value.lastFailureAt < t - 60 * 60 * 1000) {
           attempts.delete(key);
         }
       }
@@ -450,6 +483,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     await store.update((data) => {
       data.auth.passwordHash = passwordHash;
     });
+    passwordVersion += 1;
     for (const key of [...sessions.keys()]) {
       endSession(key);
     }
