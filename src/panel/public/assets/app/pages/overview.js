@@ -98,11 +98,49 @@ export const OverviewPage = {
     // 概览统计指标
     const totalAccounts = computed(() => state.accounts.length);
     const activeAccounts = computed(() => state.accounts.filter((a) => a.enabled).length);
-    const checkedInToday = computed(() => state.accounts.filter((a) => a.today && a.today.checkedIn).length);
+    // 今日打卡以启用的账号为准
+    const checkedInToday = computed(() =>
+      state.accounts.filter((a) => a.enabled && a.today && a.today.checkedIn).length
+    );
     const totalMinutesToday = computed(() =>
       state.accounts.reduce((sum, a) => sum + (a.today ? a.today.minutes : 0), 0)
     );
-    const runningCount = computed(() => Object.values(state.runs).length);
+
+    // 任务运行统计细分
+    const runsList = computed(() => Object.values(state.runs));
+    const totalRuns = computed(() => runsList.value.length);
+    const activeRuns = computed(() =>
+      runsList.value.filter((run) => run.status !== "queued" && run.status !== "waiting-login")
+    );
+    const waitingRuns = computed(() =>
+      runsList.value.filter((run) => run.status === "waiting-login")
+    );
+    const queuedRuns = computed(() =>
+      runsList.value.filter((run) => run.status === "queued")
+    );
+    const runStatusTip = computed(() => {
+      if (!totalRuns.value) {
+        return "全部任务空闲";
+      }
+      const parts = [];
+      if (activeRuns.value.length) {
+        parts.push(`${activeRuns.value.length} 个运行中`);
+      }
+      if (waitingRuns.value.length) {
+        parts.push(`${waitingRuns.value.length} 个需扫码`);
+      }
+      if (queuedRuns.value.length) {
+        parts.push(`${queuedRuns.value.length} 个排队`);
+      }
+      return parts.join(" · ");
+    });
+
+    const checkInRate = computed(() =>
+      activeAccounts.value ? Math.round((checkedInToday.value / activeAccounts.value) * 100) : 0
+    );
+    const isAllCheckedIn = computed(() =>
+      activeAccounts.value > 0 && checkedInToday.value >= activeAccounts.value
+    );
 
     return {
       waiting,
@@ -113,7 +151,11 @@ export const OverviewPage = {
       activeAccounts,
       checkedInToday,
       totalMinutesToday,
-      runningCount,
+      totalRuns,
+      activeRuns,
+      runStatusTip,
+      checkInRate,
+      isAllCheckedIn,
       MODE_LABELS,
       TRIGGER_LABELS,
       state,
@@ -137,10 +179,11 @@ export const OverviewPage = {
           <span>今日打卡</span>
         </div>
         <div class="metric-number">
-          {{ checkedInToday }} / {{ totalAccounts }}
+          {{ checkedInToday }}<template v-if="activeAccounts"> / {{ activeAccounts }}</template>
         </div>
-        <div class="metric-tip" :class="checkedInToday === totalAccounts ? 'ok-text' : 'muted'">
-          达成率 {{ totalAccounts ? Math.round((checkedInToday / totalAccounts) * 100) : 0 }}%
+        <div class="metric-tip" :class="isAllCheckedIn ? 'ok-text' : 'muted'">
+          <template v-if="activeAccounts">达成率 {{ checkInRate }}%</template>
+          <template v-else>无启用账号</template>
         </div>
       </div>
       <div class="metric-card">
@@ -159,10 +202,10 @@ export const OverviewPage = {
           <span>任务运行</span>
         </div>
         <div class="metric-number">
-          {{ runningCount }}<span class="metric-unit">个任务</span>
+          {{ totalRuns }}<span class="metric-unit">个任务</span>
         </div>
-        <div class="metric-tip" :class="runningCount > 0 ? 'ok-text' : 'muted'">
-          {{ runningCount > 0 ? '正在调度运行中' : '目前全部任务空闲' }}
+        <div class="metric-tip" :class="activeRuns.length ? 'ok-text' : 'muted'">
+          {{ runStatusTip }}
         </div>
       </div>
     </section>

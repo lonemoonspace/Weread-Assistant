@@ -7,7 +7,6 @@
 
   /* 品牌与主色 */
   --wa-brand: #07c160;
-  --wa-brand-hover: #059669;
 
   /* 语义色彩体系（更饱满通透） */
   --wa-tint: rgba(100, 116, 139, 0.12);
@@ -429,10 +428,23 @@ button.small,
   border-color: var(--wa-green-border);
 }
 
+.account-avatar.blue {
+  background: var(--wa-blue);
+  color: var(--wa-blue-strong);
+  border-color: var(--wa-blue-border);
+}
+
 .account-avatar.amber {
   background: var(--wa-amber);
   color: var(--wa-amber-strong);
   border-color: var(--wa-amber-border);
+}
+
+.account-avatar.disabled {
+  background: var(--wa-tint);
+  color: var(--pico-muted-color);
+  border-color: var(--wa-tint-border);
+  opacity: 0.7;
 }
 
 .account-title-wrap {
@@ -770,11 +782,6 @@ button.small,
   color: #94a3b8;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-weight: 600;
-}
-
-.log-panel h3 {
-  margin-bottom: 0.5rem;
-  font-size: 1rem;
 }
 
 .log {
@@ -1162,7 +1169,20 @@ tr.expanded > td {
 
 @media (max-width: 576px) {
   .metrics-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .metric-card {
+    padding: 0.75rem 0.85rem;
+  }
+
+  .metric-number {
+    font-size: 1.35rem;
+  }
+
+  .metric-tip {
+    font-size: 0.74em;
   }
 
   .app-header nav ul:last-child li {
@@ -1187,5 +1207,17 @@ tr.expanded > td {
   .day {
     min-height: 3.2rem;
     padding: 3px 4px;
+  }
+}
+
+/* 减弱动效适配 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
