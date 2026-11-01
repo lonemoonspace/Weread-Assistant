@@ -599,6 +599,24 @@ async function main() {
       assert.ok(!raced.ok, "旧密码的登录不成功");
       assert.ok(auth.isSessionValid(changed.token));
       assert.ok((await auth.login("192.0.2.9", "new-password-1")).ok);
+
+      // passkey 登录同样：校验期间修改了密码时不算成功
+      let passkeyLogin = null;
+      pendingLogin = null;
+      const slowPasskey = () => new Promise((resolve) => setTimeout(() => resolve({ id: "pk" }), 50));
+      const originalUpdate = store.update.bind(store);
+      const second = createAuth({
+        store: {
+          get: () => store.get(),
+          update: (fn) => {
+            passkeyLogin = passkeyLogin || second.loginWithPasskey("192.0.2.8", slowPasskey);
+            return originalUpdate(fn);
+          },
+        },
+      });
+      await second.init();
+      assert.ok((await second.changePassword("192.0.2.1", "new-password-1", "new-password-2")).ok);
+      assert.ok(!(await passkeyLogin).ok, "passkey 登录不成功");
     });
 
     await scenario("会话按访问续期，但从登录起最长 30 天", async () => {
@@ -1029,6 +1047,21 @@ async function main() {
         null,
         "改过过期时间的 challenge"
       );
+
+      // 同一个 challenge 换种写法（追加空白、填充）不能再用一次
+      const padded = await passkeys.loginOptions();
+      assert.strictEqual(
+        await passkeys.verifyLogin(authenticator.assert({ ...padded, challenge: `${padded.challenge}  ` })),
+        null,
+        "非规范写法"
+      );
+      assert.ok(await passkeys.verifyLogin(authenticator.assert(padded)), "规范写法仍可使用");
+
+      // 用错误签名不断用掉 challenge 时丢弃最早记下的，不拒绝之后的正常登录
+      for (let i = 0; i < 10050; i += 1) {
+        await passkeys.verifyLogin(authenticator.assert(await passkeys.loginOptions(), { badSignature: true }));
+      }
+      assert.ok(await passkeys.verifyLogin(authenticator.assert(await passkeys.loginOptions())), "记满后仍可登录");
     });
 
     await scenario("panel.json 中 auth.passkeys、auth.passwordLogin 格式不对时视为损坏，不会被清空", async () => {
@@ -1221,6 +1254,12 @@ async function main() {
         assert.strictEqual(res.status, 400, url);
       }
       assert.strictEqual(saved(), withPassword);
+      // 带首尾空白的地址同样返回掩码，原样提交掩码时沿用原密码
+      await panel.call("PATCH", "api/settings", { defaults: { seleniumUrl: ` \t${withPassword} ` } });
+      const padded = (await panel.call("GET", "api/settings")).json.defaults.seleniumUrl;
+      assert.strictEqual(padded, masked);
+      assert.strictEqual((await panel.call("PATCH", "api/settings", { defaults: { seleniumUrl: padded } })).status, 200);
+      assert.strictEqual(saved().trim(), withPassword);
       // 重新填写密码可以修改；没有密码的地址原样返回
       await panel.call("PATCH", "api/settings", { defaults: { seleniumUrl: "http://robot:new@grid2.lan:4444" } });
       assert.strictEqual(saved(), "http://robot:new@grid2.lan:4444");

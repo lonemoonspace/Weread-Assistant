@@ -15,7 +15,8 @@ const CEREMONY_TIMEOUT_MS = 2 * 60 * 1000;
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 // 二次验证、添加用的 challenge 同时有效的数量上限，超出时丢弃最早的（只有已登录的会话能申请）
 const MAX_PENDING_CHALLENGES = 100;
-// 登录用的 challenge 不在服务端保存（见 createPasskeys），只记下用过的，用过且未过期的数量上限
+// 登录用的 challenge 不在服务端保存（见 createPasskeys），只记下用过的；超出这个数量时丢弃最早记下的。
+// 不拒绝新的登录：知道 passkey ID 的人可以用错误的签名不断用掉 challenge，拒绝就等于把所有人挡在外面
 const MAX_USED_LOGIN_CHALLENGES = 10000;
 const LOGIN_NONCE_BYTES = 16;
 const LOGIN_MAC_BYTES = 16;
@@ -85,7 +86,8 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
   // 校验并作废登录用的 challenge：HMAC 正确、未过期且没有用过
   function takeLogin(challenge) {
     const raw = Buffer.from(String(challenge), "base64url");
-    if (raw.length !== 8 + LOGIN_NONCE_BYTES + LOGIN_MAC_BYTES) {
+    // 解码时会忽略空白等字符，只接受规范的写法，同一个 challenge 不能换种写法再用一次或占用更多内存
+    if (raw.length !== 8 + LOGIN_NONCE_BYTES + LOGIN_MAC_BYTES || raw.toString("base64url") !== challenge) {
       return false;
     }
     const body = raw.subarray(0, 8 + LOGIN_NONCE_BYTES);
@@ -102,10 +104,8 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
         usedLogin.delete(key);
       }
     }
-    // 能走到这里的请求必须带着已添加的 passkey 的 ID，正常使用远到不了这个数量
-    if (usedLogin.size >= MAX_USED_LOGIN_CHALLENGES) {
-      console.warn("passkey 登录：5 分钟内用过的 challenge 过多，暂不接受新的登录");
-      return false;
+    while (usedLogin.size >= MAX_USED_LOGIN_CHALLENGES) {
+      usedLogin.delete(usedLogin.keys().next().value);
     }
     usedLogin.set(challenge, expiresAt);
     return true;

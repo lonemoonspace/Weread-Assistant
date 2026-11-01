@@ -46,7 +46,8 @@ const URL_WITH_PASSWORD_KEYS = new Set(["seleniumUrl"]);
 
 // 把地址拆成「密码之前、密码、密码之后」三段；没有密码时返回 null
 function splitUrlPassword(url) {
-  const match = /^((?:[a-z][a-z0-9+.-]*:\/\/)?)([^/?#]*)(.*)$/is.exec(String(url));
+  // 使用时会去掉首尾空白，这里同样去掉，否则带前导空白的地址会原样返回、露出密码
+  const match = /^((?:[a-z][a-z0-9+.-]*:\/\/)?)([^/?#]*)(.*)$/is.exec(String(url).trim());
   const authority = match[2];
   const at = authority.lastIndexOf("@");
   const colon = authority.slice(0, Math.max(at, 0)).indexOf(":");

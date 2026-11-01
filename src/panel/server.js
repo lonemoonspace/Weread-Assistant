@@ -309,6 +309,7 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
     res.json(await passkeys.loginOptions());
   });
 
+  let unknownPasskeyLoggedAt = 0;
   // { response }：浏览器返回的 passkey 登录结果。成功 204 并下发会话 cookie，失败 401（计入限速）。
   // 不是已添加的 passkey 时同样 401，但不计入限速
   api.post("/auth/passkey/login", async (req, res) => {
@@ -319,7 +320,11 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
         sendAuthFailure(res, { locked: true, retryAfterMs: wait });
         return;
       }
-      console.warn("面板 passkey 登录失败（不是当前域名下已添加的 passkey）:", req.ip);
+      // 这类请求不限速，日志每分钟最多记一条，避免被刷满磁盘
+      if (Date.now() - unknownPasskeyLoggedAt >= 60 * 1000) {
+        unknownPasskeyLoggedAt = Date.now();
+        console.warn("面板 passkey 登录失败（不是当前域名下已添加的 passkey，1 分钟内不再记录同类失败）:", req.ip);
+      }
       res.status(401).json({ error: "passkey_failed" });
       return;
     }

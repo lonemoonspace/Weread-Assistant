@@ -67,7 +67,7 @@ docker compose logs app | grep 面板初始密码
 | `POST api/auth/login` | 否 | `{ password }`；成功 204 并下发会话 cookie，密码错误 401，被限速 429（带 `Retry-After`，响应体中的 `retryAfter` 为同一秒数；这次失败触发锁定时 401 也带上二者）；密码登录关闭时 403 `password_login_disabled`（不校验密码，不计入限速） |
 | `GET api/auth/methods` | 否 | 登录页可用的登录方式：`{ password, passkey: { available, origin? } }`，`password` 为实际是否允许密码登录；不透露添加了哪些 passkey |
 | `POST api/auth/passkey/options` | 登录：否；二次验证：是 | `{ purpose: "login" \| "reauth" }`：passkey 登录或二次验证的参数（含 challenge）；登录被限速时 429，passkey 不可用时 409 `passkey_unavailable` |
-| `POST api/auth/passkey/login` | 否 | `{ response }`：浏览器返回的 passkey 结果；成功 204 并下发会话 cookie，校验失败 401 `passkey_failed`（计入登录限速；不是当前域名下已添加的 passkey 时不计入），被限速 429 |
+| `POST api/auth/passkey/login` | 否 | `{ response }`：浏览器返回的 passkey 结果；成功 204 并下发会话 cookie，校验失败 401 `passkey_failed`（计入登录限速；不是当前域名下已添加的 passkey 时不计入，日志每分钟最多记一条），被限速 429 |
 | `GET api/auth/session` | 是 | 返回版本号、密码是否来自环境变量、最短密码长度、passkey 是否可用及其地址 `passkey`、当前会话的登录方式 `method`（`password` 或 `passkey`）、二次验证的有效期 `verifiedUntil` 与所用方式 `verifiedBy`（已过期都为 null），以及密码登录的状态 `passwordLogin`：`{ enabled, active, forced, reason }`，见下文“关闭密码登录” |
 | `POST api/auth/reauth` | 是 | 二次验证：`{ password }` 或 `{ passkey }`（浏览器返回的 passkey 结果）；成功 204，之后 5 分钟内可以添加、删除 passkey 与切换密码登录；失败 400 `wrong_password` / `passkey_failed`（计入登录限速，这次失败触发锁定时带 `retryAfter`），被限速 429；密码登录关闭时只接受 passkey，提交密码返回 403 `password_login_disabled` |
 | `GET api/auth/passkeys` | 是 | `{ passkey, passkeys }`：每个 passkey 的 ID、名称、添加与最近使用时间、是否已同步备份 `backedUp`、在当前域名下是否可用 `usable`；不返回公钥 |
@@ -383,11 +383,11 @@ data/
 | --- | --- |
 | 二次验证 | 添加、改名、删除 passkey 与切换密码登录要求当前会话在 5 分钟内登录或二次验证过，否则先用 passkey 或密码再验证一次 |
 | 验证要求 | 要求可发现凭据（登录时不用输入用户名）与用户验证（指纹、面容或 PIN）；不要求证明设备型号（attestation 为 none）；算法为 EdDSA、ES256、RS256 |
-| challenge | 5 分钟内有效、只能使用一次，只能用于申请时的用途；二次验证与添加还绑定申请时的会话。二次验证与添加用的保存在内存中，同时有效的最多 100 个，超出时丢弃最早的（只有已登录的会话能申请）。登录用的未登录也能申请，不在服务端保存：challenge 中带过期时间与 HMAC（密钥每次启动随机生成），校验时只记下用过的防止重放，未登录的请求申请再多也挤不掉别人正在使用的 challenge。面板重启后需重新发起 |
+| challenge | 5 分钟内有效、只能使用一次，只能用于申请时的用途；二次验证与添加还绑定申请时的会话。二次验证与添加用的保存在内存中，同时有效的最多 100 个，超出时丢弃最早的（只有已登录的会话能申请）。登录用的未登录也能申请，不在服务端保存：challenge 中带过期时间与 HMAC（密钥每次启动随机生成），校验时只记下用过的防止重放（只接受规范的 base64url 写法；最多记 10000 个，超出时丢弃最早的，不会因此拒绝登录），未登录的请求申请再多也挤不掉别人正在使用的 challenge。面板重启后需重新发起 |
 | 签名计数 | 每次登录记录认证器返回的签名计数，计数不增反减时拒绝（同步的 passkey 计数始终为 0，不受影响） |
 | 删除 | 删除 passkey 后，用它登录的其他会话立即失效；修改面板密码时所有会话失效，与登录方式无关 |
 | 限速 | passkey 登录与二次验证的失败同样计入按 IP 的登录限速（登录时不是当前域名下已添加的 passkey 不计入：passkey 的 ID 不公开，这类请求不可能成功，计入只会让伪造 `X-Forwarded-For` 的人锁住别人的 IP）；它们不计入全局上限，也不受全局暂停影响（见“安全”中的登录限速） |
-| 备份 | `panel.json` 中只有公钥，泄露后不能用来登录；从备份恢复 `panel.json` 时 passkey 与“允许密码登录”的设置一并恢复 |
+| 备份 | `panel.json` 中只有公钥，泄露后不能用来登录；但其中的 passkey ID 可以用来发起会计入限速的失败登录，`X-Forwarded-For` 可被伪造时能借此锁住任意 IP（最长 15 分钟，重启面板解除），备份仍应妥善保管；从备份恢复 `panel.json` 时 passkey 与“允许密码登录”的设置一并恢复 |
 
 #### 关闭密码登录
 
@@ -455,7 +455,7 @@ location /weread/api/events {
 | --- | --- |
 | 代理层数 | `PANEL_TRUST_PROXY` 填面板前面的代理层数。面板取 `X-Forwarded-For` 中从右往左数第 N 个地址作为客户端 IP，客户端自己伪造的部分会被忽略。层数必须与每一层都追加（`$proxy_add_x_forwarded_for`）的代理数一致：填多了，或某一层原样转发收到的 `X-Forwarded-For`，面板取到的就是客户端自己填的地址，按 IP 限速失效 |
 | Cloudflare | 源站前有 Cloudflare 时，在 Nginx 中用 `real_ip` 模块从 `CF-Connecting-IP` 取真实地址（`set_real_ip_from` 只列 Cloudflare 的网段，见 <https://www.cloudflare.com/ips/>），再用 `proxy_set_header X-Forwarded-For $remote_addr;` 覆盖转给面板，`PANEL_TRUST_PROXY=true`（1 层）；源站只允许 Cloudflare 的网段访问。不要直接用 `$remote_addr` 而不先取真实地址：那是 Cloudflare 节点的地址，所有访问者会共用几份失败计数 |
-| 自查 | 用 `curl -H 'X-Forwarded-For: 203.0.113.1' -X POST ...api/auth/passkey/login` 换几个地址连续失败，若一直 401 而不出现 `Retry-After`，说明面板取到的是伪造的地址，层数或代理配置不对 |
+| 自查 | 从外网发一次 `curl -X POST -H 'X-WA-Request: 1' -H 'Content-Type: application/json' -H 'X-Forwarded-For: 203.0.113.1' -d '{"response":null}' https://<域名>/<子路径>/api/auth/passkey/login`，再看面板日志中“面板 passkey 登录失败”那一行记录的地址（同类日志每分钟最多一条）：是 `203.0.113.1` 说明面板取到的是客户端伪造的地址，层数或代理配置不对；是你的真实地址才正确 |
 | 不信任代理时 | 忽略 `X-Forwarded-*` 请求头，按连接地址限速；cookie 只在请求的域名就是 https 的 `PANEL_PUBLIC_URL` 的域名时加 `Secure` |
 | 只用 HTTPS | `PANEL_PUBLIC_URL` 是 https 地址时，这个域名只能经 HTTPS 打开：经 `http://<该域名>` 打开时 cookie 带 `Secure`，浏览器不保存，登录后会回到登录页。在代理上把 HTTP 跳转到 HTTPS |
 | 端口映射 | 代理与面板在同一主机时映射为 `127.0.0.1:26868:26868`，不直接暴露到公网。设置了 `PANEL_TRUST_PROXY` 时面板端口只能让代理访问：能直连面板的客户端可以伪造 `X-Forwarded-For`，绕过按 IP 的登录限速，或冒充登录过的 IP 绕过全局暂停 |

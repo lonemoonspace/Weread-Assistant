@@ -344,7 +344,13 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     // passkey 登录。verify() 校验成功时返回所用的 passkey，失败返回 null；失败与密码错误一样计入限速。
     // 返回 { ok: true, token, passkey } 或与 login 相同的失败结果
     async loginWithPasskey(ip, verify) {
-      const outcome = await attempt(ip, verify, { global: false });
+      // 校验期间修改了密码（结束所有会话）时同样不算成功
+      const version = passwordVersion;
+      const checked = async () => {
+        const passkey = await verify();
+        return passkey && version === passwordVersion ? passkey : null;
+      };
+      const outcome = await attempt(ip, checked, { global: false });
       return outcome.ok ? { ok: true, token: createSession("passkey", outcome.result.id), passkey: outcome.result } : outcome;
     },
 
