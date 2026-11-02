@@ -306,12 +306,28 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
       sendAuthFailure(res, { locked: true, retryAfterMs: wait });
       return;
     }
-    res.json(await passkeys.loginOptions(req.ip));
+    res.json(await passkeys.loginOptions());
   });
 
-  // { response }：浏览器返回的 passkey 登录结果。成功 204 并下发会话 cookie，失败 401（计入限速）
+  let unknownPasskeyLoggedAt = 0;
+  // { response }：浏览器返回的 passkey 登录结果。成功 204 并下发会话 cookie，失败 401（计入限速）。
+  // 不是已添加的 passkey 时同样 401，但不计入限速
   api.post("/auth/passkey/login", async (req, res) => {
     const response = req.body && req.body.response;
+    if (!passkeys.isKnownCredential(response)) {
+      const wait = auth.passkeyRetryAfterMs(req.ip);
+      if (wait > 0) {
+        sendAuthFailure(res, { locked: true, retryAfterMs: wait });
+        return;
+      }
+      // 这类请求不限速，日志每分钟最多记一条，避免被刷满磁盘
+      if (Date.now() - unknownPasskeyLoggedAt >= 60 * 1000) {
+        unknownPasskeyLoggedAt = Date.now();
+        console.warn("面板 passkey 登录失败（不是当前域名下已添加的 passkey，1 分钟内不再记录同类失败）:", req.ip);
+      }
+      res.status(401).json({ error: "passkey_failed" });
+      return;
+    }
     const result = await auth.loginWithPasskey(req.ip, () => passkeys.verifyLogin(response));
     if (result.ok) {
       setSessionCookie(req, res, result.token);
@@ -563,10 +579,12 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
 
   // 单次运行的记录、截图列表与按天拆分的阅读分钟数
   api.get("/accounts/:id/runs/:runId", (req, res) => {
+    findAccount(store.get(), req.params.id);
     res.json({ run: getRun(panelDataDir, req.params.id, req.params.runId, store.get().settings.timezone) });
   });
 
   api.get("/accounts/:id/runs/:runId/screenshots/:name", (req, res) => {
+    findAccount(store.get(), req.params.id);
     const { dir, name } = screenshotPath(panelDataDir, req.params.id, req.params.runId, req.params.name);
     res.set("Content-Type", "image/png");
     res.sendFile(name, { root: dir });
@@ -674,6 +692,7 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
 
   // 运行日志；?download=1 时作为附件下载
   api.get("/accounts/:id/runs/:runId/log", (req, res) => {
+    findAccount(store.get(), req.params.id);
     let dir;
     try {
       dir = runDir(panelDataDir, req.params.id, req.params.runId);
