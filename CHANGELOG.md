@@ -2,9 +2,13 @@
 
 版本号与 `package.json` 一致；推送 `v<版本号>` tag 时，发布流程把对应一节作为 GitHub Release 的说明。
 
-## 未发布
+## 0.3.2
 
-修复 2026-11-01 渗透测试与登录面审计中核实的问题。
+修复 2026-11-01 渗透测试与登录面审计中核实的问题，并改版面板界面。
+
+升级说明：
+
+- 执行 `docker compose pull && docker compose up -d` 即可，`docker-compose.yml` 与数据目录无需改动
 
 安全：
 
