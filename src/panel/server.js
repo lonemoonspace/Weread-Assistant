@@ -150,7 +150,7 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
     return normalizeSchedules(body.schedules);
   };
   const checkSelenium = createSeleniumChecker({ timeoutMs: options.seleniumTimeoutMs });
-  const checkLocalBrowser = createLocalBrowserChecker();
+  const checkLocalBrowser = createLocalBrowserChecker(process.env, { timeoutMs: options.browserVersionTimeoutMs });
 
   const app = express();
   app.disable("x-powered-by");

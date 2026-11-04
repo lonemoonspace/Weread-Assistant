@@ -15,6 +15,7 @@ const path = require("path");
 const zlib = require("zlib");
 
 const { startPanel } = require(path.resolve(__dirname, "..", "src", "panel", "server"));
+const { createLocalBrowserChecker } = require(path.resolve(__dirname, "..", "src", "shared", "local-browser"));
 const { SESSION_MAX_AGE_MS, SESSION_TTL_MS, createAuth, hashPassword, verifyPassword } = require(path.resolve(__dirname, "..", "src", "panel", "auth"));
 const { SECRET_MASK, resolveAccountConfig } = require(path.resolve(__dirname, "..", "src", "panel", "config"));
 const { CHILD_ENV_KEYS } = require(path.resolve(__dirname, "..", "src", "panel", "runner"));
@@ -2258,10 +2259,49 @@ async function main() {
         process.env.CHROME_BIN = path.join(binDir, "missing-chrome");
         servers = await check();
         assert.strictEqual(servers[0].state, "unreachable");
-        assert.match(servers[0].error, /无法读取浏览器版本/);
+        assert.match(servers[0].error, /无法读取浏览器版本：.*missing-chrome --version 无法执行（ENOENT）/);
       } finally {
         restore();
       }
+    });
+
+    await scenario("内置浏览器：读取版本超时、出错退出时报出原因；读到的版本按文件缓存，文件不变时不再启动浏览器", async () => {
+      const binDir = tempDir(path.join(__dirname, "..", "node_modules", ".cache"));
+      const script = (name, body) => {
+        const file = path.join(binDir, name);
+        fs.writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+        return file;
+      };
+      const counter = path.join(binDir, "count");
+      const env = {
+        PATH: binDir,
+        CHROMEDRIVER_PATH: script("chromedriver", 'echo "ChromeDriver 155.0.8059.84"'),
+        CHROME_BIN: script("chromium-browser", `echo x >> "${counter}"\necho "Chromium 155.0.8059.84 Alpine Linux"`),
+      };
+      const runs = () => fs.readFileSync(counter, "utf8").split("\n").filter(Boolean).length;
+
+      const check = createLocalBrowserChecker(env, { timeoutMs: 500 });
+      assert.strictEqual((await check()).message, "Chromium 155.0.8059.84 Alpine Linux");
+      assert.strictEqual((await check()).ready, true);
+      assert.strictEqual(runs(), 1);
+
+      // 文件改了（例如升级了浏览器）就重新读取
+      script("chromium-browser", `echo x >> "${counter}"\necho "Chromium 156.0.1.2 Alpine Linux"`);
+      fs.utimesSync(env.CHROME_BIN, new Date(), new Date(Date.now() + 5000));
+      const status = await check();
+      assert.strictEqual(runs(), 2);
+      assert.match(status.error, /主版本不一致（chromedriver 155，Chromium 156）/);
+
+      script("chromium-browser", "exec sleep 3");
+      fs.utimesSync(env.CHROME_BIN, new Date(), new Date(Date.now() + 10000));
+      let result = await check();
+      assert.strictEqual(result.state, "unreachable");
+      assert.match(result.error, /chromium-browser --version 0\.5 秒内没有输出版本/);
+
+      script("chromium-browser", 'echo "error while loading shared libraries: libfoo.so" >&2\nexit 127');
+      fs.utimesSync(env.CHROME_BIN, new Date(), new Date(Date.now() + 15000));
+      result = await check();
+      assert.match(result.error, /chromium-browser --version 退出码 127：error while loading shared libraries: libfoo\.so$/);
     });
 
     await scenario("Selenium 状态：停止、不是 Selenium、超时（含持续缓慢发送数据）、响应中途断开都返回 unreachable 与原因；旧版地址回退到 /wd/hub/status", async () => {
