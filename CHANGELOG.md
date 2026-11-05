@@ -2,11 +2,17 @@
 
 版本号与 `package.json` 一致；推送 `v<版本号>` tag 时，发布流程把对应一节作为 GitHub Release 的说明。
 
-## 未发布
+## 0.3.3
+
+修复内置浏览器启动较慢时阅读无法开始的问题。
+
+升级说明：
+
+- 执行 `docker compose pull && docker compose up -d` 即可，`docker-compose.yml` 与数据目录无需改动
 
 修复：
 
-- 面板的「浏览器」卡片偶尔显示「内置浏览器不可用：无法读取浏览器版本：Command failed: /usr/bin/chromium-browser --version」，而阅读照常成功：检查版本时要启动一次 Chromium，原来只等 5 秒，树莓派、NAS 长时间空闲后（文件缓存被换出、硬盘休眠）首次启动可能更慢，被当作超时结束。现在等待 30 秒（与启动 chromedriver 的时限一致），读到的版本按文件缓存，浏览器没有更新时面板刷新不再重复启动它
+- 使用内置浏览器时，运行失败并报「内置浏览器不可用：无法读取浏览器版本：Command failed: /usr/bin/chromium-browser --version」，面板的「浏览器」卡片也显示无法连接：连接前要执行一次 `chromium-browser --version`，原来只等 5 秒，在部分机器上这一步要十几秒（实测一台云主机为 11.6 秒，几乎都是内核时间），超时后被结束，阅读也就不开始。现在等待 30 秒（与启动 chromedriver 的时限一致）；面板按文件缓存读到的版本，浏览器没有更新时刷新页面不再重复启动它
 - 读取版本失败时写明原因：超时、被信号结束（`SIGKILL` 时提示可能内存不足）、退出码与错误输出的第一行，不再只有 `Command failed`
 
 ## 0.3.2
