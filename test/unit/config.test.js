@@ -51,6 +51,17 @@ describe("applyConfigPatch", () => {
     assert.throws(() => applyConfigPatch(current, { seleniumUrl: `http://user:${SECRET_MASK}@evil:4444` }), /需要重新填写密码/);
   });
 
+  it("地址类配置项保存时校验格式与域名", () => {
+    assert.deepEqual(applyConfigPatch({}, { barkServer: " https://bark.example.com/ " }), { barkServer: "https://bark.example.com/" });
+    assert.throws(() => applyConfigPatch({}, { barkServer: "bark.example.com" }), /Bark 服务器地址必须是以 http:\/\/ 或 https:\/\/ 开头的地址/);
+    assert.throws(() => applyConfigPatch({}, { ntfyServer: "ftp://ntfy.example.com" }), /http:\/\//);
+    // Selenium 地址可以省略协议
+    assert.deepEqual(applyConfigPatch({}, { seleniumUrl: "grid:4444" }), { seleniumUrl: "grid:4444" });
+    assert.throws(() => applyConfigPatch({}, { seleniumUrl: "http://" }), /Selenium 地址/);
+    assert.ok(applyConfigPatch({}, { bookUrl: "https://weread.qq.com/web/reader/abc" }).bookUrl);
+    assert.throws(() => applyConfigPatch({}, { bookUrl: "https://evil.example.com/web/reader/abc" }), /只能是 weread\.qq\.com 的地址/);
+  });
+
   it("拒绝未知配置项、面板管理的配置项与非对象", () => {
     assert.throws(() => applyConfigPatch({}, { nope: 1 }), /未知的配置项：nope/);
     assert.throws(() => applyConfigPatch({}, { dataDir: "/tmp" }), /未知的配置项：dataDir/);

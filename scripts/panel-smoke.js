@@ -2904,6 +2904,12 @@ async function main() {
       assert.ok(fs.existsSync(path.join(dataDir, "runs", "ok-1", done[0], "meta.json")));
     });
 
+    await scenario("空闲连接保持 95 秒，长于常见反向代理的保持时间", async () => {
+      const panel = await start();
+      assert.strictEqual(panel.server.keepAliveTimeout, 95000);
+      assert.ok(panel.server.headersTimeout > panel.server.keepAliveTimeout);
+    });
+
     await scenario("端口被占用时给出明确错误", async () => {
       const blocker = net.createServer();
       await new Promise((resolve) => blocker.listen(0, "127.0.0.1", resolve));

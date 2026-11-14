@@ -1,6 +1,7 @@
 const path = require("path");
 const { CONFIG_GROUPS, CONFIG_SCHEMA } = require("../config/schema");
 const { coerceFieldValue, resolveConfig } = require("../config/resolve");
+const { normalizeSeleniumUrl } = require("../shared/selenium");
 const { badRequest } = require("./errors");
 const { SETTINGS_FIELDS } = require("./settings");
 
@@ -98,6 +99,22 @@ function keepMaskedUrlPassword(field, currentValue, rawValue) {
   return true;
 }
 
+// 地址类配置项保存前校验格式：必须是 http(s) 地址，限定了域名时只能是这些域名
+function validateFormat(field, value) {
+  let url;
+  try {
+    url = new URL(URL_WITH_PASSWORD_KEYS.has(field.key) ? normalizeSeleniumUrl(value) : String(value).trim());
+  } catch (_) {
+    url = null;
+  }
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname) {
+    throw badRequest(`${field.label}必须是以 http:// 或 https:// 开头的地址`);
+  }
+  if (field.hosts && !field.hosts.includes(url.hostname.toLowerCase())) {
+    throw badRequest(`${field.label}只能是 ${field.hosts.join("、")} 的地址`);
+  }
+}
+
 // 按 patch 修改一组配置值（全局默认或账号覆盖）并返回新对象。
 // null 或空字符串表示删除该项、回到上一级的值；密钥字段提交空字符串或掩码表示不修改
 function applyConfigPatch(current, patch) {
@@ -124,6 +141,14 @@ function applyConfigPatch(current, patch) {
       next[key] = coerceFieldValue(field, rawValue, field.label);
     } catch (e) {
       throw badRequest(e.message);
+    }
+    if (field.format === "url") {
+      next[key] = String(next[key]).trim();
+      if (next[key] === "") {
+        delete next[key];
+        continue;
+      }
+      validateFormat(field, next[key]);
     }
   }
   return next;

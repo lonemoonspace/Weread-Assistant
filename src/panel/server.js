@@ -46,6 +46,8 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const SSE_HEARTBEAT_MS = 15000;
 // 除每次运行结束与修改保留设置时之外，定期按保留策略清理运行数据
 const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// 空闲连接的保持时间，见 startPanel
+const KEEP_ALIVE_TIMEOUT_MS = 95000;
 
 const CSP_DIRECTIVES = [
   "default-src 'self'",
@@ -916,6 +918,10 @@ async function startPanel(options) {
     const app = createPanelApp(options, { auth, store, runner, passkeys, checkLocalBrowser });
     scheduler = createScheduler({ store, runner });
     server = http.createServer(app);
+    // 面板通常在 cloudflared、nginx 等反向代理之后：空闲连接的保持时间要长于代理的（常见为 60–90 秒），
+    // 否则代理复用一个刚被面板关闭的连接时会偶发 502。headersTimeout 须大于 keepAliveTimeout
+    server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+    server.headersTimeout = KEEP_ALIVE_TIMEOUT_MS + 5000;
 
     await new Promise((resolve, reject) => {
       server.once("error", (error) => {
