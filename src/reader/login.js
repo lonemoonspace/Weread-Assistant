@@ -54,7 +54,8 @@ function readCookiesFile(filePath) {
   return null;
 }
 
-// 登录完成后删除登录弹窗的截图：整页截图可能含昵称、头像，二维码截图已经没有用处
+// 登录完成或运行结束（含扫码超时、出错、停止）后删除登录弹窗的截图：
+// 整页截图可能含昵称、头像，二维码截图已经没有用处
 function removeLoginImages(paths) {
   for (const filePath of [paths.loginQrCode, paths.loginQrImage]) {
     fs.rmSync(filePath, { force: true });
@@ -102,7 +103,7 @@ async function findQRCodeElement(driver) {
   return false;
 }
 
-// 从页面二维码图片中解码登录链接并推送，命令行运行时在终端显示；返回登录链接，解析失败时返回 null。
+// 从页面二维码图片中解码登录链接，命令行运行时在终端显示；返回 { url, qrSaved }，解析失败时 url 为空字符串。
 // 登录链接在有效期内可用于完成这次登录，不写入日志：由面板运行时经 login-required 事件交给面板显示
 async function extractAndDisplayQRCode(driver, ctx) {
   let qrSaved = false;
@@ -131,8 +132,7 @@ async function extractAndDisplayQRCode(driver, ctx) {
         const qrcode = require("qrcode-terminal");
         qrcode.generate(code.data, { small: true });
       }
-      await ctx.notifier.loginLink(code.data, ctx.paths.loginQrImage);
-      return code.data;
+      return { url: code.data, qrSaved };
     }
     console.warn("无法从二维码图片中解析登录链接");
   } catch (e) {
@@ -141,9 +141,7 @@ async function extractAndDisplayQRCode(driver, ctx) {
     }
     console.warn("提取二维码登录链接失败:", e.message);
   }
-  // 配置了面板地址时改为推送面板链接，在面板中扫二维码截图
-  await ctx.notifier.loginLink("", qrSaved ? ctx.paths.loginQrImage : "");
-  return null;
+  return { url: "", qrSaved };
 }
 
 // 截取整页保存为登录二维码图片，并解析、推送登录链接
@@ -163,9 +161,11 @@ async function captureQRCode(driver, ctx) {
     }
     console.warn("保存登录页截图失败:", e.message);
   }
-  const url = await extractAndDisplayQRCode(driver, ctx);
-  // 解析不出链接时也上报，面板据此显示“等待扫码”
-  ctx.report("login-required", { url: url || "" });
+  const { url, qrSaved } = await extractAndDisplayQRCode(driver, ctx);
+  // 先上报再推送：面板立即显示二维码，不必等推送完成。解析不出链接时也上报，面板据此显示“等待扫码”
+  ctx.report("login-required", { url });
+  // 推送在后台发送，失败只记录日志。解析不出链接时，配置了面板地址则改为推送面板链接，在面板中扫二维码截图
+  ctx.notifier.loginLink(url, qrSaved ? ctx.paths.loginQrImage : "");
 }
 
 // 点击首页的“登录”打开二维码弹窗；返回是否找到二维码
@@ -380,5 +380,6 @@ async function login(driver, ctx) {
 
 module.exports = {
   login,
+  removeLoginImages,
   saveCookies,
 };

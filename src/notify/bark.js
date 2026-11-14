@@ -24,15 +24,16 @@ async function sendBark(config, title, body, options = {}) {
     level = "active"
   } = options;
 
-  const barkUrl = `${config.barkServer}/${config.barkKey}`;
-  const payload = { title, body, sound, group, level };
+  // 使用 POST /push 并把 device_key 放进请求体：Key 不出现在请求路径中（不会进入代理与服务端的访问日志），
+  // 服务器地址末尾带斜杠时也不会拼出 //
+  const barkUrl = `${String(config.barkServer).trim().replace(/\/+$/, "")}/push`;
+  const payload = { device_key: config.barkKey, title, body, sound, group, level };
   if (subtitle) payload.subtitle = subtitle;
   if (icon) payload.icon = icon;
   if (url) payload.url = url;
   if (image) payload.image = image;
 
-  // 推送地址中含有 Bark Key，日志中只记录服务器地址
-  console.info("发送Bark推送:", config.barkServer);
+  console.info("发送Bark推送:", barkUrl);
 
   const result = await postJson(barkUrl, payload);
   if (result.ok) {

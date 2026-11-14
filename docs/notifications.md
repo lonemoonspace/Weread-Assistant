@@ -7,18 +7,18 @@
 | 组件 | 职责 | 输入 | 输出 | 依赖 | 关键约束 |
 | --- | --- | --- | --- | --- | --- |
 | `notify(config, title, body, options)`（`src/notify/index.js`） | 统一推送入口，向所有已启用渠道并行发送 | 运行配置、标题、正文、渠道无关选项 | 每个渠道的成功/失败结果数组 | 已启用的渠道配置 | 单渠道失败不影响其他渠道，也不中断主流程 |
-| `sendBark(config, title, body, options)`（`src/notify/bark.js`） | Bark 渠道实现（iOS） | 配置中的 `barkKey`、`barkServer` | Bark HTTP 请求结果 | `https` / `http` | 保持原有请求路径与负载字段不变 |
+| `sendBark(config, title, body, options)`（`src/notify/bark.js`） | Bark 渠道实现（iOS） | 配置中的 `barkKey`、`barkServer` | Bark HTTP 请求结果 | `https` / `http` | 使用 `POST /push`，Bark Key 放在请求体的 `device_key` 中，不出现在请求路径里 |
 | `sendNtfy(config, title, body, options)`（`src/notify/ntfy.js`） | ntfy 渠道实现（Android 推荐） | 配置中的 `ntfy*` | ntfy HTTP 请求结果 | `https` / `http` | 主题非法时本地拦截，不发起请求 |
-| `createNotifier(config, { loginLinkIntervalMs })`（`src/notify/index.js`） | 绑定一次运行的配置，提供 `event(name, body)`、`loginLink(url, qrImagePath)`、`willEmail(name)` | 运行配置 | 通知器对象 | 上述渠道与邮件 | 按事件开关推送；登录链接只在变化时推送，且受最小推送间隔限制 |
-| `postJson(url, payload, headers)`（`src/shared/http.js`） | 渠道共用的 JSON POST 实现 | 目标地址、负载、附加请求头 | `{ ok, status, body, error }` | `https` / `http` | 带 15s 超时，超时/网络错误统一回落为失败结果 |
+| `createNotifier(config, { loginLinkIntervalMs })`（`src/notify/index.js`） | 绑定一次运行的配置，提供 `event(name, body)`、`loginLink(url, qrImagePath)`、`willEmail(name)`、`flush(timeoutMs)` | 运行配置 | 通知器对象 | 上述渠道与邮件 | 按事件开关推送；通知在后台发送，运行结束前 `flush` 最多等待 10 秒；登录链接只在变化时推送，且受最小推送间隔限制 |
+| `postJson(url, payload, headers)`（`src/shared/http.js`） | 渠道共用的 JSON POST 实现 | 目标地址、负载、附加请求头 | `{ ok, status, body, error }` | `https` / `http` | 带 15s 超时，超时/网络错误统一回落为失败结果；支持 IPv6 地址；User-Agent 为 `WeReadAssistant/<版本>` |
 
 ### 渠道与启用条件
 
 | 渠道 | 适用平台 | 启用条件 | 服务端 |
 | --- | --- | --- | --- |
-| Bark | iOS | Bark Key（`barkKey`）非空 | 默认 `https://api.day.app`，可在 Bark 服务器地址（`barkServer`）中更换；推送地址中含有 Bark Key，日志中只记录服务器地址；服务器地址须以 `http://` 或 `https://` 开头，否则不发送并在日志中提示 |
+| Bark | iOS | Bark Key（`barkKey`）非空 | 默认 `https://api.day.app`，可在 Bark 服务器地址（`barkServer`）中更换（末尾的斜杠会去掉）；请求发往 `<服务器地址>/push`，Bark Key 只在请求体中；服务器地址须以 `http://` 或 `https://` 开头，否则不发送并在日志中提示 |
 | ntfy | Android / iOS / 桌面 | ntfy 主题（`ntfyTopic`）非空 | 默认 `https://ntfy.sh`，可在 ntfy 服务器地址（`ntfyServer`）中更换（支持自建） |
-| 邮件 | 任意 | 启用邮件通知（`emailEnabled`），且 SMTP 服务器、SMTP 用户名、SMTP 密码、收件人都已填写 | 缺少配置时记录日志并跳过 |
+| 邮件 | 任意 | 启用邮件通知（`emailEnabled`），且 SMTP 服务器、SMTP 用户名、SMTP 密码、收件人都已填写 | 缺少配置时记录日志并跳过；465 端口使用 SSL，其他端口要求 STARTTLS，服务器不支持时发送失败，只有开启「允许不加密的 SMTP 连接」（`emailAllowInsecure`）才以明文发送 |
 
 ### 通知事件
 
@@ -38,9 +38,9 @@
 | --- | --- |
 | Bark | 正文含登录链接，点击通知打开登录链接 |
 | ntfy | 正文含登录链接，`click` 为登录链接，附「打开登录链接」按钮 |
-| 邮件 | 内嵌页面上二维码的截图（`login-qr.png` 附件）与登录链接按钮 |
+| 邮件 | 内嵌页面上二维码的截图（`login-qr.png` 附件，推送时读入内存）与登录链接按钮 |
 
-二维码约 1 分钟过期一次并自动刷新。同一链接只推送一次；两次推送至少间隔 3 分钟，期间刷新出的新链接不推送。二维码图片直接截取自页面，不再经过 `api.qrserver.com` 等第三方服务生成。
+面板先收到二维码（`login-required` 事件），推送随后在后台发送，推送慢或失败都不影响面板显示。二维码约 1 分钟过期一次并自动刷新。同一链接只推送一次；两次推送至少间隔 3 分钟，期间刷新出的新链接不推送。二维码图片直接截取自页面，不再经过 `api.qrserver.com` 等第三方服务生成。
 
 ### 选项映射
 
@@ -80,7 +80,7 @@ flowchart TD
   E --> F{主题是否合法}
   F -->|否| G[记录错误并返回 false]
   F -->|是| H[postJson 发送到 ntfyServer]
-  D --> I[postJson 发送到 barkServer/barkKey]
+  D --> I[postJson 发送到 barkServer/push]
   H --> J[汇总每个渠道结果]
   I --> J
 ```
@@ -91,7 +91,8 @@ flowchart TD
 | --- | --- |
 | 未配置即静默 | 渠道未配置时 `notify` 只打印提示，不报错、不阻塞主流程 |
 | 失败隔离 | 各渠道通过 `Promise.allSettled` 并发发送，单渠道异常只影响自身结果 |
-| 请求超时 | 所有推送请求 15s 超时，避免推送服务无响应时拖住阅读流程 |
+| 请求超时 | 所有推送请求 15s 超时 |
+| 后台发送 | 阅读流程不等待通知发送完成；运行结束时（含失败）最多再等 10 秒，收到停止请求时只等 3 秒 |
 | 主题即密码 | ntfy 公共服务器上主题名等价于密码，仅允许 `[-_A-Za-z0-9]`，长度不超过 64 |
 | 登录链接去重与限频 | 同一次运行中，`loginLink` 只在链接变化时推送，两次推送至少间隔 `loginLinkIntervalMs`（运行时为 3 分钟） |
 | 事件开关 | 事件开关关闭时推送渠道与邮件都不发送 |

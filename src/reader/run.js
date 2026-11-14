@@ -1,8 +1,7 @@
-const fs = require("fs");
-const { createNotifier } = require("../notify");
+const { FLUSH_TIMEOUT_MS, createNotifier } = require("../notify");
 const { collectDiagnostics, createDriver } = require("./browser");
 const { throwIfStopped } = require("./dom");
-const { login, saveCookies } = require("./login");
+const { login, removeLoginImages, saveCookies } = require("./login");
 const { getDataPaths } = require("./paths");
 const { openBook, readLoop } = require("./reading");
 const { formatDuration, resolveTiming } = require("./timing");
@@ -10,32 +9,22 @@ const { formatDuration, resolveTiming } = require("./timing");
 const MAX_ERROR_LENGTH_IN_NOTIFICATION = 100;
 // 关闭浏览器的最长等待，短于面板停止时强制结束子进程的时限（runner.js 的 KILL_TIMEOUT_MS）
 const QUIT_TIMEOUT_MS = 10000;
+// 收到停止请求时等待后台通知的最长时间：关闭浏览器（最多 QUIT_TIMEOUT_MS）加上这段时间仍短于 KILL_TIMEOUT_MS
+const STOPPED_FLUSH_TIMEOUT_MS = 3000;
 
-async function saveScreenshot(driver, filePath) {
-  fs.writeFileSync(filePath, await driver.takeScreenshot(), { encoding: "base64", mode: 0o600 });
-}
-
-// 发送事件通知；需要为该事件发邮件时截图作为附件，发送后删除（不混入运行目录中的阅读截图）。
-// 截图是尽力而为：截图失败时照常发送不带附件的通知，不影响运行结果
+// 发送事件通知；需要为该事件发邮件时截图作为附件（只在内存中，不写入运行目录）。
+// 截图是尽力而为：截图失败时照常发送不带附件的通知，不影响运行结果。通知在后台发送，不等待结果
 async function notifyWithScreenshot(eventName, body, driver, ctx) {
   const attachments = [];
   if (ctx.notifier.willEmail(eventName)) {
-    const filePath = ctx.paths.screenshot(`email-${eventName}.png`);
     try {
-      await saveScreenshot(driver, filePath);
-      attachments.push(filePath);
+      const image = await driver.takeScreenshot();
+      attachments.push({ filename: `${eventName}.png`, content: Buffer.from(image, "base64") });
     } catch (e) {
-      fs.rmSync(filePath, { force: true });
       console.warn("截取通知附件失败，本次通知不带截图:", e.message);
     }
   }
-  try {
-    await ctx.notifier.event(eventName, body, { attachments });
-  } finally {
-    for (const filePath of attachments) {
-      fs.rmSync(filePath, { force: true });
-    }
-  }
+  ctx.notifier.event(eventName, body, { attachments });
 }
 
 /**
@@ -109,7 +98,8 @@ async function runOnce(config, options = {}) {
   try {
     throwIfStopped(signal);
     console.info("Starting the script, datetime: ", new Date(), "mode:", mode);
-    await notifier.event(
+    // 通知都在后台发送，不推迟浏览器启动与阅读；运行结束前统一等待（见 finally）
+    notifier.event(
       "start",
       mode === "login" ? "开始登录" : `开始自动阅读，计划 ${formatDuration(timing.durationMs)}`
     );
@@ -121,7 +111,7 @@ async function runOnce(config, options = {}) {
 
     if (!(await login(driver, ctx))) {
       report("login-timeout");
-      await notifier.event("failure", `等待扫码超时（${formatDuration(timing.loginTimeoutMs)}），本次未阅读`);
+      notifier.event("failure", `等待扫码超时（${formatDuration(timing.loginTimeoutMs)}），本次未阅读`);
       return { status: "login-timeout", minutes: 0, error: "" };
     }
     console.info("Successfully logged in.");
@@ -131,7 +121,7 @@ async function runOnce(config, options = {}) {
     if (mode === "login") {
       report("done", { minutes: 0 });
       doneMinutes = 0;
-      await notifier.event("loginSuccess", "登录成功，已保存登录状态");
+      notifier.event("loginSuccess", "登录成功，已保存登录状态");
       return { status: "success", minutes: 0, error: "" };
     }
 
@@ -169,10 +159,7 @@ async function runOnce(config, options = {}) {
       errorMessage.length > MAX_ERROR_LENGTH_IN_NOTIFICATION
         ? `${errorMessage.substring(0, MAX_ERROR_LENGTH_IN_NOTIFICATION)}...`
         : errorMessage;
-    await notifier.event("failure", `运行出错：${shortMessage}`);
-
-    // wait for 3 seconds before closing the browser
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    notifier.event("failure", `运行出错：${shortMessage}`);
     return { status: "error", minutes: 0, error: errorMessage };
   } finally {
     if (signal) {
@@ -180,6 +167,13 @@ async function runOnce(config, options = {}) {
     }
     if (driver) {
       await quitDriver();
+    }
+    // 等待仍在后台发送的通知（失败通知等），最多 10 秒；停止时只等一小会儿
+    await notifier.flush(signal && signal.aborted ? STOPPED_FLUSH_TIMEOUT_MS : FLUSH_TIMEOUT_MS);
+    try {
+      removeLoginImages(paths);
+    } catch (e) {
+      console.warn("删除登录截图失败:", e.message);
     }
   }
 }

@@ -35,6 +35,11 @@ function resolveEmailAttachments(filePaths = []) {
     });
 }
 
+// 邮件中的时间固定用中文格式；时区取进程的 TZ（容器中默认 Asia/Shanghai）
+function formatEmailTime(date = new Date()) {
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
 function wrapEmailHtml(heading, innerHtml) {
   const versionText = escapeHtml(VERSION);
   return `
@@ -49,7 +54,7 @@ function wrapEmailHtml(heading, innerHtml) {
     <body>
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <h2 style="color: #2c3e50; text-align: center;">${escapeHtml(heading)}</h2>
-            <p style="color: #7f8c8d; text-align: center; margin-top: 0;">${escapeHtml(new Date().toLocaleString())}</p>
+            <p style="color: #7f8c8d; text-align: center; margin-top: 0;">${escapeHtml(formatEmailTime())}</p>
             ${innerHtml}
             <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
             <p style="font-size: 12px; color: #7f8c8d; text-align: center;">
@@ -100,30 +105,30 @@ function buildLoginLinkEmailHtml(heading, loginUrl, qrCid = "", panelLink = "") 
   );
 }
 
-function canSendEmail(config) {
+// quiet：只判断、不记录日志（用于事先判断是否需要准备邮件附件）
+function canSendEmail(config, { quiet = false } = {}) {
   if (!config.emailEnabled) {
     return false;
   }
   const missed = REQUIRED_EMAIL_FIELDS.filter((key) => !config[key]).map((key) => FIELD_LABELS[key]);
   if (missed.length) {
-    console.warn("邮件通知未发送：缺少配置", missed.join("、"));
+    if (!quiet) {
+      console.warn("邮件通知未发送：缺少配置", missed.join("、"));
+    }
     return false;
   }
   return true;
 }
 
-// options.heading：邮件正文标题；options.html：完整的自定义 HTML
-async function sendMail(config, subject, text, filePaths = [], options = {}) {
-  const nodemailer = require("nodemailer");
-
-  // 根据端口自动判断是否使用SSL
-  // 通常 465 使用 SSL，587 和 25 不使用
+// 465 端口直接使用 SSL；其他端口要求 STARTTLS，服务器不支持时发送失败，
+// 除非开启了“允许不加密的 SMTP 连接”（emailAllowInsecure）
+function smtpTransportOptions(config) {
   const secure = config.emailPort === 465;
-
-  let transporter = nodemailer.createTransport({
+  return {
     host: config.emailSmtp,
     port: config.emailPort,
-    secure: secure, // true for 465, false for other ports
+    secure,
+    requireTLS: !secure && !config.emailAllowInsecure,
     // SMTP 服务器无响应时不要一直等待（面板中发送测试通知时请求会被挂住）
     connectionTimeout: 15000,
     greetingTimeout: 15000,
@@ -132,17 +137,29 @@ async function sendMail(config, subject, text, filePaths = [], options = {}) {
       user: config.emailUser,
       pass: config.emailPass,
     },
+  };
+}
+
+// 附件可以是文件路径，也可以是 { filename, content }（内存中的图片，例如截图）。
+// 内存中的附件在发送时不依赖磁盘上的文件，异步发送期间文件被刷新或删除也不受影响
+function toMailAttachments(items = []) {
+  return items.filter(Boolean).flatMap((item) => {
+    if (typeof item === "string") {
+      return resolveEmailAttachments([item]).map((filePath) => {
+        const filename = path.basename(filePath);
+        return { filename, path: filePath, cid: filename, contentType: `image/${path.extname(filePath).substring(1)}` };
+      });
+    }
+    const filename = item.filename;
+    return [{ filename, content: item.content, cid: filename, contentType: `image/${path.extname(filename).substring(1)}` }];
   });
+}
 
-  const existingFilePaths = resolveEmailAttachments(filePaths);
-
-  // Convert image paths to attachments array
-  const attachments = existingFilePaths.map((filePath) => ({
-    filename: path.basename(filePath),
-    path: filePath,
-    cid: path.basename(filePath), // Content ID for embedding in HTML
-    contentType: `image/${path.extname(filePath).substring(1)}`, // Automatically detect image type
-  }));
+// filePaths：附件（见 toMailAttachments）；options.heading：邮件正文标题；options.html：完整的自定义 HTML
+async function sendMail(config, subject, text, filePaths = [], options = {}) {
+  const nodemailer = require("nodemailer");
+  const transporter = nodemailer.createTransport(smtpTransportOptions(config));
+  const attachments = toMailAttachments(filePaths);
 
   // Use the sender address if provided, otherwise fall back to the SMTP user
   const fromAddress = config.emailFrom || config.emailUser;
@@ -170,5 +187,8 @@ async function sendMail(config, subject, text, filePaths = [], options = {}) {
 module.exports = {
   buildLoginLinkEmailHtml,
   canSendEmail,
+  formatEmailTime,
   sendMail,
+  smtpTransportOptions,
+  toMailAttachments,
 };

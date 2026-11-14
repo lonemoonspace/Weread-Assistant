@@ -40,9 +40,9 @@ function normalizeNtfyPriority(rawValue, fallback = NTFY_DEFAULT_PRIORITY) {
   if (Object.prototype.hasOwnProperty.call(NTFY_PRIORITY_ALIAS_VALUES, value)) {
     return NTFY_PRIORITY_ALIAS_VALUES[value];
   }
-  const numeric = Number.parseInt(value, 10);
-  if (Number.isInteger(numeric) && numeric >= 1 && numeric <= 5) {
-    return numeric;
+  // 只接受 1-5 的整数本身：parseInt 会把 "3abc"、"2.9" 也当作合法值
+  if (/^[1-5]$/.test(value)) {
+    return Number(value);
   }
   console.warn(`ntfy 优先级无效: ${rawValue}，回退为 ${fallback}`);
   return fallback;

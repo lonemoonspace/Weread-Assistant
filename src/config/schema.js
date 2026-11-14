@@ -182,6 +182,14 @@ const CONFIG_SCHEMA = [
     default: 465,
   },
   {
+    key: "emailAllowInsecure",
+    type: "boolean",
+    group: "email",
+    label: "允许不加密的 SMTP 连接",
+    description: "默认 465 端口使用 SSL，其他端口要求 STARTTLS；只有内网中不支持加密的 SMTP 服务器才需要开启，开启后密码与邮件内容可能以明文传输。",
+    default: false,
+  },
+  {
     key: "emailUser",
     type: "string",
     group: "email",
