@@ -62,6 +62,10 @@ jobs:
     name: 阅读流程与页面（Selenium）
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # 外部 Selenium 的兼容性测试：镜像默认使用内置浏览器，docker-compose.yml 中已没有 Selenium 服务。
+      # 这个标签不在 Dependabot 的检查范围内，需要手动升级
+      SELENIUM_IMAGE: selenium/standalone-chromium:4.51.0-20261010
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -71,10 +75,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      # 与 docker-compose.yml 相同版本的 Selenium 镜像（升级时两处一起改）；使用主机网络，容器中的浏览器才能访问本机的模拟页面与面板
+      # 使用主机网络，容器中的浏览器才能访问本机的模拟页面与面板
       - name: 启动 Selenium
         run: |
-          docker run -d --name selenium --network host --shm-size 2g selenium/standalone-chromium:4.51.0-20261010
+          docker run -d --name selenium --network host --shm-size 2g "$SELENIUM_IMAGE"
           for i in $(seq 1 60); do
             if curl -sf http://localhost:4444/status | grep -q '"ready": *true'; then
               exit 0

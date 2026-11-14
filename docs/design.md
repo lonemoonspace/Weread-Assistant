@@ -354,5 +354,5 @@ services:
 | `scripts/notify-smoke.js` | 保留并适配新的通知模块，本地 mock 服务校验负载 |
 | `scripts/panel-smoke.js` | 用桩子进程按顺序发送事件，不需要浏览器即可验证鉴权、配置、队列、停止、调度、历史与统计 |
 | `scripts/reader-smoke.js` | 用本地模拟页面验证登录跳过、翻页、读完回到目录等分支和每轮耗时，不访问微信读书；Selenium 地址可指向 selenium 容器，也可直接指向 chromedriver，为空时使用内置浏览器 |
-| CI | Pull Request 与 `main` 上运行自查（`scripts/check.js`）、上述 smoke、依赖安全检查，并在 QEMU 中构建、运行 arm64 镜像；`main` 的 CI 通过后发布 `dev` 镜像，推送版本 tag 时发布版本与 `latest` 并创建 GitHub Release（需在仓库中配置 Docker Hub 凭据），见 `cases/ci.md` |
+| CI | 现行的检查与发布流程见 `cases/ci.md` 与 `docs/docker-image-publish.md`（本行描述的是 0.1.0 时的做法，已过时） |
 | 真机验收 | 需要在你的树莓派上执行：以 compose 部署，经反向代理访问，完成扫码、阅读、停止、调度触发各一次，见 `cases/deploy.md` |
