@@ -25,8 +25,8 @@ function normalizePublicUrl(raw) {
   let url;
   try {
     url = new URL(value);
-  } catch (_) {
-    throw new Error(`PANEL_PUBLIC_URL 不是有效的地址: ${value}`);
+  } catch (e) {
+    throw new Error(`PANEL_PUBLIC_URL 不是有效的地址: ${value}`, { cause: e });
   }
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
     throw new Error(`PANEL_PUBLIC_URL 应为不含用户名与密码的 http(s) 地址: ${value}`);
@@ -61,8 +61,8 @@ function parseTrustProxy(raw) {
   }
   try {
     return parseBooleanValue(value, false, true) ? 1 : false;
-  } catch (_) {
-    throw new Error(`PANEL_TRUST_PROXY 只能是 true、false 或代理层数：${raw}`);
+  } catch (e) {
+    throw new Error(`PANEL_TRUST_PROXY 只能是 true、false 或代理层数：${raw}`, { cause: e });
   }
 }
 
@@ -70,8 +70,8 @@ function parseTrustProxy(raw) {
 function parseForcePasswordLogin(raw) {
   try {
     return parseBooleanValue(raw, false, true);
-  } catch (_) {
-    throw new Error(`PANEL_FORCE_PASSWORD_LOGIN 只能是 true 或 false：${raw}`);
+  } catch (e) {
+    throw new Error(`PANEL_FORCE_PASSWORD_LOGIN 只能是 true 或 false：${raw}`, { cause: e });
   }
 }
 

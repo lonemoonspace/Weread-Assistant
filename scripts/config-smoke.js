@@ -172,7 +172,7 @@ const scenarios = [
     assert.strictEqual(result.status, 1, "连接不到 Selenium 时应以退出码 1 结束");
     const log = fs.readFileSync(path.join(dataDir, "accounts", "me", "output.log"), "utf8");
     assert.match(log, /账号: me 数据目录: .*accounts[\\/]me/);
-    assert.match(log, /SELENIUM_URL:  http:\/\/127\.0\.0\.1:9/, "使用面板中的全局配置，而不是环境变量");
+    assert.match(log, /SELENIUM_URL: {2}http:\/\/127\.0\.0\.1:9/, "使用面板中的全局配置，而不是环境变量");
     assert.match(log, /Run finished: error/);
     assert.strictEqual(fs.readFileSync(path.join(dataDir, "panel.json"), "utf8"), panelJson, "按账号运行时只读取 panel.json");
     fs.rmSync(dataDir, { recursive: true, force: true });

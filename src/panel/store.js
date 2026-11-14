@@ -84,7 +84,7 @@ function restrictPermissions(filePath) {
   try {
     fs.chmodSync(filePath, 0o600);
   } catch (e) {
-    throw new Error(`${filePath} 的权限为 ${mode.toString(8)}，无法改为 600：${e.message}`);
+    throw new Error(`${filePath} 的权限为 ${mode.toString(8)}，无法改为 600：${e.message}`, { cause: e });
   }
   console.warn(`${filePath} 的权限为 ${mode.toString(8)}，已改为 600`);
 }
@@ -96,9 +96,10 @@ const MAX_CORRUPT_COPIES = 3;
 function readBackup(backupPath, reason) {
   try {
     return parseData(fs.readFileSync(backupPath, "utf8"));
-  } catch (_) {
+  } catch (e) {
     throw new Error(
-      `${reason}，也没有可用的上一版 ${backupPath}。请修复 panel.json；或删除 panel.json 与 panel.json.bak 后重新启动面板（会清空全部账号与设置）`
+      `${reason}，也没有可用的上一版 ${backupPath}。请修复 panel.json；或删除 panel.json 与 panel.json.bak 后重新启动面板（会清空全部账号与设置）`,
+      { cause: e }
     );
   }
 }

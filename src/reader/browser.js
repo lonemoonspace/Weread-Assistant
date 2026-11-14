@@ -69,7 +69,7 @@ async function createLocalDriver(capabilities, options, status) {
     serverUrl = await service.start(LOCAL_DRIVER_START_TIMEOUT_MS);
   } catch (e) {
     await service.kill();
-    throw new Error(`无法启动 chromedriver（${driverPath}）：${e.message}`);
+    throw new Error(`无法启动 chromedriver（${driverPath}）：${e.message}`, { cause: e });
   }
   console.info("chromedriver: ", serverUrl);
   let driver;
@@ -98,6 +98,8 @@ async function connectRemoteDriver(config, capabilities, options) {
   } catch (e) {
     const code = e.code || String(e.message || "").split(" ")[0];
     if (CONNECTION_ERRORS[code]) {
+      // 不附带原错误：其中的地址可能带有用户名与密码，打印错误时会一并输出
+      // eslint-disable-next-line preserve-caught-error
       throw new Error(`无法连接 Selenium（${shownUrl}）：${CONNECTION_ERRORS[code]}（${code}），请确认 Selenium 正在运行、地址正确`);
     }
     throw e;

@@ -107,7 +107,7 @@ async function openBook(driver, ctx) {
       throw error;
     }
     const where = await driver.getCurrentUrl().catch(() => "未知");
-    throw new Error(`打开书籍后 ${formatDuration(timing.pageWaitMs)}内未出现阅读页的「目录」按钮，当前页面：${where}`);
+    throw new Error(`打开书籍后 ${formatDuration(timing.pageWaitMs)}内未出现阅读页的「目录」按钮，当前页面：${where}`, { cause: error });
   }
 
   if (!(await switchToVerticalMode(driver, ctx))) {

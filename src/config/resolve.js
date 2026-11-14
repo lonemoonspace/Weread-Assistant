@@ -61,8 +61,8 @@ function coerceFieldValue(field, rawValue, name = field.label) {
     case "boolean":
       try {
         value = parseBooleanValue(rawValue, field.default, true);
-      } catch (_) {
-        throw new Error(`${name} 只能是 true 或 false：${rawValue}`);
+      } catch (e) {
+        throw new Error(`${name} 只能是 true 或 false：${rawValue}`, { cause: e });
       }
       break;
     case "integer":
