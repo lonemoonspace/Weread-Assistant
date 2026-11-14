@@ -17,6 +17,8 @@
     "panel": "node src/cli.js panel",
     "check": "node scripts/check.js",
     "lint": "eslint .",
+    "test:unit": "node --test \"test/unit/**/*.test.js\"",
+    "test:unit:coverage": "node --test --experimental-test-coverage --test-coverage-include=\"src/**\" \"test/unit/**/*.test.js\"",
     "test:notify": "node scripts/notify-smoke.js",
     "test:reader": "node scripts/reader-smoke.js",
     "test:panel": "node scripts/panel-smoke.js",

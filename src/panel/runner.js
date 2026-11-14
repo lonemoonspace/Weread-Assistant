@@ -649,5 +649,7 @@ function createRunner({
 module.exports = {
   CHILD_ENV_KEYS,
   KILL_TIMEOUT_MS,
+  createRedactor,
   createRunner,
+  fillMinuteMarks,
 };
