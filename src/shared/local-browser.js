@@ -121,18 +121,37 @@ async function checkLocalBrowser(env = process.env, { timeoutMs = VERSION_TIMEOU
   return { ...result, state: "ready", ready: true, message: versions[0], error: "" };
 }
 
-// 同时只检查一次：多个页面同时刷新时共用结果。读到的版本按文件缓存，浏览器没有更新时不再重复启动它
+// 同时只检查一次：多个页面同时刷新时共用结果。读到的版本按文件缓存，浏览器没有更新时不再重复启动它。
+// check.cached()：上一次检查的结果，仅当结果为就绪、且浏览器与 chromedriver 文件都没有变化时返回，否则为 null。
+// 面板把它随运行配置下发给阅读子进程，子进程不必每次运行都执行 --version
 function createLocalBrowserChecker(env = process.env, options = {}) {
   let pending = null;
+  let last = null;
   const versionCache = new Map();
-  return () => {
+  const check = () => {
     if (!pending) {
-      pending = checkLocalBrowser(env, { ...options, versionCache }).finally(() => {
-        pending = null;
-      });
+      pending = checkLocalBrowser(env, { ...options, versionCache })
+        .then((result) => {
+          last = result;
+          return result;
+        })
+        .finally(() => {
+          pending = null;
+        });
     }
     return pending;
   };
+  check.cached = () => {
+    if (!last || !last.ready) {
+      return null;
+    }
+    const unchanged = [browserPath(env), chromedriverPath(env)].every((file) => {
+      const stamp = file && fileStamp(file);
+      return stamp && versionCache.get(file)?.stamp === stamp;
+    });
+    return unchanged ? { ...last } : null;
+  };
+  return check;
 }
 
 module.exports = {

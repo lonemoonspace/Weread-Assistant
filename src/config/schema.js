@@ -263,6 +263,16 @@ const CONFIG_SCHEMA = [
     default: "",
   },
   {
+    key: "pageWaitMultiplier",
+    type: "integer",
+    group: "advanced",
+    label: "页面等待倍率",
+    description: "等待页面元素出现的时间（默认 10 秒，页面加载 20 秒）乘以这个倍数。树莓派等较慢的设备上常出现“未出现目录按钮”之类的超时时调大。",
+    min: 1,
+    max: 5,
+    default: 1,
+  },
+  {
     key: "debug",
     type: "boolean",
     group: "advanced",

@@ -105,6 +105,7 @@ function homePage(name, scenario, loggedIn) {
 
   const script = `${reportScript(base)}
     const cfg = ${JSON.stringify(scenario)};
+    report("lang", { lang: navigator.language });
     let n = 0;
     function showQr() {
       n += 1;
@@ -216,6 +217,7 @@ function startMockWeread() {
     };
 
     if (rest === "") {
+      events.get(name).push({ type: "home", acceptLanguage: req.headers["accept-language"] || "", at: Date.now() });
       const loggedIn = scenario.loggedIn || /(?:^|;\s*)wr_vid=1/.test(req.headers.cookie || "");
       send("text/html; charset=utf-8", homePage(name, scenario, loggedIn));
     } else if (rest === "qr.png") {

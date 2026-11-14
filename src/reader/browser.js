@@ -12,10 +12,16 @@ const { browserPath, checkLocalBrowser, chromedriverPath, majorVersion } = requi
 // chromedriver 开始监听端口的时限。selenium-webdriver 默认 30 秒，这里写明：树莓派负载高时启动较慢
 const LOCAL_DRIVER_START_TIMEOUT_MS = 30000;
 
-// 把 Selenium 的状态与会话数写入运行日志，连接浏览器前与出错时各查询一次；使用内置浏览器时记录其版本
-async function logSeleniumStatus(seleniumUrl) {
+// 面板下发的内置浏览器状态：只接受就绪的结果，其余情况由子进程自己检查
+function usableBrowserStatus(status) {
+  return status && status.ready === true && typeof status.message === "string" && status.message ? status : null;
+}
+
+// 把 Selenium 的状态与会话数写入运行日志，连接浏览器前与出错时各查询一次；使用内置浏览器时记录其版本。
+// browserStatus：面板已经检查过的内置浏览器状态（浏览器文件没有变化时有效），有值时不再执行 --version
+async function logSeleniumStatus(seleniumUrl, browserStatus = null) {
   if (!seleniumUrl) {
-    const status = await checkLocalBrowser();
+    const status = usableBrowserStatus(browserStatus) || (await checkLocalBrowser());
     const text = `内置浏览器：${status.ready ? status.message : status.error}`;
     if (status.ready) {
       console.info(text);
@@ -34,10 +40,10 @@ async function logSeleniumStatus(seleniumUrl) {
   return status;
 }
 
-async function collectDiagnostics(config, reason) {
+async function collectDiagnostics(config, reason, { browserStatus = null } = {}) {
   try {
     console.warn("开始收集诊断信息，原因：", reason?.toString()?.slice(0, 180) || "未知");
-    await logSeleniumStatus(config.seleniumUrl);
+    await logSeleniumStatus(config.seleniumUrl, browserStatus);
   } catch (_) {
     // 忽略诊断过程错误
   }
@@ -106,7 +112,8 @@ async function connectRemoteDriver(config, capabilities, options) {
   }
 }
 
-async function createDriver(config) {
+// options.browserStatus：见 logSeleniumStatus
+async function createDriver(config, { browserStatus = null } = {}) {
   const capabilities = {
     browserName: Browser.CHROME,
     pageLoadStrategy: "eager",
@@ -121,9 +128,12 @@ async function createDriver(config) {
   options.addArguments("--disable-extensions");
   options.addArguments("--disable-notifications");
   options.addArguments("--disable-popup-blocking");
+  // 界面语言与 Accept-Language 用中文，与普通用户的浏览器一致（默认是 en-US）
+  options.addArguments("--lang=zh-CN");
+  options.setUserPreferences({ "intl.accept_languages": "zh-CN,zh" });
 
   // 连接前查询一次 Selenium 状态；地址中可能带有用户名与密码，日志中只显示去掉它们的地址
-  const status = await logSeleniumStatus(config.seleniumUrl);
+  const status = await logSeleniumStatus(config.seleniumUrl, browserStatus);
   const driver = config.seleniumUrl
     ? await connectRemoteDriver(config, capabilities, options)
     : await createLocalDriver(capabilities, options, status);

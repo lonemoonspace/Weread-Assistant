@@ -67,7 +67,7 @@ async function pressDownArrow(driver) {
 
 // 页面处于左右翻页模式时切换到上下滚动阅读；已是上下滚动时找不到切换按钮，返回 false
 async function switchToVerticalMode(driver, ctx) {
-  const switchButton = await findElementsWithin(driver, XPATH.verticalModeButton, ctx.timing.elementWaitMs);
+  const switchButton = await findElementsWithin(driver, XPATH.verticalModeButton, ctx.timing.optionalWaitMs ?? ctx.timing.elementWaitMs);
   if (switchButton.length === 0) {
     return false;
   }
@@ -284,7 +284,7 @@ async function readLoop(driver, ctx) {
   }
 
   console.info("Reading completed.");
-  return Math.round((Date.now() - startTime) / 60000);
+  return Math.round((Date.now() - startTime) / timing.minuteMs);
 }
 
 module.exports = {

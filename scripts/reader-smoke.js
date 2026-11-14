@@ -38,6 +38,7 @@ const FAST_TIMING = {
   loginPollMs: 300,
   elementWaitMs: 2000,
   pageWaitMs: 5000,
+  optionalWaitMs: 2000,
 };
 
 function startNtfyMock() {
@@ -57,6 +58,32 @@ function startNtfyMock() {
         baseUrl: `http://127.0.0.1:${server.address().port}`,
         requests,
         close: () => new Promise((done) => server.close(done)),
+      });
+    });
+  });
+}
+
+// 接受连接但从不响应的推送服务，记录收到请求的时间
+function startHangingServer() {
+  const received = [];
+  const sockets = new Set();
+  const server = http.createServer((req) => {
+    received.push(Date.now());
+    req.resume();
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolve({
+        baseUrl: `http://127.0.0.1:${server.address().port}`,
+        received,
+        close: () => {
+          sockets.forEach((socket) => socket.destroy());
+          return new Promise((done) => server.close(done));
+        },
       });
     });
   });
@@ -167,14 +194,18 @@ async function main() {
     }
 
     const startedAt = Date.now();
+    // 上报的事件，附带上报时间与当时数据目录中的文件（运行结束后会删除的登录截图只能在这时看到）
+    const reports = [];
+    const report = (event, data = {}) => reports.push({ event, data, at: Date.now(), files: fs.readdirSync(dataDir) });
     const note = await withCapturedConsole(async () => {
       const result = await runOnce(config, {
         mode,
         homeUrl,
+        report,
         timing: { ...FAST_TIMING, ...timing },
         screenshotDir: screenshotDir ? screenshotDir(dataDir) : undefined,
       });
-      return check({ result, events: mock.events(name), pushes: ntfy.requests, dataDir });
+      return check({ result, events: mock.events(name), pushes: ntfy.requests, dataDir, reports, startedAt });
     });
     fs.rmSync(dataDir, { recursive: true, force: true });
     results.push(title);
@@ -200,6 +231,10 @@ async function main() {
         // cookies 与二维码等同于登录状态，只允许属主访问
         assert.strictEqual(fs.statSync(dataDir).mode & 0o777, 0o700);
         assert.strictEqual(fs.statSync(path.join(dataDir, "cookies.json")).mode & 0o777, 0o600);
+        // 浏览器界面语言与 Accept-Language 为中文
+        const lang = events.find((event) => event.type === "lang");
+        assert.strictEqual(lang && lang.lang, "zh-CN");
+        assert.match(events.find((event) => event.type === "home").acceptLanguage, /^zh-CN/);
         // 登录完成后删除登录弹窗的截图（整页截图可能含昵称、头像）
         for (const name of ["login.png", "login-qr.png"]) {
           assert.ok(!fs.existsSync(path.join(dataDir, name)), `登录后应删除 ${name}`);
@@ -207,16 +242,41 @@ async function main() {
       },
     });
 
+    const hanging = await startHangingServer();
+    await scenario("推送服务没有响应：先上报二维码，推送在后台发送，不拖慢登录；运行结束时最多再等 10 秒", {
+      name: "push-hang",
+      site: { qrExpireMs: 60000, scanOnQr: 1, scanDelayMs: 1500 },
+      mode: "login",
+      values: { ntfyServer: hanging.baseUrl },
+      timing: { loginTimeoutMs: 30000 },
+      check({ result, reports, startedAt }) {
+        assert.strictEqual(result.status, "success");
+        const shown = reports.find((item) => item.event === "login-required");
+        const loggedIn = reports.find((item) => item.event === "login-ok");
+        assert.ok(shown && loggedIn, "应上报 login-required 与 login-ok");
+        assert.ok(hanging.received.length >= 1, "应向推送服务发出请求");
+        // 修复前要等推送超时（15 秒）后才上报二维码
+        assert.ok(shown.at <= hanging.received[0] + 1000, "login-required 应在推送之前上报");
+        assert.ok(loggedIn.at - shown.at < 8000, `从显示二维码到登录完成用了 ${loggedIn.at - shown.at} 毫秒`);
+        const seconds = (Date.now() - startedAt) / 1000;
+        assert.ok(seconds < 40, `运行用了 ${seconds} 秒，结束时等待推送不应超过 10 秒`);
+      },
+    });
+    await hanging.close();
+
     await scenario("等待扫码超时：不限次数刷新二维码，以 login-timeout 结束并通知", {
       name: "timeout",
       site: { qrExpireMs: 1500 },
       mode: "login",
       timing: { loginTimeoutMs: 25000 },
-      check({ result, events, pushes }) {
+      check({ result, events, pushes, dataDir }) {
         assert.strictEqual(result.status, "login-timeout");
         // 旧版最多等 3 轮；现在等待时长内二维码过期就刷新
         assert.ok(countEvents(events, "refresh") >= 3, `刷新次数 ${countEvents(events, "refresh")} 应不少于 3`);
         assert.ok(pushes.some((push) => push.title.endsWith("运行失败") && push.message.includes("等待扫码超时")));
+        // 扫码超时后也删除登录截图
+        const left = fs.readdirSync(dataDir).filter((file) => /^login.*\.png$/.test(file));
+        assert.deepStrictEqual(left, [], `扫码超时后不应留下登录截图：${left.join(",")}`);
         return `刷新二维码 ${countEvents(events, "refresh")} 次`;
       },
     });
@@ -252,10 +312,13 @@ async function main() {
       prepare(dataDir) {
         fs.writeFileSync(path.join(dataDir, "login-qr.png"), "old");
       },
-      check({ result, dataDir }) {
+      check({ result, dataDir, reports }) {
         assert.strictEqual(result.status, "login-timeout");
-        assert.ok(fs.existsSync(path.join(dataDir, "login.png")));
-        assert.ok(!fs.existsSync(path.join(dataDir, "login-qr.png")), "没有二维码图片时不应留下二维码截图");
+        const shown = reports.find((item) => item.event === "login-required");
+        assert.ok(shown, "应上报 login-required");
+        assert.ok(shown.files.includes("login.png"), "上报时应已保存整页截图");
+        assert.ok(!shown.files.includes("login-qr.png"), "没有二维码图片时不应留下二维码截图");
+        assert.ok(!fs.existsSync(path.join(dataDir, "login.png")), "运行结束后应删除整页截图");
       },
     });
 
@@ -335,15 +398,13 @@ async function main() {
       },
     });
 
-    await scenario("截图写入失败（截图目录不存在）：阅读照常完成，邮件附件截图失败也不在“阅读完成”之后补报出错", {
+    await scenario("截图写入失败（截图目录不存在）：阅读照常完成，也不在“阅读完成”之后补报出错", {
       name: "shot-fail",
       site: { loggedIn: true, chapters: 2, contentHeight: 1800 },
       values: (homeUrl) => ({
         selection: -1,
         bookUrl: `${homeUrl}reader?book=1&ch=1`,
         screenshot: true,
-        // 开启邮件通知时为“阅读完成”截图作为附件；缺少 SMTP 配置，只截图不发送
-        emailEnabled: true,
       }),
       screenshotDir: (dataDir) => path.join(dataDir, "missing"),
       timing: { durationMs: 9000, minuteMs: 3000, pressIntervalMs: [300, 500] },

@@ -36,6 +36,7 @@ async function notifyWithScreenshot(eventName, body, driver, ctx) {
  * options.terminalQr: 是否在终端显示登录链接与二维码，默认 true
  * options.screenshotDir: 阅读截图的保存目录，默认为账号数据目录
  * options.panelLink: 面板中该账号实时页面的地址，附在扫码推送中（面板配置了 PANEL_PUBLIC_URL 时）
+ * options.browserStatus: 面板已检查过的内置浏览器状态，有值时子进程不再执行 --version
  * options.homeUrl / options.timing: 覆盖首页地址与时间参数，供测试使用
  *
  * 返回 { status: "success" | "login-timeout" | "error" | "stopped", minutes, error }
@@ -104,7 +105,7 @@ async function runOnce(config, options = {}) {
       mode === "login" ? "开始登录" : `开始自动阅读，计划 ${formatDuration(timing.durationMs)}`
     );
 
-    driver = await createDriver(config);
+    driver = await createDriver(config, { browserStatus: options.browserStatus });
     // 浏览器连接过程中收到停止请求时，连接完成后再关闭
     throwIfStopped(signal);
     report("session", { sessionId: (await driver.getSession()).getId() });
@@ -154,7 +155,7 @@ async function runOnce(config, options = {}) {
     console.error("运行出错:", e);
     report("error", { message: errorMessage });
     // 出错时检查 Selenium 健康状态
-    await collectDiagnostics(config, errorMessage);
+    await collectDiagnostics(config, errorMessage, { browserStatus: options.browserStatus });
     const shortMessage =
       errorMessage.length > MAX_ERROR_LENGTH_IN_NOTIFICATION
         ? `${errorMessage.substring(0, MAX_ERROR_LENGTH_IN_NOTIFICATION)}...`
