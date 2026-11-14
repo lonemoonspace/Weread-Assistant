@@ -89,10 +89,10 @@ export const HistoryTab = {
           <tbody>
             <template v-for="run in runs" :key="run.id">
               <tr>
-                <td>{{ formatShort(run.startedAt || run.queuedAt, tz()) }}<br><small class="muted">{{ durationBetween(run.startedAt, run.endedAt) }}</small></td>
-                <td>{{ TRIGGER_LABELS[run.trigger] || run.trigger }}<br><small class="muted">{{ MODE_LABELS[run.mode] }}</small></td>
-                <td><status-badge :status="run.status" /><br><small v-if="run.error" class="error-text">{{ run.error }}</small></td>
-                <td>{{ run.minutes }} 分钟<br><small v-if="run.book" class="muted">《{{ run.book }}》</small></td>
+                <td data-label="开始时间">{{ formatShort(run.startedAt || run.queuedAt, tz()) }}<br><small class="muted">{{ durationBetween(run.startedAt, run.endedAt) }}</small></td>
+                <td data-label="触发">{{ TRIGGER_LABELS[run.trigger] || run.trigger }}<br><small class="muted">{{ MODE_LABELS[run.mode] }}</small></td>
+                <td data-label="结果"><status-badge :status="run.status" /><br><small v-if="run.error" class="error-text">{{ run.error }}</small></td>
+                <td data-label="阅读">{{ run.minutes }} 分钟<br><small v-if="run.book" class="muted">《{{ run.book }}》</small></td>
                 <td class="actions">
                   <button type="button" class="outline small" :disabled="!run.hasLog" @click="toggle(run, 'log')">日志</button>
                   <button type="button" class="outline small" :disabled="!run.screenshots.length" @click="toggle(run, 'shots')">截图 {{ run.screenshots.length || "" }}</button>

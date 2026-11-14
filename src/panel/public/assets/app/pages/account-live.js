@@ -62,7 +62,7 @@ export const LiveTab = {
         <qr-login :url="run.loginUrl" :account-id="run.accountId" :qr-at="run.loginQrAt" />
       </article>
 
-      <div class="live-grid">
+      <div class="live-grid" :class="{ 'no-screenshot': !screenshotUrl }">
         <figure v-if="screenshotUrl" class="screenshot">
           <a :href="screenshotUrl" target="_blank" rel="noopener"><img :src="screenshotUrl" alt="最新截图"></a>
           <figcaption class="muted">最新截图：{{ run.screenshot }}</figcaption>

@@ -66,6 +66,19 @@ export function formatClock(iso, timezone) {
   return `${p.hour}:${p.minute}:${p.second}`;
 }
 
+// 时区中的日期，例如 2026-10-16
+export function dateInZone(iso, timezone) {
+  const p = parts(iso, timezone);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+// 到时区中下一个零点的毫秒数
+export function msUntilMidnight(timezone, now = new Date()) {
+  const p = parts(now.toISOString(), timezone);
+  const elapsed = ((Number(p.hour) * 60 + Number(p.minute)) * 60 + Number(p.second)) * 1000 + now.getMilliseconds();
+  return Math.max(1000, 24 * 3600 * 1000 - elapsed);
+}
+
 // 68 → 1 小时 8 分钟
 export function formatMinutes(minutes) {
   const total = Math.max(0, Math.round(minutes || 0));

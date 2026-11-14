@@ -1,6 +1,7 @@
-import { onMounted, ref } from "../../vendor/vue.esm-browser.prod.js";
+import { computed, onMounted, onUnmounted, ref } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
 import { SCHEDULE_TYPE_LABELS, formatShort } from "../format.js";
+import { setLeaveGuard } from "../router.js";
 import { notify, refreshAccounts, timezone } from "../store.js";
 
 const INTERVAL_HOURS = [1, 2, 3, 4, 6, 8, 12];
@@ -43,9 +44,14 @@ export const SchedulesTab = {
     const nextRunAt = ref(null);
     const error = ref("");
     const busy = ref(false);
+    // 上次加载或保存时的规则，用于判断是否有未保存的修改
+    const saved = ref("[]");
+    const snapshot = () => JSON.stringify(rules.value.map(toPayload));
+    const dirty = computed(() => snapshot() !== saved.value);
 
     function apply(data) {
       rules.value = data.schedules.map(toEditable);
+      saved.value = snapshot();
       tz.value = data.timezone;
       if ("nextRunAt" in data) {
         nextRunAt.value = data.nextRunAt;
@@ -88,6 +94,7 @@ export const SchedulesTab = {
     }
 
     onMounted(load);
+    onUnmounted(setLeaveGuard(() => (dirty.value ? "调度规则有未保存的修改，确定离开吗？" : "")));
 
     return {
       rules,
@@ -95,6 +102,7 @@ export const SchedulesTab = {
       nextRunAt,
       error,
       busy,
+      dirty,
       add,
       remove: (index) => rules.value.splice(index, 1),
       preview: () => submit(true),
@@ -159,5 +167,6 @@ export const SchedulesTab = {
         <button type="button" class="secondary" :disabled="busy || !rules.length" @click="preview">预览运行时间</button>
         <button type="button" :aria-busy="busy" :disabled="busy" @click="save">保存</button>
       </div>
+      <p v-if="dirty" class="muted">有未保存的修改。</p>
     </section>`,
 };
