@@ -128,9 +128,11 @@ async function createDriver(config, { browserStatus = null } = {}) {
   options.addArguments("--disable-extensions");
   options.addArguments("--disable-notifications");
   options.addArguments("--disable-popup-blocking");
-  // 界面语言与 Accept-Language 用中文，与普通用户的浏览器一致（默认是 en-US）
+  // 语言用中文，与普通用户的浏览器一致（默认是 en-US）。navigator.language 与 Accept-Language 取自
+  // intl.accept_languages：无界面模式下 --lang 不改变它，这里同时用 --accept-lang 与首选项设置
   options.addArguments("--lang=zh-CN");
-  options.setUserPreferences({ "intl.accept_languages": "zh-CN,zh" });
+  options.addArguments("--accept-lang=zh-CN,zh");
+  options.setUserPreferences({ intl: { accept_languages: "zh-CN,zh" } });
 
   // 连接前查询一次 Selenium 状态；地址中可能带有用户名与密码，日志中只显示去掉它们的地址
   const status = await logSeleniumStatus(config.seleniumUrl, browserStatus);

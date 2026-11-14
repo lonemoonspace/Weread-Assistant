@@ -245,7 +245,8 @@ async function main() {
     const hanging = await startHangingServer();
     await scenario("推送服务没有响应：先上报二维码，推送在后台发送，不拖慢登录；运行结束时最多再等 10 秒", {
       name: "push-hang",
-      site: { qrExpireMs: 60000, scanOnQr: 1, scanDelayMs: 1500 },
+      // 扫码延迟要长于找到并截取二维码的时间，否则页面在截图前就已登录
+      site: { qrExpireMs: 60000, scanOnQr: 1, scanDelayMs: 6000 },
       mode: "login",
       values: { ntfyServer: hanging.baseUrl },
       timing: { loginTimeoutMs: 30000 },
@@ -257,7 +258,7 @@ async function main() {
         assert.ok(hanging.received.length >= 1, "应向推送服务发出请求");
         // 修复前要等推送超时（15 秒）后才上报二维码
         assert.ok(shown.at <= hanging.received[0] + 1000, "login-required 应在推送之前上报");
-        assert.ok(loggedIn.at - shown.at < 8000, `从显示二维码到登录完成用了 ${loggedIn.at - shown.at} 毫秒`);
+        assert.ok(loggedIn.at - shown.at < 10000, `从显示二维码到登录完成用了 ${loggedIn.at - shown.at} 毫秒`);
         const seconds = (Date.now() - startedAt) / 1000;
         assert.ok(seconds < 40, `运行用了 ${seconds} 秒，结束时等待推送不应超过 10 秒`);
       },
