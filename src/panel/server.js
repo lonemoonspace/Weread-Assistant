@@ -142,7 +142,13 @@ async function startPanel(options) {
     warnUnusablePasskeys(store, passkeys);
     warnPasswordLogin(store, passkeys, options.forcePasswordLogin);
     auth.restoreSessions({
-      passkeyIds: new Set(store.get().auth.passkeys.map((passkey) => passkey.id)),
+      // 只恢复当前域名下仍可用的 passkey 的会话，与登录时一致
+      passkeyIds: new Set(
+        store
+          .get()
+          .auth.passkeys.filter((passkey) => passkeys.isUsable(passkey))
+          .map((passkey) => passkey.id)
+      ),
       passwordLoginActive: passwordLoginState(store, passkeys, options.forcePasswordLogin).active,
     });
     restrictRunDirs(options.dataDir);
