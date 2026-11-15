@@ -39,10 +39,12 @@ function singletonOwner(dir) {
   return match ? { host: match[1], pid: Number(match[2]) } : null;
 }
 
-// 进程是否仍在运行并且是浏览器：容器重启后进程号会被别的进程重新使用，只看进程是否存在会误判
+// 进程是否仍在运行并且是浏览器：容器重启后进程号会被别的进程重新使用，只看进程是否存在会误判。
+// 进程名以 chrom 开头（chromium、chrome、chromium-browse），chromedriver 不算
 function isLiveBrowser(pid) {
   try {
-    return /chrom/i.test(fs.readFileSync(`/proc/${pid}/comm`, "utf8"));
+    const name = fs.readFileSync(`/proc/${pid}/comm`, "utf8").trim();
+    return /^chrom/i.test(name) && !/driver/i.test(name);
   } catch (_) {
     if (fs.existsSync("/proc/self")) {
       return false;
