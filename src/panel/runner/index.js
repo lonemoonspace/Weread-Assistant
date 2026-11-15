@@ -237,9 +237,10 @@ function createRunner({
 
     // 重试、补跑与恢复按计划器给出的分钟数读；其他运行在设定时长之上随机多读 0 到 durationJitter 分钟
     if (run.mode === "read") {
-      const extra = config.durationJitter > 0 ? crypto.randomInt(config.durationJitter + 1) : 0;
+      const override = run.minutesOverride != null;
+      const extra = !override && config.durationJitter > 0 ? crypto.randomInt(config.durationJitter + 1) : 0;
       // 不超过配置允许的最大时长，子进程会再校验一次配置
-      config = Object.freeze({ ...config, duration: Math.min(run.minutesOverride || config.duration + extra, MAX_DURATION) });
+      config = Object.freeze({ ...config, duration: Math.min(override ? run.minutesOverride : config.duration + extra, MAX_DURATION) });
       if (extra > 0) {
         panelLog(run, `本次阅读时长随机增加 ${extra} 分钟，共 ${config.duration} 分钟`);
       }
@@ -342,12 +343,12 @@ function createRunner({
 
   return {
     // 加入队列。账号不存在 404；已停用、已在运行或排队 409
-    // scheduleId：定时触发时为调度规则 ID。以下由计划器使用：minutes 为本次阅读的分钟数（覆盖配置的时长，不再随机增加）；
+    // scheduleId：定时触发时为调度规则 ID。以下由计划器使用：minutes 为本次阅读的分钟数（正整数，覆盖配置的时长，不再随机增加；null 为按配置）；
     // attempt 与 originRunId 为第几次尝试与最初那次运行；delayedMinutes 为随机延后或补触发造成的延迟；
     // goalDeficit 为补跑时当天还差的分钟数
     enqueue(
       accountId,
-      { mode = "read", trigger = "manual", scheduleId = null, minutes = 0, attempt = 1, originRunId = null, delayedMinutes = 0, goalDeficit = 0 } = {}
+      { mode = "read", trigger = "manual", scheduleId = null, minutes = null, attempt = 1, originRunId = null, delayedMinutes = 0, goalDeficit = 0 } = {}
     ) {
       if (closing) {
         throw new PanelError(503, "panel_closing", "面板正在停止");
