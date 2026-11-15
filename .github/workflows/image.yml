@@ -112,6 +112,15 @@ jobs:
       contents: read
       actions: read
     steps:
+      # 只用到读取镜像版本的脚本；使用工作流所在的提交（重建旧版本时 inputs.ref 中可能还没有这个脚本）
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/image-version.js
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       # 本次运行中两个架构上传的摘要
       - name: 下载各架构的镜像摘要
         env:
@@ -146,13 +155,30 @@ jobs:
             tag="$(echo "$tag" | tr -d '[:space:]')"
             [ -n "$tag" ] || continue
             if [ "$tag" = "latest" ] && [ "$KEEP_NEWER_LATEST" = "true" ]; then
-              # 重建旧版本时，latest 已经指向更新的版本（例如期间发布了新版本）就不改动它
-              current="$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{json .Image}}' \
-                | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{const v=JSON.parse(s);const images=v.config?[v]:Object.values(v);const labels=(images[0]&&images[0].config&&images[0].config.Labels)||{};console.log(labels["org.opencontainers.image.version"]||"")})')"
-              if [ "$current" != "$VERSION" ]; then
-                echo "latest 当前为 ${current:-未知} 版本，不是 $VERSION，保持不变" | tee -a "$GITHUB_STEP_SUMMARY"
-                continue
+              # 重建旧版本时，latest 已经指向更新的版本（例如期间发布了新版本）就不改动它。
+              # 多架构清单的 .Image 是“平台 → 镜像配置”，读不到时改为单独读取清单中第一个平台的镜像
+              current="$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{json .Image}}' 2> /dev/null \
+                | node scripts/image-version.js version || true)"
+              if [ -z "$current" ]; then
+                child="$(docker buildx imagetools inspect "$IMAGE:latest" --raw 2> /dev/null \
+                  | node scripts/image-version.js child || true)"
+                if [ -n "$child" ]; then
+                  current="$(docker buildx imagetools inspect "$IMAGE@$child" --format '{{json .Image}}' 2> /dev/null \
+                    | node scripts/image-version.js version || true)"
+                fi
               fi
+              case "$(node scripts/image-version.js compare "$current" "$VERSION")" in
+                same | older) ;;
+                newer)
+                  echo "latest 当前为 $current 版本，比 $VERSION 新，保持不变" | tee -a "$GITHUB_STEP_SUMMARY"
+                  continue
+                  ;;
+                *)
+                  echo "::warning::读不到 latest 的版本（${current:-空}），保持不变"
+                  echo "读不到 latest 的版本（${current:-空}），保持不变" >> "$GITHUB_STEP_SUMMARY"
+                  continue
+                  ;;
+              esac
             fi
             args+=(-t "$IMAGE:$tag")
           done

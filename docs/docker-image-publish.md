@@ -76,6 +76,8 @@ flowchart TD
 2. amd64（`ubuntu-24.04`）与 arm64（`ubuntu-24.04-arm`）在原生 runner 上并行构建镜像，各自运行 `scripts/runtime-smoke.js`（`RUNTIME_SMOKE_ARCH` 为本架构）与内置浏览器的 `reader-smoke.js`，通过后用 `push --digest-file` 按摘要推送；两个架构都通过后，由汇总任务用 `docker buildx imagetools create` 合成多架构清单并打上全部 tag，再确认清单中两个架构都在。任何一个架构失败，tag 都不动。不再使用 QEMU。
 3. 需要时创建 GitHub Release。
 
+发布（`main`、版本 tag）与每周重建共用并发组 `release-latest`，依次运行，不会同时改动 `latest`。GitHub 每个并发组只保留一个排队中的运行，排队时又来了新的运行，旧的排队运行会被取消：`main` 上后来的提交会补上被取消的版本发布，被取消的 tag 发布或重建需要手动重新运行。
+
 需要在仓库 Settings → Secrets and variables → Actions 中添加 `DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN`（Docker Hub 的 Personal access token，权限 Read & Write），缺少时发布在构建前失败并提示。
 
 ### 每周重建与漏洞扫描
@@ -85,7 +87,7 @@ flowchart TD
 | 步骤 | 说明 |
 | --- | --- |
 | 检查 | 在已发布的 `latest` 中运行 `apk update` 与 `apk version -l '<'`，列出可以升级的系统包（如 Chromium 的安全更新）；比较镜像中与基础镜像当前的 Node.js 版本。结果写入工作流摘要 |
-| 重建 | 有更新时检出最近一个正式版本的 tag（不是 `main`），用相同的源码按发布流程重新构建、检查两个架构，覆盖推送该版本号 tag 与 `latest`。期间已经发布了更新的版本、`latest` 不再指向这个版本时，不改动 `latest`。因此固定版本号的用户也能拿到浏览器的安全更新 |
+| 重建 | 有更新时检出最近一个正式版本的 tag（不是 `main`），用相同的源码按发布流程重新构建、检查两个架构，覆盖推送该版本号 tag 与 `latest`。期间已经发布了更新的版本、`latest` 指向的版本比这个新时，不改动 `latest`（版本号读自 `latest` 的 `org.opencontainers.image.version` 标签，多架构清单读不到时改读清单中第一个平台的镜像，见 `scripts/image-version.js`；仍读不到时也不改动，并在运行中给出警告）。最近的正式版本早于 0.4.0（没有按摘要推送的脚本）时只检查、不重建。因此固定版本号的用户也能拿到浏览器的安全更新 |
 | 扫描 | 用 Trivy 扫描 `latest`，只列出已有修复版本的高危与严重漏洞，写入工作流摘要；有的话创建或更新 issue“镜像中有可修复的高危漏洞”（只报告，不阻断） |
 | 基础镜像 | Docker Hub 上出现下一个 Alpine 稳定版的 Node.js 镜像（如 `node:24-alpine3.25`）时开 issue 提醒升级（Alpine 只在最新的稳定分支更新 Chromium） |
 

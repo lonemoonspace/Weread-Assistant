@@ -21,9 +21,9 @@ on:
 permissions:
   contents: read
 
-# 与发布流程的 main 分支发布排队，不同时推送 latest
+# 与发布流程共用一个并发组（见 release.yml），不同时推送 latest
 concurrency:
-  group: release-dev
+  group: release-latest
   cancel-in-progress: false
 
 env:
@@ -95,6 +95,11 @@ jobs:
           elif [ "$FORCE" = "true" ]; then
             rebuild=true
             echo "没有更新，按手动触发的选项强制重建" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # 0.4.0 之前的版本没有按架构构建、按摘要推送的脚本，用现在的发布流程重建会失败，只报告不重建
+          if [ "$rebuild" = "true" ] && ! grep -q -- '--digest-file' scripts/docker-image.js; then
+            rebuild=false
+            echo "该版本早于多架构发布流程（0.4.0），不重建；发布新版本后自动恢复" >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "rebuild=$rebuild" >> "$GITHUB_OUTPUT"
           echo "重建：$rebuild" >> "$GITHUB_STEP_SUMMARY"
