@@ -131,3 +131,11 @@ export function durationBetween(start, end) {
   const minutes = (Date.parse(end) - Date.parse(start)) / 60000;
   return minutes < 1 ? "不到 1 分钟" : formatMinutes(minutes);
 }
+
+// 字节数显示为 KB / MB
+export function formatBytes(bytes) {
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}

@@ -2,10 +2,11 @@ import { computed, onMounted, reactive, ref } from "../../vendor/vue.esm-browser
 import { api } from "../api.js";
 import { ConfigForm } from "../components/config-form.js";
 import { TestNotification } from "../components/test-notification.js";
+import { formatBytes } from "../format.js";
 import { go } from "../router.js";
 import { notify, refreshAccounts, state } from "../store.js";
 
-// 配置：账号名称与启用状态、运行配置（继承全局或单独设置）、测试通知、删除账号
+// 配置：账号名称与启用状态、运行配置（继承全局或单独设置）、测试通知、浏览器资料、删除账号
 export const ConfigTab = {
   components: { ConfigForm, TestNotification },
   props: { account: Object },
@@ -15,6 +16,9 @@ export const ConfigTab = {
     const savingConfig = ref(false);
     const deleteData = ref(false);
     const deleting = ref(false);
+    // 内置浏览器的资料目录：null 表示还没有读到
+    const profile = ref(null);
+    const resettingProfile = ref(false);
 
     // 继承的值：全局默认，未设置时为内置默认
     const inherited = computed(() =>
@@ -81,12 +85,52 @@ export const ConfigTab = {
       }
     }
 
+    async function loadProfile() {
+      try {
+        profile.value = (await api(`accounts/${props.account.id}`)).profile || null;
+      } catch (_) {
+        profile.value = null;
+      }
+    }
+
+    async function resetProfile() {
+      const text = "确定重置浏览器资料？页面缓存、本地存储与浏览器中的登录状态会被删除，下次运行从 cookies.json 恢复登录。";
+      if (resettingProfile.value || !window.confirm(text)) {
+        return;
+      }
+      resettingProfile.value = true;
+      try {
+        profile.value = (await api(`accounts/${props.account.id}/profile`, { method: "DELETE" })).profile;
+        notify("浏览器资料已重置");
+      } catch (error) {
+        notify(error.message, "error");
+      } finally {
+        resettingProfile.value = false;
+      }
+    }
+
     onMounted(() => {
       info.name = props.account.name;
       info.enabled = props.account.enabled;
+      loadProfile();
     });
 
-    return { info, savingInfo, savingConfig, deleteData, deleting, inherited, saveInfo, saveConfig, remove, state };
+    return {
+      info,
+      savingInfo,
+      savingConfig,
+      deleteData,
+      deleting,
+      inherited,
+      profile,
+      resettingProfile,
+      formatBytes,
+      saveInfo,
+      saveConfig,
+      remove,
+      resetProfile,
+      state,
+    };
   },
   template: `
     <section>
@@ -116,6 +160,22 @@ export const ConfigTab = {
     <section>
       <h3>测试通知</h3>
       <test-notification :account-id="account.id" />
+    </section>
+
+    <section>
+      <h3>浏览器资料</h3>
+      <p class="muted">使用内置浏览器并打开“保留浏览器资料”时，页面缓存、本地存储与登录状态跨运行保留，超过 300 MB 时在运行开始前清空缓存。页面反复加载失败或登录异常时可以重置。</p>
+      <p v-if="profile">
+        <template v-if="profile.exists">当前占用 {{ formatBytes(profile.bytes) }}</template>
+        <template v-else>还没有浏览器资料（第一次用内置浏览器运行时创建）</template>
+      </p>
+      <button
+        type="button"
+        class="secondary"
+        :aria-busy="resettingProfile"
+        :disabled="resettingProfile || !profile || (!profile.exists && !profile.bytes)"
+        @click="resetProfile"
+      >重置浏览器资料</button>
     </section>
 
     <section class="danger-zone">

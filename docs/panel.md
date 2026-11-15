@@ -89,12 +89,13 @@ docker compose logs app | grep 面板初始密码
 | `PATCH api/settings` | 是 | `{ settings?, defaults? }`：只修改提交的项；任一项非法时返回 400 且整个请求不生效 |
 | `GET api/accounts` | 是 | 账号列表，含是否已有 cookies、调度规则（带接下来的触发时间）、下一次定时运行时间 `nextRunAt`、挑战设置 `challenge`、今天的阅读分钟数 `today`（`{ date, minutes, checkedIn }`）与最近一次运行 `lastRun` |
 | `POST api/accounts` | 是 | `{ id, name? }`；成功 201，ID 已存在 409，ID 或名称非法 400；同时创建账号数据目录 |
-| `GET api/accounts/:id` | 是 | `{ account, challengeProgress, effective }`：账号、本轮挑战进度（未设置挑战时为 null）与实际生效的运行配置 |
+| `GET api/accounts/:id` | 是 | `{ account, challengeProgress, effective, profile }`：账号、本轮挑战进度（未设置挑战时为 null）、实际生效的运行配置与浏览器资料目录 `{ exists, bytes }`（`bytes` 含重置时留下的 `profile.broken`） |
 | `PATCH api/accounts/:id` | 是 | `{ name?, enabled?, overrides?, challenge? }`；ID 不可修改；`challenge` 为 `{ type: "month" \| "year", startDate: "YYYY-MM-DD" }` 或 null |
 | `GET api/accounts/:id/schedules` | 是 | `{ timezone, enabled, nextRunAt, nextRunJitterMinutes, schedules }`：每条规则带 `description` 与接下来 5 次触发时间 `nextRuns`；`nextRunJitterMinutes` 为下次运行那条规则的随机延后分钟数 |
 | `PUT api/accounts/:id/schedules` | 是 | `{ schedules: [...] }`：整体替换账号的调度规则，保存后立即生效；任一条非法时返回 400，`message` 指出第几条规则与原因，整个请求不生效 |
 | `GET api/accounts/:id/goal` | 是 | 每日目标：`{ timezone, goal, suggestedMinutes, warning, today, planned }`。`goal` 为 `{ enabled, minutes, checkAt }` 或 null；`suggestedMinutes` 为按挑战折算的每天分钟数（没有挑战时为 null）；`warning` 为检查时间太晚、补不满目标时的提示；`today` 同账号列表；`planned` 为计划器中的待办与今天的补跑次数 `{ pending, catchups: { count, max, blocked } }` |
 | `PUT api/accounts/:id/goal` | 是 | `{ goal: { enabled?, minutes, checkAt } \| null }`：保存每日目标，`minutes` 为 1–1440，`checkAt` 为 `HH:MM`（面板时区），null 表示不设置；返回同上 |
+| `DELETE api/accounts/:id/profile` | 是 | 重置浏览器资料：删除账号的 `profile/` 与 `profile.broken/`，返回 `{ profile }`；下次运行从 cookies.json 恢复登录；账号正在运行或排队时 409 `account_busy` |
 | `POST api/schedules/preview` | 是 | `{ schedules: [...] }`：校验并返回每条规则接下来的触发时间，不保存，供填写表单时预览 |
 | `DELETE api/accounts/:id` | 是 | `{ deleteData? }`，可以不带请求体；默认只从面板移除，`deleteData: true` 时同时删除账号数据目录与运行记录（先把两个目录移开，保存成功后再删除；移开失败时返回 500 `delete_data_failed`，账号与数据保持原样）；账号正在运行或排队时返回 409 `account_busy` |
 | `POST api/accounts/:id/runs` | 是 | `{ mode? }`，`read`（默认）或 `login`（仅登录），可以不带请求体；加入队列后返回 202 与运行状态；账号不存在 404，已停用 409 `account_disabled`，已在运行或排队 409 `run_active` |
@@ -143,6 +144,8 @@ docker compose logs app | grep 面板初始密码
 每次运行（立即运行、仅登录或定时触发）都 fork 一个阅读子进程 `src/reader/worker.js`。子进程经 IPC 接收本次运行的配置（账号覆盖 > 全局默认 > 内置默认，在开始运行时合并），密钥不进入子进程的环境变量。
 
 子进程只继承以下环境变量（白名单）：`PATH`、`HOME`、`USER`、`TZ`、`TMPDIR`、`LANG`、`LANGUAGE`、`LC_*`、`NODE_OPTIONS`、`NODE_EXTRA_CA_CERTS`、`NODE_USE_ENV_PROXY`，以及 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`（含小写形式），以及内置浏览器的路径 `CHROME_BIN`、`CHROMEDRIVER_PATH`。面板所在环境中的其他变量都不会传给子进程，包括 `PANEL_PASSWORD`，以及 `BARK_KEY`、`EMAIL_PASS` 等按环境变量运行时使用的配置。
+
+每次运行在系统临时目录下新建一个单独的临时目录 `weread-run-<面板数据目录的哈希>-XXXXXX`（0700），作为子进程的 `TMPDIR`，chromedriver 与 Chromium 的临时文件都写在这里；子进程退出后删除。面板启动时删除同一数据目录上次遗留的这类目录（断电、崩溃），不影响共用同一台机器的其他面板。
 
 | 状态 | 值 | 进入条件 |
 | --- | --- | --- |
@@ -211,7 +214,9 @@ docker compose logs app | grep 面板初始密码
 | 运行日志 | `logRetentionDays` 天（默认 30），按运行结束时间计算 | 删除后日志接口返回 404，运行历史中 `hasLog` 为 false |
 | 运行记录 | 永久 | 打卡日历依赖它 |
 
-清理在面板启动时、每次运行结束后、修改这两项设置后以及每 6 小时执行一次；进行中的运行不清理。已删除账号留下的运行记录同样按此清理。
+清理在面板启动时、每次运行结束后、修改这两项设置后以及每 6 小时执行一次；进行中的运行不清理。已删除账号留下的运行记录同样按此清理。同时删除账号数据目录中一天以前的残留文件：发送邮件时没删掉的 `email-*.png` 与写入中断留下的 `*.tmp`。
+
+内置浏览器的资料目录 `accounts/<id>/profile/` 在每次运行开始前整理：超过 300 MB 时清空其中的缓存（HTTP 缓存本身限制为 50 MB）。在账号“配置”页可以查看占用并重置，见 `docs/reader.md` 的“浏览器资料目录”。
 
 ### 调度
 
@@ -328,6 +333,7 @@ data/
   panel.log               # 面板日志；启动时上一次的日志改名为 panel.log.1
   panel.lock              # 面板运行期间存在，防止同一数据目录启动多个面板
   accounts/<id>/          # 账号数据（0700）：cookies.json、login.png、login-qr.png（0600；命令行运行时的截图也在这里）
+  accounts/<id>/profile/  # 内置浏览器的资料目录（0700）：缓存、本地存储与登录状态，备份时可以排除；profile.broken/ 为最近一次重置前的目录
   planner.json            # 计划器的待办与当天的补跑次数（0600），见“重试、补跑与恢复”
   runs/<id>/<runId>/      # 每次运行（目录 0700，启动时收紧旧目录）：meta.json、output.log、screenshot-*.png、error.png（0600）
 ```
@@ -380,7 +386,7 @@ data/
 | 规则 | 说明 |
 | --- | --- |
 | 配置合并 | 账号覆盖 > 全局默认 > 内置默认 |
-| 面板管理的配置项 | 数据目录为 `accounts/<id>`、浏览器配置名为账号 ID、通知中的账号名称为账号名称，不能通过接口修改 |
+| 面板管理的配置项 | 数据目录为 `accounts/<id>`、通知中的账号名称为账号名称，不能通过接口修改。0.4.0 删除了不起作用的 `profileName`，升级后第一次启动时从全局默认与账号覆盖中清除（只做一次，记录在 `migrations` 中） |
 | 修改语义 | 提交的项按配置清单校验并转换类型；`null` 或空字符串表示删除该项，回到上一级的值 |
 | 密钥只写不读 | 接口返回 `••••••`；提交掩码或空字符串表示不修改，提交 `null` 表示清除 |
 | 账号 ID | 小写字母、数字与短横线，1–32 位，不以短横线开头或结尾；创建后不可修改 |

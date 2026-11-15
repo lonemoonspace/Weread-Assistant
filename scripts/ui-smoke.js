@@ -241,7 +241,7 @@ async function login(h, base, password) {
 // ---------- 桌面 ----------
 
 async function desktop(env, h, driver, results) {
-  const { base, call, panel, selenium } = env;
+  const { base, call, dataDir, panel, selenium } = env;
   const step = (name) => {
     results.push(name);
     console.log(`✅ ${name}`);
@@ -500,6 +500,20 @@ async function desktop(env, h, driver, results) {
   await driver.wait(async () => (await driver.getCurrentUrl()).endsWith("#/"), 10000, "删除后应回到总览");
   assert.ok(!(await call("GET", "api/accounts")).accounts.some((account) => account.id === "new-1"));
   step("新建账号后进入账号页面；删除账号前确认，删除后回到总览");
+
+  // 浏览器资料：显示占用，确认后重置
+  const profileDir = path.join(dataDir, "accounts", "ok-1", "profile", "Default");
+  fs.mkdirSync(profileDir, { recursive: true });
+  fs.writeFileSync(path.join(profileDir, "Cache"), Buffer.alloc(3 * 1024 * 1024));
+  await h.go("#/accounts/ok-1/config");
+  await h.waitText("main", "当前占用 3.0 MB");
+  await h.clickButton("重置浏览器资料");
+  await driver.wait(until.alertIsPresent(), 5000);
+  await (await driver.switchTo().alert()).accept();
+  await h.waitText(".notice", "浏览器资料已重置");
+  await h.waitText("main", "还没有浏览器资料");
+  assert.ok(!fs.existsSync(path.dirname(profileDir)), "重置后应删除资料目录");
+  step("浏览器资料：配置页显示占用，确认后重置并删除资料目录");
 
   // 断线重连：服务端断开所有连接后，页面提示并自动重连，之后的运行状态照常推送
   await h.go("#/accounts/slow-1/live");

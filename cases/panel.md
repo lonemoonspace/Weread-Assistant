@@ -4,7 +4,7 @@
 
 | 场景 | 前置条件 / 输入 | 预期结果 |
 | --- | --- | --- |
-| smoke 自查 | 执行 `npm run test:panel` | 86 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
+| smoke 自查 | 执行 `npm run test:panel` | 87 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
 | 首次启动生成密码 | 空数据目录、未设置 `PANEL_PASSWORD` | 生成 16 位密码；`panel.json` 只保存 scrypt 哈希且权限为 0600；再次启动不再生成，原密码可登录 |
 | 未登录访问 | 不带会话 | `healthz` 返回 `{"status":"ok"}`；`/` 302 到 `login`；登录页与静态资源可访问；`api/auth/session` 返回 401 |
 | 登录与退出 | 设置 `PANEL_PASSWORD` | 错误密码 401；正确密码 204，`Set-Cookie` 带 `HttpOnly`、`SameSite=Strict`、`Path=/`，HTTP 下不带 `Secure`；登录后可访问首页；退出后会话失效 |
@@ -40,7 +40,7 @@
 | 遗留的锁文件 | `panel.lock` 指向本机已不存在的进程、其他主机且 60 秒未更新、内容损坏；另有其他主机且刚更新 | 前三种情况接管并正常启动；其他主机刚更新时报错，提示该主机名与进程号 |
 | 配置合并 | 全局默认阅读时长 68、速度 normal；账号覆盖速度 fast、选书方式 -1 | 实际配置为 68、fast、-1，其余为内置默认；删除账号的速度覆盖后回到 normal；接口不返回数据目录等面板管理项；按账号解析时数据目录为 `accounts/<id>` |
 | 密钥只写不读 | 设置 Bark key、ntfy token 与账号的邮箱密码 | 所有接口只返回掩码，响应中不出现密钥原文；提交掩码或空字符串不修改；`null` 清除 |
-| 配置接口鉴权 | 未登录访问 `api/schema`、`api/settings`、`api/accounts` | 返回 401；schema 不包含数据目录、浏览器配置名、账号名称 |
+| 配置接口鉴权 | 未登录访问 `api/schema`、`api/settings`、`api/accounts` | 返回 401；schema 不包含数据目录与账号名称 |
 | 旧文件升级 | 只有 `auth` 的 `panel.json` | 启动后补齐 `settings`、`defaults`、`accounts`，原密码可登录 |
 | 安全响应头 | 访问页面与接口 | 带 CSP（不含 `unsafe-inline`；只有登录后的面板主页面含 `'unsafe-eval'`，登录页、接口与静态文件不含；主页面没有内联脚本与样式；`.mjs` 以 JavaScript 类型返回）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`，不带 `X-Powered-By`；接口 `Cache-Control: no-store` |
 | 运行成功 | 设置全局 Bark key；面板进程的环境中有 `PANEL_SMOKE_SECRET`、`BARK_KEY`、`NTFY_TOKEN`、`EMAIL_PASS`、`WEREAD_DURATION`、`SOME_API_TOKEN`；账号 `ok-1` 立即运行 | 返回 202，`mode` 为 `read`、`trigger` 为 `manual`；状态依次为排队中、启动中、阅读中、成功；`minutes` 2、`book` 为书名、`screenshot` 为最新截图；子进程收到的数据目录为 `accounts/ok-1`、经 IPC 收到了 Bark key；子进程的环境变量中没有上述任何一个，只有白名单中的变量（以及 Node 为 IPC 添加的 `NODE_CHANNEL_*`），日志中不出现这些密钥的值；子进程打印的 Bark Key 与登录链接中的 uid 在日志文件与实时推送中都替换为 `••••••`；`meta.json` 状态为成功、退出码 0、不含登录链接；日志接口返回 `text/plain`，含 `[PANEL]` 行与子进程日志，不含密钥原文；`?download=1` 时为附件；运行 ID 格式非法或路径穿越时 404；未登录 401 |
@@ -53,6 +53,7 @@
 | 实时推送 | 未登录访问 `api/events`；登录后连接，运行 `ok-1`；`slow-1` 阅读中时再连接一次；退出登录 | 未登录 401；响应头为 `text/event-stream`、`Cache-Control: no-cache`、`X-Accel-Buffering: no`；先收到 `snapshot`（`runs` 为空），之后收到 `run`（含成功状态）、`log`（含 `accountId` 与日志行）和心跳注释；中途连接时 `snapshot` 中的运行带最近日志；退出登录后两个连接都断开 |
 | 会话结束时立即断开推送 | 心跳间隔 60 秒；两个会话各连接一次；先退出其中一个，再用另一个修改密码 | 退出登录的连接 1 秒内断开，另一个会话的连接保持；修改密码后另一个连接 1 秒内断开；用旧会话连接返回 401 |
 | 删除运行中的账号 | `slow-1` 运行中时删除；停止后带 `deleteData: true` 删除 | 运行中返回 409 `account_busy`；停止后删除成功，`runs/slow-1` 与 `accounts/slow-1` 都被删除 |
+| 运行临时目录与重置浏览器资料 | 系统临时目录中有同一数据目录上次遗留的 `weread-run-<哈希>-*` 与其他面板的同类目录；`ok-1` 运行；`slow-1` 运行中时 `DELETE api/accounts/slow-1/profile`，停止后再请求 | 启动时只删除本面板遗留的目录；子进程的 `TMPDIR` 为本次运行新建的目录（0700），运行结束后删除；运行中重置返回 409 `account_busy`，停止后返回 200，`profile/` 与 `profile.broken/` 都已删除，`profile.exists` 为 false |
 | 调度规则换算 | 每天 `18:30`、`06:00`、`06:00`；每 6 小时第 30 分；每 1 小时；cron `  30 6 *  * 1-5 `；分别在上海、纽约（2026-03-08 开始夏令时）时区计算 | 时间去重排序为 `06:00`、`18:30`，换算为 `0 6 * * *`、`30 18 * * *`；`30 */6 * * *`；`0 * * * *`；cron 规范为单个空格；自动生成 6 位 ID 且默认启用。上海时间每天 06:00、18:30 依次为 UTC 10:30、22:00；每 6 小时为 UTC 04:30、10:30、16:30、22:30；纽约 06:00 从 UTC 11:00 变为 10:00；周一至周五的规则跳过周末 |
 | 调度接口 | 提交未知类型、空时间、`6:00`、`24:00`、间隔 5 小时、第 60 分、4 段或 6 段或 `@daily` 的 cron、`61 * * * *`、不会触发的 `0 0 30 2 *`、未知字段、非布尔的 `enabled`、非法 ID、11 条规则；再提交 3 条合法规则（含停用的与重复 ID 的）；预览一条规则 | 非法时 400，`message` 以“第 N 条规则”开头并指出原因，且不保存；合法时保留提交的 ID、重复 ID 重新分配；每条规则带说明与 5 次触发时间（上海 06:00 均为 UTC 22:00），停用的规则没有触发时间；`nextRunAt` 为启用规则中最早的一次；账号接口返回同样的规则；停用账号后 `nextRunAt` 为 null；预览返回触发时间但不保存；账号不存在 404、未登录 401、缺少 `X-WA-Request` 403 |
 | 调度器重建 | 两个账号各有规则；停用一条规则；停用、再启用账号；时区改为 `Europe/London`；删除一个账号；关闭面板 | 定时任务依次与当前规则一致：停用的规则与停用账号的规则被移除，重新启用后恢复；改时区后 06:00 对应 UTC 05:00 或 06:00；删除账号后其任务被移除；面板关闭后没有定时任务 |
