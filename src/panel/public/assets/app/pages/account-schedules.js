@@ -1,4 +1,4 @@
-import { computed, onMounted, onUnmounted, ref } from "../../vendor/vue.esm-browser.prod.js";
+import { computed, onMounted, onUnmounted, ref, watch } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
 import { SCHEDULE_TYPE_LABELS, formatNextRun, formatShort } from "../format.js";
 import { setLeaveGuard } from "../router.js";
@@ -37,13 +37,20 @@ function toPayload(rule) {
 }
 
 // 每日目标：到检查时间后当天分钟数不够就补跑差额
+// 有未保存的修改时发出 dirty-change，由调度页并入离开确认
 const GoalCard = {
   props: { account: Object },
-  setup(props) {
+  emits: ["dirty-change"],
+  setup(props, { emit }) {
     const view = ref(null);
     const form = ref({ enabled: false, minutes: 30, checkAt: "22:00" });
     const error = ref("");
     const busy = ref(false);
+    // 上次加载或保存时的表单，用于判断是否有未保存的修改
+    const saved = ref("");
+    const snapshot = () => JSON.stringify({ enabled: form.value.enabled, minutes: Number(form.value.minutes), checkAt: form.value.checkAt });
+    const dirty = computed(() => view.value !== null && snapshot() !== saved.value);
+    watch(dirty, (value) => emit("dirty-change", value));
 
     function apply(data) {
       view.value = data;
@@ -51,6 +58,7 @@ const GoalCard = {
       form.value = goal
         ? { ...goal }
         : { enabled: false, minutes: data.suggestedMinutes || 30, checkAt: "22:00" };
+      saved.value = snapshot();
     }
 
     async function load() {
@@ -81,7 +89,7 @@ const GoalCard = {
     }
 
     onMounted(load);
-    return { view, form, error, busy, save, useSuggested };
+    return { view, form, error, busy, dirty, save, useSuggested };
   },
   template: `
     <article class="goal-card">
@@ -107,6 +115,7 @@ const GoalCard = {
           今天已读 {{ view.today.minutes }}/{{ view.goal.minutes }} 分钟<template v-if="view.planned">，已补跑 {{ view.planned.catchups.count }}/{{ view.planned.catchups.max }} 次<template v-if="view.planned.catchups.blocked">（今天不再补跑）</template></template>。
         </p>
         <p v-if="error" class="error-text">{{ error }}</p>
+        <p v-if="dirty" class="muted">每日目标有未保存的修改。</p>
         <div class="rule-footer">
           <label class="switch-line"><input type="checkbox" role="switch" v-model="form.enabled"> 启用</label>
           <button type="button" :aria-busy="busy" :disabled="busy" @click="save">保存目标</button>
@@ -130,6 +139,7 @@ export const SchedulesTab = {
     const saved = ref("[]");
     const snapshot = () => JSON.stringify(rules.value.map(toPayload));
     const dirty = computed(() => snapshot() !== saved.value);
+    const goalDirty = ref(false);
 
     function apply(data) {
       rules.value = data.schedules.map(toEditable);
@@ -177,7 +187,14 @@ export const SchedulesTab = {
     }
 
     onMounted(load);
-    onUnmounted(setLeaveGuard(() => (dirty.value ? "调度规则有未保存的修改，确定离开吗？" : "")));
+    onUnmounted(
+      setLeaveGuard(() => {
+        if (dirty.value) {
+          return "调度规则有未保存的修改，确定离开吗？";
+        }
+        return goalDirty.value ? "每日目标有未保存的修改，确定离开吗？" : "";
+      })
+    );
 
     return {
       rules,
@@ -187,6 +204,9 @@ export const SchedulesTab = {
       error,
       busy,
       dirty,
+      setGoalDirty: (value) => {
+        goalDirty.value = value;
+      },
       add,
       remove: (index) => rules.value.splice(index, 1),
       preview: () => submit(true),
@@ -258,6 +278,6 @@ export const SchedulesTab = {
       </div>
       <p v-if="dirty" class="muted">有未保存的修改。</p>
 
-      <goal-card :account="account" />
+      <goal-card :account="account" @dirty-change="setGoalDirty" />
     </section>`,
 };

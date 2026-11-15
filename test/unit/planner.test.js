@@ -162,7 +162,7 @@ describe("createPlanner", () => {
     ]);
   });
 
-  it("重试到期时账号正在运行则放弃；账号停用后丢弃待办", async () => {
+  it("重试到期时账号正在运行则每 5 分钟顺延，2 小时后放弃；账号停用后丢弃待办", async () => {
     const planner = createPlanner({ dataDir, store, runner, clock });
     quietly(() => {
       planner.recover();
@@ -170,9 +170,30 @@ describe("createPlanner", () => {
     });
     active.add("a1");
     now += 5 * 60000;
-    const logs = quietly(() => planner.tick());
+    let logs = quietly(() => planner.tick());
     assert.equal(enqueued.length, 0);
-    assert.ok(logs.some((line) => line.includes("放弃这次重试")));
+    assert.ok(logs.some((line) => line.includes("这次重试顺延到")));
+    const [postponed] = planner.accountStatus("a1").pending;
+    assert.equal(Date.parse(postponed.dueAt), now + 5 * 60000);
+
+    // 账号空下来后照常重试
+    active.clear();
+    now += 5 * 60000;
+    quietly(() => planner.tick());
+    assert.equal(enqueued.length, 1);
+    assert.equal(enqueued[0].trigger, "retry");
+
+    // 一直忙：从原定时间起 2 小时后放弃
+    quietly(() => planner.handleFinished(failedRun({ id: "20261115T000000000Z-eeee" })));
+    active.add("a1");
+    now += 5 * 60000;
+    for (let i = 0; i < 30 && planner.accountStatus("a1").pending.length > 0; i += 1) {
+      logs = quietly(() => planner.tick());
+      now += 5 * 60000;
+    }
+    assert.equal(planner.accountStatus("a1").pending.length, 0);
+    assert.ok(logs.some((line) => line.includes("放弃这次重试，不再执行")));
+    assert.equal(enqueued.length, 1);
 
     active.clear();
     quietly(() => planner.handleFinished(failedRun()));
@@ -180,6 +201,40 @@ describe("createPlanner", () => {
       data.accounts[0].enabled = false;
     });
     assert.equal(planner.accountStatus("a1").pending.length, 0);
+  });
+
+  it("已经读满时不重试；没开始阅读的按配置的时长重试", () => {
+    const planner = createPlanner({ dataDir, store, runner, clock });
+    quietly(() => {
+      planner.recover();
+      planner.handleFinished(failedRun({ minutes: 30 }));
+    });
+    assert.equal(planner.accountStatus("a1").pending.length, 0, "读满计划分钟数的不重试");
+    quietly(() => planner.handleFinished(failedRun({ startedAt: null, plannedMinutes: 0, minutes: 0 })));
+    now += 5 * 60000;
+    quietly(() => planner.tick());
+    assert.equal(enqueued.length, 1);
+    assert.equal(enqueued[0].minutes, null, "没开始阅读时按配置的时长（不覆盖）");
+  });
+
+  it("子进程因还会重试而没发通知、结束时却不再重试的，由面板补发失败通知", async () => {
+    const sent = [];
+    const notify = async (config, body) => {
+      sent.push(body);
+    };
+    const planner = createPlanner({ dataDir, store, runner, clock, notify });
+    const config = { accountName: "a1" };
+    quietly(() => planner.recover());
+    // 运行中把重试次数改为 0
+    await store.update((data) => {
+      data.settings.retryCount = 0;
+    });
+    quietly(() => planner.handleFinished(failedRun({ retriesLeft: 2, error: "出错了" }), { config }));
+    assert.equal(planner.accountStatus("a1").pending.length, 0);
+    assert.deepEqual(sent, ["运行失败：出错了"]);
+    // 子进程自己发过通知（启动时没有重试次数）的不重复发送
+    quietly(() => planner.handleFinished(failedRun({ retriesLeft: 0, error: "又出错了" }), { config }));
+    assert.equal(sent.length, 1);
   });
 
   it("待办写入 planner.json，重启后仍在；文件损坏时当作没有待办", () => {
@@ -234,5 +289,60 @@ describe("createPlanner", () => {
     });
     assert.equal(enqueued.length, 3, "每天最多补跑 3 次");
     assert.deepEqual(planner.accountStatus("a1").catchups, { count: 3, max: 3, blocked: false });
+  });
+
+  it("每日目标：加入队列失败时不计入当天的次数", async () => {
+    await store.update((data) => {
+      data.accounts[0].goal = { enabled: true, minutes: 60, checkAt: "23:00" };
+    });
+    const failing = { enqueue: () => { throw new Error("磁盘已满"); }, isActive: () => false };
+    const planner = createPlanner({ dataDir, store, runner: failing, clock });
+    now = zonedTime("2026-11-15", "23:20", "Asia/Shanghai");
+    quietly(() => planner.recover());
+    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 0, max: 3, blocked: false });
+  });
+
+  it("planner.json 中到期时间无效的待办在加载时丢弃", () => {
+    const file = path.join(dataDir, "planner.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        lastCheckAt: null,
+        pending: [
+          { id: "x1", kind: "retry", accountId: "a1", dueAt: "oops", attempt: 2, minutes: 5 },
+          { id: "x2", kind: "retry", accountId: "a1", dueAt: new Date(now).toISOString(), attempt: 2, minutes: 5 },
+          { id: "x3", kind: "resume", accountId: "a1", runId: "r", trigger: "schedule", endedAt: new Date(now).toISOString() },
+        ],
+        catchups: {},
+      })
+    );
+    let planner;
+    const logs = quietly(() => {
+      planner = createPlanner({ dataDir, store, runner, clock });
+    });
+    assert.equal(planner.accountStatus("a1").pending.length, 1);
+    assert.ok(logs.some((line) => line.includes("1 个待办格式无效")));
+  });
+
+  it("启动恢复完成之前调度器触发不更新检查时间；高频规则长时间停机后仍补触发最近的一次", async () => {
+    await store.update((data) => {
+      data.accounts[0].schedules = normalizeSchedules([{ type: "cron", expression: "*/5 * * * *" }]);
+    });
+    const file = path.join(dataDir, "planner.json");
+    const lastCheckAt = new Date(now - 3 * 24 * 60 * 60000).toISOString();
+    fs.writeFileSync(file, JSON.stringify({ version: 1, lastCheckAt, pending: [], catchups: {} }));
+    const first = createPlanner({ dataDir, store, runner, clock });
+    quietly(() => first.fireSchedule("a1", { id: "r1", type: "daily", times: ["06:00"], enabled: true }));
+    first.close();
+    assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).lastCheckAt, lastCheckAt, "还没恢复时不应更新检查时间");
+
+    enqueued = [];
+    now += 60000;
+    const second = createPlanner({ dataDir, store, runner, clock });
+    quietly(() => second.recover());
+    const missed = enqueued.filter((item) => item.trigger === "schedule");
+    assert.equal(missed.length, 1);
+    assert.ok(missed[0].delayedMinutes <= 5, "补触发的应是最近错过的一次");
   });
 });
