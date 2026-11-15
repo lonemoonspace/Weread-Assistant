@@ -28,7 +28,8 @@ describe("normalizeNtfyPriority", () => {
     assert.equal(normalizeNtfyPriority("4"), 4);
     assert.equal(normalizeNtfyPriority(" High "), 4);
     await quietly(() => {
-      assert.equal(normalizeNtfyPriority("3abc"), 3);
+      assert.equal(normalizeNtfyPriority("3abc", 1), 1);
+      assert.equal(normalizeNtfyPriority("4abc"), 3);
       assert.equal(normalizeNtfyPriority("2.9", 1), 1);
       assert.equal(normalizeNtfyPriority("6"), 3);
     });
@@ -47,8 +48,8 @@ describe("邮件", () => {
     assert.equal(smtpTransportOptions({ ...base, emailPort: 25, emailAllowInsecure: true }).requireTLS, false);
   });
 
-  it("时间固定为中文格式", () => {
-    assert.match(formatEmailTime(new Date(2026, 10, 14, 9, 5, 7)), /^2026\/11\/14 09:05:07$/);
+  it("时间固定为中文格式，并注明与 UTC 的偏移", () => {
+    assert.match(formatEmailTime(new Date(2026, 10, 14, 9, 5, 7)), /^2026\/11\/14 09:05:07（UTC([+-]\d{2}:\d{2})?）$/);
   });
 
   it("canSendEmail 的 quiet 模式不记录日志", async () => {
@@ -69,6 +70,15 @@ describe("邮件", () => {
     assert.equal(attachments[0].cid, "done.png");
     assert.equal(attachments[0].contentType, "image/png");
   });
+
+  it("附件的 MIME 类型：jpg 为 image/jpeg，不认识的扩展名不填写", () => {
+    const [jpg, bare] = toMailAttachments([
+      { filename: "a.JPG", content: Buffer.from("x") },
+      { filename: "noext", content: Buffer.from("x") },
+    ]);
+    assert.equal(jpg.contentType, "image/jpeg");
+    assert.equal("contentType" in bare, false);
+  });
 });
 
 describe("createNotifier", () => {
@@ -79,11 +89,12 @@ describe("createNotifier", () => {
   });
 
   it("通知在后台发送，flush 等待完成；超时后不再等待", async () => {
-    let release;
+    const waiting = [];
+    const release = () => waiting.splice(0).forEach((resolve) => resolve());
     const server = http.createServer((req, res) => {
       req.resume();
       if (req.url === "/slow/push") {
-        new Promise((resolve) => (release = resolve)).then(() => res.end("{}"));
+        new Promise((resolve) => waiting.push(resolve)).then(() => res.end("{}"));
         return;
       }
       res.end("{}");
@@ -103,6 +114,23 @@ describe("createNotifier", () => {
         assert.equal(await slow.flush(50), false);
         release();
         assert.equal(await slow.flush(5000), true);
+
+        // flush 期间新加入的通知也会等待
+        const later = createNotifier(resolveConfig({ barkKey: "k", barkServer: `http://127.0.0.1:${port}/slow`, notifyOnDone: true }));
+        later.event("done", "第一条");
+        const flushing = later.flush(5000);
+        later.event("done", "第二条");
+        let flushed = false;
+        flushing.then(() => (flushed = true));
+        while (waiting.length < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        waiting.shift()();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        assert.equal(flushed, false);
+        release();
+        assert.equal(await flushing, true);
+        assert.equal(later.pendingCount(), 0);
       });
     } finally {
       server.closeAllConnections();
