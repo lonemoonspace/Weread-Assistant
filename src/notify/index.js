@@ -69,7 +69,7 @@ function notificationTitle(config) {
 // 绑定一次运行的配置。loginLinkIntervalMs：两次推送登录链接的最小间隔；
 // panelLink：面板中该账号实时页面的地址（配置了 PANEL_PUBLIC_URL 时），附在扫码推送中
 // 通知在后台发送，不阻塞阅读流程：event / loginLink 立即返回一个 Promise（不会 reject），
-// 运行结束前调用 flush(timeoutMs) 等待仍在发送的通知，最多等待 timeoutMs
+// 运行结束前调用 flush(timeoutMs) 等待仍在发送的通知（包括等待期间新加入的），最多等待 timeoutMs
 function createNotifier(config, { loginLinkIntervalMs = 0, panelLink = "" } = {}) {
   let lastLoginLink = "";
   let lastLoginLinkAt = 0;
@@ -94,8 +94,14 @@ function createNotifier(config, { loginLinkIntervalMs = 0, panelLink = "" } = {}
     const timeout = new Promise((resolve) => {
       timer = setTimeout(() => resolve(false), timeoutMs);
     });
-    const all = Promise.all([...pending]).then(() => true);
-    const done = await Promise.race([all, timeout]);
+    // 等待期间新加入的通知也一并等待，直到全部发送完成或超时
+    const drain = async () => {
+      while (pending.size) {
+        await Promise.all([...pending]);
+      }
+      return true;
+    };
+    const done = await Promise.race([drain(), timeout]);
     clearTimeout(timer);
     if (!done) {
       console.warn(`仍有通知在 ${Math.round(timeoutMs / 1000)} 秒内未发送完成，不再等待`);
