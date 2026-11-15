@@ -1,6 +1,6 @@
 ## Web 面板说明
 
-> 已完成：登录（密码或 passkey，可关闭密码登录）、会话、修改密码、反向代理支持，全局设置、默认配置与账号管理接口，运行队列（立即运行、仅登录、停止、运行日志、实时推送），按账号的调度规则与定时运行，运行历史、按天统计、打卡日历与挑战进度、按保留策略清理，Selenium 状态与 noVNC 链接，以及完整的页面。
+> 已完成：登录（密码或 passkey，可关闭密码登录）、会话、修改密码、反向代理支持，全局设置、默认配置与账号管理接口，运行队列（立即运行、仅登录、停止、运行日志、实时推送），按账号的调度规则与定时运行，运行历史、按天统计、打卡日历与挑战进度、统计页、按保留策略清理，Selenium 状态与 noVNC 链接，以及完整的页面。
 
 ### 启动
 
@@ -47,7 +47,8 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/planner.js` | 计划器：失败重试、调度随机延后、每日目标补跑、启动时恢复被中断的运行与错过的调度，见下文“重试、补跑与恢复” | 待办保存在 `planner.json`，重启不丢；时钟经参数注入，单元测试不需要真的等待 |
 | `src/panel/retry.js`、`src/panel/goal.js` | 重试规则（哪些运行、哪些失败、间隔）；每日目标的校验、按挑战的建议值与检查时间太晚时的提示 | |
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
-| `src/panel/history.js` | 运行历史、按天统计、打卡日历与挑战进度、按保留策略清理 | 按面板时区统计；口径为本工具的运行记录，非微信读书官方数据 |
+| `src/panel/history.js` | 运行历史的读取、按保留策略清理 | 运行记录（`meta.json`）永久保留 |
+| `src/panel/stats.js` | 按天统计（内存中的按天聚合缓存）、连续打卡、打卡日历、挑战进度与统计页数据 | 按面板时区统计；口径为本工具的运行记录，非微信读书官方数据 |
 | `src/panel/challenge.js` | 阅读挑战（月卡、年卡）的规则与设置校验 | |
 | `src/shared/local-browser.js` | 查找内置浏览器（Chromium 与 chromedriver），读取版本 | 返回值与 Selenium 状态格式相同；找不到或无法运行时为 `unreachable` 并附带原因 |
 | `src/shared/selenium.js` | 查询 Selenium 的 `/status`：是否就绪、已用/总会话数；面板总览与阅读子进程的运行日志共用 | 先 `/status`，不是 Selenium 状态时再试 `/wd/hub/status`；3 秒超时（整个请求的时限，含读取响应体，响应体不超过 1 MB）；展示的地址去掉其中的用户名与密码 |
@@ -106,12 +107,13 @@ docker compose logs app | grep 面板初始密码
 | `POST api/notifications/test` | 是 | `{ accountId? }`：按账号的实际配置（不提供时按全局默认配置）向已配置的 Bark、ntfy、邮件各发送一条测试通知，不受事件开关影响；返回 `{ results: [{ channel, ok }] }`，没有配置任何渠道时为空数组 |
 | `GET api/runs` | 是 | 排队中与进行中的运行，按加入队列的顺序，每个运行带最近 200 行日志 |
 | `GET api/selenium/status` | 是 | 全局默认配置与各账号实际使用的内置浏览器或每个 Selenium 地址的状态与会话数，见下文“Selenium 状态与 noVNC” |
-| `GET api/accounts/:id/runs` | 是 | 运行历史，最新的在前：`{ runs, nextBefore }`；`?limit=`（1–100，默认 20）、`?before=<nextBefore>` 翻页；后面没有记录或只剩读不出来的记录时 `nextBefore` 为 null。每条为运行记录加 `hasLog` 与截图文件名 `screenshots` |
+| `GET api/accounts/:id/runs` | 是 | 运行历史，最新的在前：`{ runs, nextBefore }`；`?limit=`（1–100，默认 20）、`?before=<nextBefore>` 翻页；`?date=YYYY-MM-DD` 时只列出面板时区中当天及以前排队的运行（统计页点热力图的某一天跳到这里）；后面没有记录或只剩读不出来的记录时 `nextBefore` 为 null。每条为运行记录加 `hasLog` 与截图文件名 `screenshots` |
 | `GET api/accounts/:id/runs/:runId` | 是 | `{ run }`：运行记录、截图文件名与按天拆分的阅读分钟数 `minutesByDate` |
 | `GET api/accounts/:id/runs/:runId/screenshots/:name` | 是 | 截图（`image/png`），运行中也可读取最新的截图；文件名只接受 `screenshot-<分钟>.png` 与出错时的 `error.png`（0.1.0 的旧记录中还可能有发邮件时留下的 `screenshot.png`，同样可读取） |
 | `GET api/accounts/:id/login-qr` | 是 | 账号正在等待扫码时，这次运行保存的二维码截图（`image/png`，只含二维码的 `login-qr.png` 优先，没有或比整页截图旧时为整页 `login.png`）；没有等待扫码或截图早于这次运行时 404。二维码解析不出登录链接时页面用它代替本地生成的二维码 |
 | `GET api/accounts/:id/runs/:runId/log` | 是 | 运行日志（`text/plain`）；`?download=1` 时作为附件下载；超过保留天数被清理后返回 404 |
 | `GET api/accounts/:id/calendar` | 是 | 打卡日历，`?month=YYYY-MM`（默认本月）：每天的阅读分钟数与是否打卡、今天、本月合计与本轮挑战进度，见下文 |
+| `GET api/stats` | 是 | 统计页数据，`?account=<账号 ID 或 all>`（默认 all）、`?days=30\|90\|365`（趋势与运行情况的天数，默认 30），见下文“统计页” |
 | `GET api/events` | 是 | 实时推送（SSE），见下文 |
 
 接口返回的错误为 `{ error, message }`，`message` 可直接展示给用户。
@@ -123,9 +125,10 @@ docker compose logs app | grep 面板初始密码
 | 页面 | 地址 | 内容 |
 | --- | --- | --- |
 | 登录 | `login` | 面板密码登录；passkey 可用且页面在 `PANEL_PUBLIC_URL` 的地址上打开时显示“使用 passkey 登录”，在其他地址（例如内网 IP）打开时提示到哪个地址使用 passkey；密码登录关闭时只显示 passkey 按钮，用不了 passkey 时说明应急恢复的办法 |
-| 总览 | `#/` | 顶部浏览器状态（内置浏览器的版本，或 Selenium 是否就绪、已用/总会话数；不可用时的提示与处理办法）与 noVNC 链接；需要扫码的账号置顶并直接显示二维码；运行队列；每个账号一张卡片：运行状态或上次运行结果、今天的阅读分钟与是否打卡、下次运行时间、立即运行 / 仅登录 / 停止 |
+| 统计 | `#/stats`、`#/stats/<id>` | 全部账号或某个账号：连续打卡天数与最长记录，本周、本月、今年累计与打卡天数，近 30 天日均；近 30 / 90 / 365 天每日分钟柱状图（标出每日目标线与未打卡的日子）；最近一年热力图（手机宽度下最近半年，可横向滚动，点有阅读的日子跳到当天的运行历史）；运行情况；设置了挑战时显示挑战进度 |
+| 总览 | `#/` | 顶部浏览器状态（内置浏览器的版本，或 Selenium 是否就绪、已用/总会话数；不可用时的提示与处理办法）与 noVNC 链接；需要扫码的账号置顶并直接显示二维码；运行队列；每个账号一张卡片：运行状态或上次运行结果、今天的阅读分钟与是否打卡、连续打卡天数（点击进入该账号的统计）、下次运行时间、立即运行 / 仅登录 / 停止 |
 | 账号 · 实时 | `#/accounts/<id>/live` | 状态、“正在读《书名》第 23/68 分钟”与进度条、二维码与“复制登录链接”、最新截图、实时日志；运行进行中且设置了 noVNC 地址时显示查看浏览器画面的链接 |
-| 账号 · 历史 | `#/accounts/<id>/history` | 运行列表（开始时间、时长、触发方式、结果、阅读分钟），展开查看日志与截图，下载日志，加载更多 |
+| 账号 · 历史 | `#/accounts/<id>/history`、`#/accounts/<id>/history/<YYYY-MM-DD>` | 运行列表（带日期时只显示当天及以前的）（开始时间、时长、触发方式、结果、阅读分钟），展开查看日志与截图，下载日志，加载更多 |
 | 账号 · 打卡日历 | `#/accounts/<id>/calendar` | 按月显示每天的阅读分钟与打卡状态（已打卡、不足 5 分钟、今天未打卡高亮），本月合计；挑战进度与设置 |
 | 账号 · 调度 | `#/accounts/<id>/schedules` | 编辑多条规则（每天固定时间 / 每 N 小时 / cron），单独启停，预览接下来的运行时间，保存后立即生效 |
 | 账号 · 配置 | `#/accounts/<id>/config` | 名称与启用状态；运行配置的每一项可“继承全局”或“单独设置”；发送测试通知；删除账号（可选同时删除数据） |
@@ -189,7 +192,10 @@ docker compose logs app | grep 面板初始密码
 | 当日阅读分钟 | 当天所有运行中每一分钟阅读进度的累计，失败、停止的运行已读的部分也计入；跨午夜的运行按每一分钟完成的时间拆到各自的日期 |
 | 日期 | 按面板设置中的时区划分；修改时区后，历史数据按新的时区重新归属 |
 | 有效打卡 | 当日阅读分钟 ≥ 5 |
-| 本轮挑战 | 月卡：开始日起 30 天内打卡 29 天、累计 30 小时；年卡：365 天内打卡 360 天、累计 300 小时。进度包括第几天（`dayNumber`，未开始为 0）、状态（`not-started` / `active` / `ended`）、已打卡天数、累计分钟、已漏打卡天数（不含今天）、可漏打卡天数（月卡 1 天、年卡 5 天）与是否达成 |
+| 本轮挑战 | 月卡：开始日起 30 天内打卡 29 天、累计 30 小时；年卡：365 天内打卡 360 天、累计 300 小时。进度包括第几天（`dayNumber`，未开始为 0）、状态（`not-started` / `active` / `ended`）、已打卡天数、累计分钟、已漏打卡天数（不含今天）、可漏打卡天数（月卡 1 天、年卡 5 天）、剩余天数（进行中时含今天）、还能漏几天、要达成累计时长剩余每天平均还需读的分钟数与是否达成 |
+| 连续打卡 | 从今天往前连续打卡的天数；今天还没读满 5 分钟时不算中断，从昨天往前数 |
+| 缓存 | 每个账号一份“日期 → 分钟数”的表，第一次用到时从运行记录建立，之后只重新读取新出现的、还没结束的和面板刚写入过的运行；时区变化时重建，删除账号时丢弃。缓存只在内存里，运行记录仍是唯一的数据来源。两年、约 2200 次运行的模拟数据首次建立约 0.15 秒。面板启动后在后台逐个账号建立（账号之间让出事件循环）；总览不等它：今天的分钟数在缓存建立之前只读今天附近的运行，连续打卡天数在缓存建立之后才显示 |
+| 运行情况 | 只统计所选的近 30 / 90 / 365 天内已结束的运行，与概览中的本周、本月、今年（固定的日历区间）口径不同。“重试救回”只算失败后自动重试并成功的运行，重启后恢复（`resume`）的不计入 |
 | 旧记录 | 第 7 步之前的运行没有逐分钟时间，按开始阅读后每分钟一条估算 |
 | 口径 | 接口返回 `note`：“按本工具运行记录统计，非微信读书官方数据” |
 
@@ -204,10 +210,56 @@ docker compose logs app | grep 面板初始密码
   "days": [{ "date": "2026-10-01", "minutes": 70, "checkedIn": true, "future": false }],
   "monthMinutes": 1036,
   "monthCheckedDays": 15,
-  "challenge": { "type": "month", "label": "月卡", "startDate": "2026-10-01", "endDate": "2026-10-30", "status": "active", "dayNumber": 16, "totalDays": 30, "checkedDays": 15, "requiredDays": 29, "totalMinutes": 1036, "requiredMinutes": 1800, "missedDays": 0, "allowedMissedDays": 1, "achieved": false },
+  "challenge": { "type": "month", "label": "月卡", "startDate": "2026-10-01", "endDate": "2026-10-30", "status": "active", "dayNumber": 16, "totalDays": 30, "checkedDays": 15, "requiredDays": 29, "totalMinutes": 1036, "requiredMinutes": 1800, "missedDays": 0, "allowedMissedDays": 1, "remainingDays": 15, "missesLeft": 1, "minutesPerDayNeeded": 51, "achieved": false },
   "note": "按本工具运行记录统计，非微信读书官方数据"
 }
 ```
+
+### 统计页
+
+`GET api/stats?account=me&days=30` 返回（`account=all` 时 `goalMinutes` 与 `challenge` 为 null，每天的分钟数为各账号相加，任一账号打卡即算当天打卡）：
+
+```json
+{
+  "account": "me",
+  "accounts": [{ "id": "me", "name": "小明" }],
+  "timezone": "Asia/Shanghai",
+  "today": "2026-11-15",
+  "rangeDays": 30,
+  "checkInMinutes": 5,
+  "goalMinutes": 40,
+  "summary": {
+    "currentStreak": 5,
+    "longestStreak": { "days": 14, "endDate": "2026-10-25" },
+    "week": { "from": "2026-11-10", "to": "2026-11-15", "minutes": 272, "checkedDays": 6 },
+    "month": { "from": "2026-11-01", "to": "2026-11-15", "minutes": 632, "checkedDays": 14 },
+    "year": { "from": "2026-01-01", "to": "2026-11-15", "minutes": 12300, "checkedDays": 253 },
+    "last30": { "from": "2026-10-17", "to": "2026-11-15", "minutes": 1056, "checkedDays": 26 },
+    "averageMinutes30": 35.2
+  },
+  "trend": [{ "date": "2026-10-17", "minutes": 36, "checkedIn": true }],
+  "heatmap": [{ "date": "2025-11-16", "minutes": 0, "checkedIn": false, "level": 0 }],
+  "heatLevels": [5, 30, 60, 120],
+  "runs": {
+    "total": 27,
+    "byStatus": { "success": 23, "failed": 4, "stopped": 0, "interrupted": 0 },
+    "byTrigger": { "manual": 6, "schedule": 10, "retry": 6, "catchup": 5, "resume": 0 },
+    "rescued": 5,
+    "catchups": 5,
+    "loginPrompted": 1
+  },
+  "challenge": null,
+  "note": "按本工具运行记录统计，非微信读书官方数据"
+}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `trend` | 最近 `rangeDays` 天（含今天）每天的分钟数 |
+| `heatmap` | 最近 365 天；`level` 0 为没有阅读或不满 `heatLevels[0]` 分钟，1–4 依次为满 5、30、60、120 分钟 |
+| `runs` | 最近 `rangeDays` 天排队、已经结束的运行：各结果与触发方式的次数；`rescued` 为成功的重试与恢复，`catchups` 为每日目标的补跑，`loginPrompted` 为出现过扫码登录的次数（0.4.0 起记录） |
+
+图表用 Vue 模板直接画 SVG，位置与尺寸写在 SVG 属性上，颜色用 `panel.css` 中的类（浅色、深色主题各一组），不引入图表库，也不使用内联样式。每个柱子与格子带 `<title>`，悬停与读屏软件都能读到日期与分钟数。
 
 ### 数据保留
 

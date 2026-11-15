@@ -3,7 +3,8 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { calendar, challengeProgress, cleanupRuns, dailyMinutes, dateInZone, getRun, listRuns } = require("../../src/panel/history");
+const { cleanupRuns, getRun, listRuns } = require("../../src/panel/history");
+const { calendar, challengeProgress, dailyMinutes, dateInZone } = require("../../src/panel/stats");
 const { newRunId } = require("../../src/panel/runs");
 
 const tempDirs = [];

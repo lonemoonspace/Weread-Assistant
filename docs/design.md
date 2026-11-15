@@ -72,7 +72,8 @@ flowchart LR
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入，先写临时文件再 `rename`，文件权限 `0600` |
 | `src/panel/runner/` | 运行队列、fork、事件处理、停止、日志落盘 | 同一账号不重复排队；并发数可配 |
 | `src/panel/scheduler.js` | 按账号调度规则触发运行 | 显式使用面板时区 |
-| `src/panel/history.js` | 运行记录、每日统计、数据清理 | 统计口径为本工具运行记录，非官方数据 |
+| `src/panel/history.js` | 运行记录的读取、数据清理 | 运行记录永久保留 |
+| `src/panel/stats.js` | 每日统计（内存缓存）、连续打卡、日历、挑战进度、统计页 | 统计口径为本工具运行记录，非官方数据 |
 | `src/panel/public/` | 前端页面 | 免构建；二维码在浏览器本地生成 |
 
 ### 子进程事件

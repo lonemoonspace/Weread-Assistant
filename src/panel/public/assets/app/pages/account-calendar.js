@@ -124,6 +124,9 @@ export const CalendarTab = {
           已漏打卡 {{ data.challenge.missedDays }} 天（最多可漏 {{ data.challenge.allowedMissedDays }} 天）·
           {{ data.challenge.startDate }} 至 {{ data.challenge.endDate }}
         </p>
+        <p v-if="data.challenge.status !== 'ended' && data.challenge.minutesPerDayNeeded > 0" class="muted">
+          剩余 {{ data.challenge.remainingDays }} 天平均每天还需读 {{ data.challenge.minutesPerDayNeeded }} 分钟，还能漏 {{ data.challenge.missesLeft }} 天
+        </p>
       </article>
 
       <div class="month-nav">

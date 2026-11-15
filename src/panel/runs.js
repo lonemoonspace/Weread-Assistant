@@ -38,8 +38,19 @@ function runDir(panelDataDir, accountId, runId) {
   return path.join(accountRunsDir(panelDataDir, accountId), runId);
 }
 
+// 本进程写入运行记录后通知的监听者（按天统计的缓存据此重新读取这条记录，见 stats.js）
+const metaListeners = new Set();
+
+function onRunMetaWritten(listener) {
+  metaListeners.add(listener);
+  return () => metaListeners.delete(listener);
+}
+
 function writeRunMeta(dir, meta) {
   writeFileAtomic(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2), { mode: 0o600 });
+  for (const listener of metaListeners) {
+    listener(dir);
+  }
 }
 
 function readRunMeta(dir) {
@@ -125,6 +136,7 @@ module.exports = {
   markInterruptedRuns,
   restrictRunDirs,
   newRunId,
+  onRunMetaWritten,
   readRunMeta,
   runDir,
   writeRunMeta,

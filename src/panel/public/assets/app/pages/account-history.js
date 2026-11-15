@@ -7,7 +7,7 @@ import { notify, state, timezone } from "../store.js";
 // 历史：运行列表、日志查看与下载、截图回看
 export const HistoryTab = {
   components: { StatusBadge },
-  props: { account: Object },
+  props: { account: Object, date: String },
   setup(props) {
     const runs = ref([]);
     const nextBefore = ref(null);
@@ -23,7 +23,7 @@ export const HistoryTab = {
       const request = ++latest;
       loading.value = true;
       try {
-        const query = more && nextBefore.value ? `&before=${nextBefore.value}` : "";
+        const query = `${more && nextBefore.value ? `&before=${nextBefore.value}` : ""}${props.date ? `&date=${props.date}` : ""}`;
         const data = await api(`accounts/${props.account.id}/runs?limit=20${query}`);
         if (request !== latest) {
           return;
@@ -80,6 +80,7 @@ export const HistoryTab = {
   },
   template: `
     <section>
+      <p v-if="date" class="muted">显示 {{ date }} 及以前的运行 · <a :href="'#/accounts/' + account.id + '/history'">显示全部</a></p>
       <p v-if="!runs.length && !loading" class="muted">还没有运行记录。</p>
       <div v-else class="table-scroll">
         <table class="history">

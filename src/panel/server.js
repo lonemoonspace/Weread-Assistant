@@ -14,6 +14,7 @@ const { eventRoutes } = require("./http/routes/events");
 const { pageRoutes } = require("./http/routes/pages");
 const { runRoutes } = require("./http/routes/runs");
 const { settingsRoutes } = require("./http/routes/settings");
+const { statsRoutes } = require("./http/routes/stats");
 const { acquirePanelLock } = require("./lock");
 const { passkeyRelyingParty } = require("./options");
 const { createPasskeys } = require("./passkeys");
@@ -23,6 +24,7 @@ const { cleanupRunTempDirs } = require("./runner/process");
 const { markInterruptedRuns, restrictRunDirs } = require("./runs");
 const { createScheduler } = require("./scheduler");
 const { dropProfileName, migrateLegacySeleniumUrl, warnPasswordLogin, warnUnusablePasskeys } = require("./startup");
+const { warmAccountDays } = require("./stats");
 const { createStore } = require("./store");
 
 // 除每次运行结束与修改保留设置时之外，定期按保留策略清理运行数据
@@ -78,6 +80,7 @@ function createPanelApp(
   api.use(settingsRoutes(ctx));
   api.use(accountRoutes(ctx));
   api.use(runRoutes(ctx));
+  api.use(statsRoutes(ctx));
   api.use(eventRoutes(ctx));
   api.use(backupRoutes(ctx));
   api.use((req, res) => {
@@ -178,6 +181,10 @@ async function startPanel(options) {
     // options.planner：测试时缩短启动等待与重试间隔
     planner = createPlanner({ dataDir: options.dataDir, store, runner, interrupted, ...options.planner });
     cleanup();
+    // 在后台为各账号建立按天统计的缓存，总览的连续打卡天数不必等第一次全量读取
+    for (const account of store.get().accounts) {
+      warmAccountDays(options.dataDir, account.id, store.get().settings.timezone);
+    }
     cleanupTimer = setInterval(cleanup, CLEANUP_INTERVAL_MS);
     cleanupTimer.unref();
     const retentionOf = (settings) => `${settings.screenshotRetentionRuns}/${settings.logRetentionDays}`;

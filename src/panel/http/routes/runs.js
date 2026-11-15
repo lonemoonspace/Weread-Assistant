@@ -10,10 +10,12 @@ const { runDir } = require("../../runs");
 function runRoutes({ dataDir, store, runner }) {
   const router = express.Router();
 
-  // 运行历史，最新的在前；?limit=（1–100，默认 20）&before=<上一页最后一个运行 ID>
+  // 运行历史，最新的在前；?limit=（1–100，默认 20）&before=<上一页最后一个运行 ID>&date=<YYYY-MM-DD，当天及以前>
   router.get("/accounts/:id/runs", (req, res) => {
-    findAccount(store.get(), req.params.id);
-    res.json(listRuns(dataDir, req.params.id, { limit: req.query.limit || 20, before: req.query.before || "" }));
+    const data = store.get();
+    findAccount(data, req.params.id);
+    const { limit = 20, before = "", date = "" } = req.query;
+    res.json(listRuns(dataDir, req.params.id, { limit, before, date, timezone: data.settings.timezone }));
   });
 
   // 单次运行的记录、截图列表与按天拆分的阅读分钟数

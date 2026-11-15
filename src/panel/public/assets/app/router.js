@@ -10,9 +10,10 @@ const ROUTES = [
   [/^\/?$/, () => ({ name: "overview", params: {} })],
   [/^\/accounts\/new$/, () => ({ name: "new-account", params: {} })],
   [
-    /^\/accounts\/([a-z0-9-]+)(?:\/([a-z]+))?$/,
-    (m) => ({ name: "account", params: { id: m[1], tab: ACCOUNT_TABS.includes(m[2]) ? m[2] : "live" } }),
+    /^\/accounts\/([a-z0-9-]+)(?:\/([a-z]+))?(?:\/(\d{4}-\d{2}-\d{2}))?$/,
+    (m) => ({ name: "account", params: { id: m[1], tab: ACCOUNT_TABS.includes(m[2]) ? m[2] : "live", date: m[2] === "history" ? m[3] || "" : "" } }),
   ],
+  [/^\/stats(?:\/([a-z0-9-]+))?$/, (m) => ({ name: "stats", params: { account: m[1] || "" } })],
   [/^\/settings$/, () => ({ name: "settings", params: {} })],
 ];
 

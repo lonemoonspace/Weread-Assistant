@@ -1,62 +1,22 @@
 const fs = require("fs");
 const path = require("path");
 const { ACCOUNT_ID_PATTERN } = require("./accounts");
-const { CHALLENGES, isChallengeType, isValidDate } = require("./challenge");
+const { isValidDate } = require("./challenge");
+const { DAY_MS, dateInZone } = require("./dates");
 const { PanelError, badRequest } = require("./errors");
 const { RUN_ID_PATTERN, readRunMeta } = require("./runs");
 
-// 运行历史、按天统计、打卡日历与挑战进度、按保留策略清理。
-// 统计口径为本工具的运行记录（每分钟阅读进度），不是微信读书官方数据。
-
-const NOTE = "按本工具运行记录统计，非微信读书官方数据";
-// 当日阅读分钟数达到该值算作有效打卡
-const CHECK_IN_MINUTES = 5;
-const DAY_MS = 24 * 60 * 60 * 1000;
-// 运行 ID 是排队时间。按日期范围挑选运行时前后多取几天，覆盖时区差与跨天的长时间运行
-const RANGE_MARGIN_MS = 3 * DAY_MS;
+// 运行历史的读取与按保留策略清理。按天统计、打卡日历与挑战进度见 stats.js
 // 阅读截图 screenshot-<分钟>.png，以及出错时的页面截图 error.png（排在最后）
 const SCREENSHOT_PATTERN = /^(screenshot(-\d{1,5})?|error)\.png$/;
-const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 const MAX_PAGE_SIZE = 100;
-const QUARTER_HOUR_MS = 15 * 60 * 1000;
 
-// ---------- 日期 ----------
-
-const formatters = new Map();
-
-// 某个时刻在指定时区的日期，YYYY-MM-DD
-function dateInZone(date, timezone) {
-  let formatter = formatters.get(timezone);
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" });
-    formatters.set(timezone, formatter);
-  }
-  const parts = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
-  return `${parts.year}-${parts.month}-${parts.day}`;
-}
-
-function dateParts(date) {
-  return date.split("-").map(Number);
-}
-
-// 纯日历运算，与时区无关
-function addDays(date, days) {
-  const [y, m, d] = dateParts(date);
-  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
-}
-
-function daysBetween(from, to) {
-  const [y1, m1, d1] = dateParts(from);
-  const [y2, m2, d2] = dateParts(to);
-  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / DAY_MS);
-}
+// ---------- 读取运行记录 ----------
 
 function runIdTime(runId) {
   const m = runId.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})?Z/);
   return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], +(m[7] || 0)) : 0;
 }
-
-// ---------- 读取运行记录 ----------
 
 function runsRoot(panelDataDir) {
   return path.join(path.resolve(panelDataDir), "runs");
@@ -155,8 +115,8 @@ function runDirOf(panelDataDir, accountId, runId) {
 
 // ---------- 运行历史 ----------
 
-// 最新的在前；before 为上一页最后一个运行 ID
-function listRuns(panelDataDir, accountId, { limit = 20, before = "" } = {}) {
+// 最新的在前；before 为上一页最后一个运行 ID；date（YYYY-MM-DD）时只列出面板时区中当天及以前排队的运行
+function listRuns(panelDataDir, accountId, { limit = 20, before = "", date = "", timezone = "UTC" } = {}) {
   const size = Number(limit);
   if (!Number.isInteger(size) || size < 1 || size > MAX_PAGE_SIZE) {
     throw badRequest(`limit 必须是 1–${MAX_PAGE_SIZE} 的整数：${limit}`);
@@ -164,9 +124,15 @@ function listRuns(panelDataDir, accountId, { limit = 20, before = "" } = {}) {
   if (before && !RUN_ID_PATTERN.test(before)) {
     throw badRequest(`before 不是有效的运行 ID：${before}`);
   }
+  if (date && !isValidDate(date)) {
+    throw badRequest(`date 格式应为 YYYY-MM-DD：${date}`);
+  }
   let ids = accountRunIds(panelDataDir, accountId).reverse();
   if (before) {
     ids = ids.filter((id) => id < before);
+  }
+  if (date) {
+    ids = ids.filter((id) => dateInZone(new Date(runIdTime(id)), timezone) <= date);
   }
   const runs = [];
   let next = 0;
@@ -216,122 +182,6 @@ function lastRun(panelDataDir, accountId) {
     }
   }
   return null;
-}
-
-// ---------- 按天统计 ----------
-
-// from、to 为时区内的日期（含两端），返回 { 日期: 阅读分钟数 }。失败、停止的运行已读的部分也计入
-function dailyMinutes(panelDataDir, accountId, { timezone, from, to }) {
-  const [fy, fm, fd] = dateParts(from);
-  const [ty, tm, td] = dateParts(to);
-  const lower = Date.UTC(fy, fm - 1, fd) - RANGE_MARGIN_MS;
-  const upper = Date.UTC(ty, tm - 1, td) + DAY_MS + RANGE_MARGIN_MS;
-  const totals = {};
-  // 时区偏移都是 15 分钟的整数倍，同一个 15 分钟区间内的时刻日期相同：按区间缓存，
-  // 不必对每个分钟记录都调用一次 Intl（一年的记录有数万条）
-  const dates = new Map();
-  const dateOf = (ms) => {
-    const bucket = Math.floor(ms / QUARTER_HOUR_MS);
-    let date = dates.get(bucket);
-    if (date === undefined) {
-      date = dateInZone(new Date(bucket * QUARTER_HOUR_MS), timezone);
-      dates.set(bucket, date);
-    }
-    return date;
-  };
-  for (const id of accountRunIds(panelDataDir, accountId)) {
-    const queuedAt = runIdTime(id);
-    if (queuedAt < lower || queuedAt > upper) {
-      continue;
-    }
-    const meta = readMeta(path.join(runsRoot(panelDataDir), accountId, id));
-    if (!meta) {
-      continue;
-    }
-    for (const mark of minuteMarksOf(meta)) {
-      const date = dateOf(Date.parse(mark));
-      if (date >= from && date <= to) {
-        totals[date] = (totals[date] || 0) + 1;
-      }
-    }
-  }
-  return totals;
-}
-
-function todayStats(panelDataDir, accountId, { timezone, now = new Date() }) {
-  const date = dateInZone(now, timezone);
-  const minutes = dailyMinutes(panelDataDir, accountId, { timezone, from: date, to: date })[date] || 0;
-  return { date, minutes, checkedIn: minutes >= CHECK_IN_MINUTES };
-}
-
-// 本轮挑战进度：第几天、已打卡天数、累计分钟、已漏打卡天数（不含今天）
-function challengeProgress(panelDataDir, account, { timezone, now = new Date() }) {
-  const { challenge } = account;
-  if (!challenge || !isChallengeType(challenge.type) || !isValidDate(challenge.startDate)) {
-    return null;
-  }
-  const spec = CHALLENGES[challenge.type];
-  const start = challenge.startDate;
-  const end = addDays(start, spec.days - 1);
-  const today = dateInZone(now, timezone);
-  const dayNumber = daysBetween(start, today) + 1;
-  const status = dayNumber < 1 ? "not-started" : dayNumber > spec.days ? "ended" : "active";
-
-  const upTo = today < end ? today : end;
-  const totals = upTo >= start ? dailyMinutes(panelDataDir, account.id, { timezone, from: start, to: upTo }) : {};
-  const checkedDates = Object.keys(totals).filter((date) => totals[date] >= CHECK_IN_MINUTES);
-  const totalMinutes = Object.values(totals).reduce((sum, minutes) => sum + minutes, 0);
-  // 已经过完的天：进行中时到昨天为止，结束后为整个周期
-  const lastPastDay = status === "ended" ? end : addDays(today, -1);
-  const pastDays = lastPastDay >= start ? daysBetween(start, lastPastDay) + 1 : 0;
-  const checkedPastDays = checkedDates.filter((date) => date <= lastPastDay).length;
-
-  return {
-    type: challenge.type,
-    label: spec.label,
-    startDate: start,
-    endDate: end,
-    status,
-    dayNumber: Math.min(Math.max(dayNumber, 0), spec.days),
-    totalDays: spec.days,
-    checkedDays: checkedDates.length,
-    requiredDays: spec.requiredDays,
-    totalMinutes,
-    requiredMinutes: spec.requiredMinutes,
-    missedDays: pastDays - checkedPastDays,
-    allowedMissedDays: spec.days - spec.requiredDays,
-    achieved: checkedDates.length >= spec.requiredDays && totalMinutes >= spec.requiredMinutes,
-  };
-}
-
-// 打卡日历：一个月中每天的阅读分钟数与是否打卡，以及今天与本轮挑战进度
-function calendar(panelDataDir, account, { timezone, month, now = new Date() }) {
-  const today = dateInZone(now, timezone);
-  const targetMonth = month || today.slice(0, 7);
-  if (!MONTH_PATTERN.test(targetMonth)) {
-    throw badRequest(`month 格式应为 YYYY-MM：${month}`);
-  }
-  const first = `${targetMonth}-01`;
-  const [y, m] = dateParts(first);
-  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  const last = addDays(first, daysInMonth - 1);
-  const totals = dailyMinutes(panelDataDir, account.id, { timezone, from: first, to: last });
-  const days = Array.from({ length: daysInMonth }, (_, i) => {
-    const date = addDays(first, i);
-    const minutes = totals[date] || 0;
-    return { date, minutes, checkedIn: minutes >= CHECK_IN_MINUTES, future: date > today };
-  });
-  return {
-    timezone,
-    month: targetMonth,
-    checkInMinutes: CHECK_IN_MINUTES,
-    today: todayStats(panelDataDir, account.id, { timezone, now }),
-    days,
-    monthMinutes: days.reduce((sum, day) => sum + day.minutes, 0),
-    monthCheckedDays: days.filter((day) => day.checkedIn).length,
-    challenge: challengeProgress(panelDataDir, account, { timezone, now }),
-    note: NOTE,
-  };
 }
 
 // ---------- 清理 ----------
@@ -418,16 +268,14 @@ function cleanupRuns(panelDataDir, settings, { activeRunIds = new Set(), now = D
 }
 
 module.exports = {
-  CHECK_IN_MINUTES,
-  NOTE,
-  calendar,
-  challengeProgress,
+  accountRunIds,
   cleanupRuns,
-  dailyMinutes,
-  dateInZone,
   getRun,
   lastRun,
   listRuns,
+  minuteMarksOf,
+  readMeta,
+  runIdTime,
+  runsRoot,
   screenshotPath,
-  todayStats,
 };

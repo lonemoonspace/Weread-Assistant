@@ -44,6 +44,8 @@ function publicRun(run, { withLog = false } = {}) {
     loginUrl: run.loginUrl,
     // 最近一次出现二维码的时间：二维码解析不出登录链接时，页面据此加载二维码截图
     loginQrAt: run.loginQrAt,
+    // 这次运行是否出现过扫码登录（统计页“需要扫码的次数”）
+    loginPrompted: Boolean(run.loginPrompted),
     error: run.error,
     // 失败类别，见 events.js；成功、停止与中断时为空
     errorKind: run.errorKind,
