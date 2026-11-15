@@ -49,7 +49,7 @@ module.exports = async function sessionScenarios({ scenario, start, login, start
     assert.strictEqual((await callAs(second, first.cookie, "POST", "api/auth/logout-others")).status, 200, "重新验证后可以进行敏感操作");
   });
 
-  await scenario("不恢复的会话：已过期的、密码在停机期间变了的、所用 passkey 已删除的；文件损坏时照常启动", async () => {
+  await scenario("不恢复的会话：已过期的、密码在停机期间变了的、所用 passkey 已删除或在当前域名下不可用的；文件损坏时照常启动", async () => {
     // 已过期
     const expired = await startAuthed();
     await expired.close();
@@ -91,6 +91,13 @@ module.exports = async function sessionScenarios({ scenario, start, login, start
     const removed = await start({ dataDir: withPasskey.options.dataDir, password: "correct-horse", publicUrl: PASSKEY_URL });
     assert.strictEqual((await callAs(removed, passkeyCookie, "GET", "api/auth/session")).status, 401, "passkey 已删除时不恢复");
     assert.strictEqual((await callAs(removed, withPasskey.cookie, "GET", "api/auth/session")).status, 200, "用密码登录的会话不受影响");
+
+    // 面板地址换了域名后，原来的 passkey 不能再用于登录，用它登录的会话同样不恢复
+    const moved = await startAuthed({ publicUrl: PASSKEY_URL });
+    const movedCookie = sessionCookie(await passkeyLogin(moved, await addPasskey(moved)));
+    await moved.close();
+    const otherHost = await start({ dataDir: moved.options.dataDir, password: "correct-horse", publicUrl: "https://other.example.org/weread/" });
+    assert.strictEqual((await callAs(otherHost, movedCookie, "GET", "api/auth/session")).status, 401, "passkey 在当前域名下不可用时不恢复");
 
     // 文件损坏
     const broken = await startAuthed();
