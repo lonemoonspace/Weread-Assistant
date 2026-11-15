@@ -22,7 +22,7 @@ Commands:
 Environment:
   RUNTIME_SMOKE_IMAGE  Use an existing image instead of building one (it is not removed afterwards).
   RUNTIME_SMOKE_ARCH   Expected image architecture, e.g. arm64; the image and the Node.js process
-                       inside the container must both report it (an arm64 image runs under QEMU on amd64).
+                       inside the container must both report it (CI runs it on native amd64 and arm64 runners).
 `.trim());
 }
 
@@ -90,6 +90,8 @@ function runPanelSmoke(imageTag) {
     runCommand('docker', [
       'run', '-d', '--name', container,
       '--health-interval=2s', '--health-start-period=0s',
+      // 与 docker-compose.yml 一致：入口脚本以 root 启动后用 su-exec 降权，不依赖 setuid 程序
+      '--security-opt', 'no-new-privileges:true',
       '-v', `${dataDir}:/app/data`,
       imageTag,
     ]);

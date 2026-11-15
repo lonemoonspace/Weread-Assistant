@@ -1,0 +1,205 @@
+# 每周重建与漏洞扫描：
+# - 已发布的 latest 镜像中有可以升级的 Alpine 软件包（例如 Chromium 的安全更新），或基础镜像的 Node.js 补丁版本变了时，
+#   检出最近一个正式版本的 tag（不是 main），用相同的源码重新构建两个架构，检查通过后覆盖推送该版本号标签与 latest。
+#   源码不变，只是系统包更新；期间已经发布了更新的版本时不改动 latest
+# - 用 Trivy 扫描 latest 镜像，结果写进工作流摘要；有修复版本可用的高危或严重漏洞时创建或更新一个 issue（只报告，不阻断）
+# - 下一个 Alpine 稳定版对应的 Node.js 镜像标签出现时开 issue 提醒升级基础镜像（Alpine 只在最新的稳定分支更新 Chromium）
+# 手动触发时可以选择强制重建
+name: 每周重建
+
+on:
+  schedule:
+    # 每周一 02:17 UTC（北京时间 10:17）
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 没有更新时也重建
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# 与发布流程的 main 分支发布排队，不同时推送 latest
+concurrency:
+  group: release-dev
+  cancel-in-progress: false
+
+env:
+  IMAGE: docker.io/lonemoonspace/weread-assistant
+
+jobs:
+  check:
+    name: 检查是否需要重建
+    # arm64 runner：0.4.0 之前发布的 latest 只有 arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      rebuild: ${{ steps.compare.outputs.rebuild }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: 最近的正式版本
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="$(gh release view --json tagName --jq .tagName)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "最近的正式版本：$tag" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ steps.release.outputs.tag }}
+
+      - name: 比较已发布镜像中的软件包与基础镜像
+        id: compare
+        env:
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          base="$(sed -n 's/^FROM //p' Dockerfile | head -n 1)"
+          docker pull -q "$IMAGE:latest" > /dev/null
+          docker pull -q "$base" > /dev/null
+          # 已发布镜像中可以升级的 Alpine 软件包（apk version -l '<' 列出版本低于软件源的包）
+          outdated="$(docker run --rm --user root --entrypoint sh "$IMAGE:latest" -c \
+            'apk update -q > /dev/null && apk version -l "<" | tail -n +2')"
+          published_node="$(docker run --rm --entrypoint node "$IMAGE:latest" --version)"
+          base_node="$(docker run --rm --entrypoint node "$base" --version)"
+          chromium="$(docker run --rm --entrypoint sh "$IMAGE:latest" -c 'apk info -v chromium 2> /dev/null | head -n 1')"
+          {
+            echo "### 已发布的 latest"
+            echo
+            echo "- 基础镜像：\`$base\`"
+            echo "- Chromium：\`${chromium:-未知}\`"
+            echo "- Node.js：镜像中 \`$published_node\`，基础镜像当前 \`$base_node\`"
+            echo
+            if [ -n "$outdated" ]; then
+              echo "可以升级的软件包："
+              echo
+              echo '```'
+              echo "$outdated"
+              echo '```'
+            else
+              echo "软件包都是最新的。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          rebuild=false
+          if [ -n "$outdated" ] || [ "$published_node" != "$base_node" ]; then
+            rebuild=true
+          elif [ "$FORCE" = "true" ]; then
+            rebuild=true
+            echo "没有更新，按手动触发的选项强制重建" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "rebuild=$rebuild" >> "$GITHUB_OUTPUT"
+          echo "重建：$rebuild" >> "$GITHUB_STEP_SUMMARY"
+
+      # 基础镜像标签形如 node:24-alpine3.24；Docker Hub 上出现 node:24-alpine3.25 时提醒升级
+      - name: 检查下一个 Alpine 稳定版的 Node.js 镜像
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          base="$(sed -n 's/^FROM //p' Dockerfile | head -n 1)"
+          prefix="${base%alpine*}alpine"
+          minor="${base##*alpine}"
+          case "$minor" in
+            [0-9]*.[0-9]*) ;;
+            *) echo "::warning::无法从 $base 解析 Alpine 版本"; exit 0 ;;
+          esac
+          next="${minor%%.*}.$(( ${minor##*.} + 1 ))"
+          candidate="${prefix}${next}"
+          name="${candidate#*:}"
+          status="$(curl -s -o /dev/null -w '%{http_code}' "https://hub.docker.com/v2/repositories/library/node/tags/$name")"
+          if [ "$status" != "200" ]; then
+            echo "还没有 \`$candidate\`" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          title="升级基础镜像到 $candidate"
+          if [ -n "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')" ]; then
+            echo "已有 issue：$title" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # shellcheck disable=SC2016 # 反引号是 Markdown 的代码标记
+          body="$(printf 'Docker Hub 上已经有 `%s`。Alpine 只在最新的稳定分支更新 Chromium，建议把 Dockerfile 的 `FROM %s` 改为 `FROM %s`，同时更新 .github/dependabot.yml 中的说明。\n\n（由每周重建工作流自动创建）' "$candidate" "$base" "$candidate")"
+          gh issue create --title "$title" --body "$body"
+          echo "已创建 issue：$title" >> "$GITHUB_STEP_SUMMARY"
+
+  rebuild:
+    name: 重建
+    needs: check
+    if: needs.check.outputs.rebuild == 'true'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/image.yml
+    with:
+      ref: ${{ needs.check.outputs.tag }}
+      version: ${{ needs.check.outputs.version }}
+      tags: ${{ needs.check.outputs.version }},latest
+      keep-newer-latest: true
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  scan:
+    name: 漏洞扫描（Trivy）
+    needs: [check, rebuild]
+    # 没有重建时扫描现有的 latest
+    if: always() && needs.check.result == 'success' && needs.rebuild.result != 'failure'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    env:
+      # aquasec/trivy:0.76.1，按摘要固定
+      TRIVY: aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+    steps:
+      - name: 扫描 latest
+        run: |
+          docker pull -q "$IMAGE:latest" > /dev/null
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$RUNNER_TEMP:/out" "$TRIVY" image \
+            --quiet --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --format json --output /out/trivy.json "$IMAGE:latest"
+          report="$RUNNER_TEMP/trivy.json"
+          count="$(jq '[.Results[]?.Vulnerabilities[]?] | length' "$report")"
+          echo "$count" > "$RUNNER_TEMP/trivy-count"
+          {
+            echo "### Trivy 扫描（latest）"
+            echo
+            if [ "$count" = "0" ]; then
+              echo "没有已有修复版本的高危或严重漏洞。"
+            else
+              echo "| 级别 | 漏洞 | 软件包 | 当前版本 | 修复版本 | 位置 |"
+              echo "| --- | --- | --- | --- | --- | --- |"
+              # shellcheck disable=SC2016 # jq 程序中的 $r 由 jq 解释
+              jq -r '.Results[]? as $r | $r.Vulnerabilities[]? | "| \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion) | \($r.Target) |"' "$report"
+            fi
+          } > "$RUNNER_TEMP/trivy.md"
+          cat "$RUNNER_TEMP/trivy.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: 有可修复的高危漏洞时创建或更新 issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          count="$(cat "$RUNNER_TEMP/trivy-count")"
+          if [ "$count" = "0" ]; then
+            exit 0
+          fi
+          title="镜像中有可修复的高危漏洞"
+          body="$(cat "$RUNNER_TEMP/trivy.md")
+
+          扫描时间：$(date -u '+%Y-%m-%d %H:%M UTC')，工作流：$RUN_URL"
+          number="$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

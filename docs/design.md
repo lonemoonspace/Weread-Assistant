@@ -4,7 +4,7 @@
 
 ### 目标与范围
 
-基于 [jqknono/weread-challenge-selenium](https://github.com/jqknono/weread-challenge-selenium) 的新产品：以 Docker 部署在树莓派等 arm64 设备上，通过常驻的 Web 管理面板完成多账号管理、配置、调度、扫码登录和运行监控。不兼容上游的命令、入口和目录结构，也不提供旧数据导入，账号首次运行时扫码登录。
+基于 [jqknono/weread-challenge-selenium](https://github.com/jqknono/weread-challenge-selenium) 的新产品：以 Docker 部署在树莓派、NAS、云服务器等设备上，通过常驻的 Web 管理面板完成多账号管理、配置、调度、扫码登录和运行监控。不兼容上游的命令、入口和目录结构，也不提供旧数据导入，账号首次运行时扫码登录。
 
 | 范围 | 内容 |
 | --- | --- |
@@ -17,7 +17,7 @@
 | --- | --- |
 | 产品名 | WeReadAssistant；仓库 `Weread-Assistant`，镜像名 `weread-assistant`（镜像名只能小写）；README 开头声明非官方、与腾讯无关 |
 | 仓库 | 私有仓库 `lonemoonspace/Weread-Assistant`，全新历史，第一版可用后公开；README 致谢上游，LICENSE 保留上游版权声明 |
-| 分发 | 只发布 `linux/arm64` Docker 镜像 `lonemoonspace/weread-assistant` |
+| 分发 | 发布 `linux/amd64` 与 `linux/arm64` 多架构 Docker 镜像 `lonemoonspace/weread-assistant`（0.4.0 之前只有 arm64）；每周按系统包更新重建 |
 | 浏览器 | 默认使用镜像内置的 Chromium 与 chromedriver（无界面模式，阅读子进程在容器内启动）；也可以连接自己部署的 Selenium（如 `selenium/standalone-chromium`）。第 11 步之前只支持 Selenium |
 | 统计上报 | 删除，不向任何服务器发送使用数据 |
 | 兼容性 | 不保留上游的 CLI 命令名、`app.js` 入口、`schedule` 子命令和旧数据目录；不提供旧数据导入，账号首次运行时扫码登录 |

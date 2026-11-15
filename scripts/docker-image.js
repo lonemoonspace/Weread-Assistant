@@ -8,9 +8,11 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 const PACKAGE_JSON_PATH = path.join(ROOT_DIR, 'package.json');
 const packageJson = JSON.parse(fs.readFileSync(PACKAGE_JSON_PATH, 'utf8'));
 
-// Only linux/arm64 is published: this project targets ARM64 boards (Raspberry Pi and
-// similar). amd64 is deliberately not built, so a release cannot reintroduce it.
-const DEFAULT_PUSH_PLATFORM = 'linux/arm64';
+// Both linux/amd64 and linux/arm64 are published. The release workflow builds each
+// architecture on a native runner and pushes it by digest (--digest-file), then merges
+// the digests into one multi-arch manifest; a manual "push" without --platform builds
+// both at once (the non-native one through QEMU/binfmt emulation).
+const DEFAULT_PUSH_PLATFORM = 'linux/amd64,linux/arm64';
 
 function printHelp() {
   console.log(`Usage:
@@ -35,22 +37,26 @@ Options:
                             default: Dockerfile
   --context <path>          Docker build context
                             default: .
+  --digest-file <path>      push only: push a single platform by digest, without
+                            tags, and write the digest (sha256:...) to this file;
+                            the release workflow merges the per-arch digests
 
 Examples:
   node scripts/docker-image.js check
   node scripts/docker-image.js build --tag latest
   node scripts/docker-image.js build --platform linux/arm64 --tag arm64-trial
   node scripts/docker-image.js push --tag ${packageJson.version}
+  node scripts/docker-image.js push --platform linux/arm64 --digest-file digest.txt
   npm run docker:image:push -- --tag ${packageJson.version}
   npm run docker:image:push:dev
 
 Notes:
-  Only linux/arm64 is published: push defaults to "${DEFAULT_PUSH_PLATFORM}", so a
-  release cannot quietly reintroduce another architecture or downgrade the
-  published tags. Both commands go through docker buildx, and push builds and
-  pushes every tag in a single invocation. build uses --load, which only supports
-  a single platform. Building arm64 on an amd64 host needs QEMU/binfmt
-  emulation; on ARM64 hardware or GitHub Actions it works out of the box.`);
+  linux/amd64 and linux/arm64 are published: push defaults to
+  "${DEFAULT_PUSH_PLATFORM}", and pushes every tag in a single invocation so all
+  tags carry the same multi-arch image. Both commands go through docker buildx.
+  build uses --load, which only supports a single platform. Building the
+  non-native architecture needs QEMU/binfmt emulation; the release workflow
+  instead builds each architecture on a native runner with --digest-file.`);
 }
 
 function fail(message) {
@@ -80,7 +86,8 @@ function parseArgs(argv) {
     '--extra-tags',
     '--platform',
     '--dockerfile',
-    '--context'
+    '--context',
+    '--digest-file'
   ]);
 
   for (let i = 0; i < rest.length; i += 1) {
@@ -124,9 +131,9 @@ function resolveConfig(command, rawOptions) {
   );
   const dockerfile = path.resolve(ROOT_DIR, rawOptions.dockerfile || process.env.DOCKERFILE || 'Dockerfile');
   const context = path.resolve(ROOT_DIR, rawOptions.context || process.env.DOCKER_CONTEXT || '.');
-  // Only linux/arm64 is published. `check` reports the same default as `push` so
-  // the validated configuration matches what a release would actually do; `build`
-  // stays on the host platform so a local build needs no emulation.
+  // `check` reports the same default as `push` so the validated configuration
+  // matches what a release would actually do; `build` stays on the host platform
+  // so a local build needs no emulation.
   const defaultPlatform = command === 'build' ? '' : DEFAULT_PUSH_PLATFORM;
   const platform = rawOptions.platform || process.env.DOCKER_PLATFORM || defaultPlatform;
 
@@ -150,7 +157,8 @@ function resolveConfig(command, rawOptions) {
     dockerfile,
     context,
     platform,
-    platforms: [...new Set(parsePlatforms(platform))]
+    platforms: [...new Set(parsePlatforms(platform))],
+    digestFile: rawOptions['digest-file'] ? path.resolve(process.cwd(), rawOptions['digest-file']) : ''
   };
 }
 
@@ -201,16 +209,25 @@ function buildxCommandArgs(config) {
     args.push('--platform', config.platforms.join(','));
   }
   args.push('-f', config.dockerfile);
-  config.buildTags.forEach((tag) => {
-    args.push('-t', `${config.image}:${tag}`);
-  });
+  if (!config.digestFile) {
+    config.buildTags.forEach((tag) => {
+      args.push('-t', `${config.image}:${tag}`);
+    });
+  }
   args.push('--label', `org.opencontainers.image.version=${config.tag}`);
   if (config.revision) {
     args.push('--label', `org.opencontainers.image.revision=${config.revision}`);
   }
-  // Every tag is published from this one invocation, so all tags always carry
-  // the same image rather than being pushed separately.
-  args.push(config.command === 'push' ? '--push' : '--load');
+  if (config.digestFile) {
+    // One platform, pushed by digest only; the tags are attached when the
+    // per-arch digests are merged into a manifest list (docker buildx imagetools create)
+    args.push('--output', `type=image,name=${config.image},push-by-digest=true,name-canonical=true,push=true`);
+    args.push('--metadata-file', config.metadataFile);
+  } else {
+    // Every tag is published from this one invocation, so all tags always carry
+    // the same image rather than being pushed separately.
+    args.push(config.command === 'push' ? '--push' : '--load');
+  }
   args.push(config.context);
   return args;
 }
@@ -221,7 +238,7 @@ function printConfig(config) {
   console.log(`primary tag: ${config.tag}`);
   console.log(`extra tags: ${config.extraTags.length ? config.extraTags.join(', ') : '(none)'}`);
   console.log(`build tags: ${config.buildTags.join(', ')}`);
-  console.log(`push tags: ${config.pushTags.length ? config.pushTags.join(', ') : '(none)'}`);
+  console.log(`push tags: ${config.digestFile ? '(by digest)' : config.pushTags.length ? config.pushTags.join(', ') : '(none)'}`);
   console.log(`dockerfile: ${config.dockerfile}`);
   console.log(`context: ${config.context}`);
   console.log(`platform: ${config.platforms.length ? config.platforms.join(',') : '(host default)'}`);
@@ -265,6 +282,9 @@ function main() {
 
   // Validate the invocation before touching docker, so a bad platform request
   // reports the actual problem instead of "docker is not available".
+  if (config.digestFile && (command !== 'push' || config.platforms.length !== 1)) {
+    fail('--digest-file only works with push and a single --platform');
+  }
   if (command === 'build' && config.platforms.length > 1) {
     fail(`build cannot --load a multi-platform image (${config.platform}); `
       + 'pass a single --platform for a local build, or use "push" to publish all platforms at once');
@@ -284,9 +304,21 @@ function main() {
   }
 
   config.revision = resolveRevision();
+  if (config.digestFile) {
+    config.metadataFile = `${config.digestFile}.metadata.json`;
+  }
   const buildArgs = buildxCommandArgs(config);
   console.log(`running: docker ${buildArgs.join(' ')}`);
   runCommand('docker', buildArgs);
+  if (config.digestFile) {
+    const digest = JSON.parse(fs.readFileSync(config.metadataFile, 'utf8'))['containerimage.digest'];
+    if (!/^sha256:[0-9a-f]{64}$/.test(digest || '')) {
+      fail(`buildx did not report an image digest (${config.metadataFile})`);
+    }
+    fs.writeFileSync(config.digestFile, `${digest}\n`);
+    fs.rmSync(config.metadataFile, { force: true });
+    console.log(`pushed ${config.image}@${digest}`);
+  }
 }
 
 main();

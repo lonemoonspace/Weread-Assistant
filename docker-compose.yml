@@ -22,6 +22,18 @@ services:
       # - PANEL_FORCE_PASSWORD_LOGIN=true # 关闭了密码登录又用不了 passkey 时临时允许密码登录，处理完后删掉
     volumes:
       - ./data:/app/data
+    # 入口脚本以 root 启动、修正数据目录属主后用 su-exec 降为 node 用户，不依赖 setuid 程序
+    security_opt:
+      - no-new-privileges:true
+    # 限制容器日志的大小（默认的 json-file 日志不会自动轮转）
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    # 可选的资源上限：每个同时运行的账号（一个浏览器）约需 600MB 内存，按面板设置的并发数调整
+    # mem_limit: 1500m
+    # pids_limit: 512
     # 容器默认使用宿主机的 DNS。宿主机解析微信读书或通知服务较慢时，可以取消注释指定 DNS
     # dns:
     #   - 223.5.5.5

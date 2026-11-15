@@ -25,3 +25,8 @@ updates:
     ignore:
       - dependency-name: node
         update-types: ["version-update:semver-major"]
+  # CI 中外部 Selenium 兼容性测试使用的镜像（ci/selenium.Dockerfile）
+  - package-ecosystem: docker
+    directory: /ci
+    schedule:
+      interval: monthly
