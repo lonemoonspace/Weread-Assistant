@@ -391,9 +391,13 @@ async function main() {
       site: { loggedIn: true, chapters: 1, emptyCatalog: true },
       values: (homeUrl) => ({ selection: -1, bookUrl: `${homeUrl}reader?book=1&ch=1` }),
       timing: { durationMs: 60000, pressIntervalMs: [100, 200], elementWaitMs: 500 },
-      check({ result, pushes }) {
+      check({ result, pushes, dataDir }) {
         assert.strictEqual(result.status, "error");
         assert.match(result.error, /书籍已读完.*连续 3 次无法通过目录回到开头/);
+        // 出错时保存当时的页面截图（B12），只允许属主访问
+        const errorShot = path.join(dataDir, "error.png");
+        assert.ok(fs.existsSync(errorShot), "出错时应保存 error.png");
+        assert.strictEqual(fs.statSync(errorShot).mode & 0o777, 0o600);
         assert.ok(pushes.some((push) => push.title.endsWith("运行失败")));
         assert.ok(!pushes.some((push) => push.title.endsWith("阅读完成")));
       },
