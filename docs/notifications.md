@@ -34,7 +34,7 @@
 | --- | --- |
 | Webhook 地址（`webhookUrl`） | 接收地址，按密钥处理（群机器人的地址中带 key）：接口返回掩码，日志中不出现 |
 | Webhook 格式（`webhookFormat`） | `json`（通用 JSON，默认）、`wecom`（企业微信群机器人）、`feishu`（飞书群机器人）、`dingtalk`（钉钉群机器人） |
-| Webhook 附加请求头（`webhookHeader`） | 可选的一个请求头，格式为 `名称: 值`，例如 `Authorization: Bearer xxx`；按密钥处理；不能改写 `Host`、`Content-Type`、`Content-Length` 等 |
+| Webhook 附加请求头（`webhookHeader`） | 可选的一个请求头，格式为 `名称: 值`，例如 `Authorization: Bearer xxx`；按密钥处理；不能改写 `Host`、`Content-Type`、`Content-Length`、`Transfer-Encoding`、`Connection`（保存配置时就拒绝） |
 
 通用 JSON 的请求体：
 
@@ -55,7 +55,7 @@
 
 `event` 为下文的事件名，测试通知为 `test`；返回 2xx 即为成功。
 
-三个群机器人格式都发送纯文本消息（`标题 · 副标题`、正文，有点击地址且正文中没有时附在最后）：企业微信与钉钉为 `{ "msgtype": "text", "text": { "content": "…" } }`，飞书为 `{ "msg_type": "text", "content": { "text": "…" } }`。它们出错时也返回 HTTP 200，所以按响应体判断：企业微信与钉钉看 `errcode`，飞书看 `code`（旧版为 `StatusCode`），为 0 才算成功，否则失败原因为“错误码 N：说明”。
+三个群机器人格式都发送纯文本消息（`标题 · 副标题`、正文，有点击地址且正文中没有时附在最后）：企业微信与钉钉为 `{ "msgtype": "text", "text": { "content": "…" } }`，飞书为 `{ "msg_type": "text", "content": { "text": "…" } }`。它们出错时也返回 HTTP 200，所以按响应体判断：企业微信与钉钉看 `errcode`，飞书看 `code`（旧版为 `StatusCode`），为 0（数字或字符串）才算成功，否则失败原因为“错误码 N：说明”；响应体不是 JSON 对象时失败原因写明。
 
 钉钉与飞书机器人的“加签”安全设置暂不支持，请在机器人的安全设置中选择“自定义关键词”（填 `WeReadAssistant`，每条消息的标题中都有）或 IP 白名单。
 
@@ -65,9 +65,11 @@
 | --- | --- |
 | Telegram 机器人令牌（`telegramBotToken`） | 向 @BotFather 创建机器人后得到，按密钥处理 |
 | Telegram 会话 ID（`telegramChatId`） | 接收消息的用户、群组（负数）或频道 ID，或公开频道的 `@用户名`；先给机器人发一条消息，机器人才能给你发消息 |
-| Telegram 接口地址（`telegramApiBase`） | 默认 `https://api.telegram.org` |
+| Telegram 接口地址（`telegramApiBase`） | 默认 `https://api.telegram.org`，留空时同样用默认地址 |
 
-普通事件用 `sendMessage` 发纯文本。需要扫码时用 `sendPhoto` 直接发送二维码截图（`login-qr.png`，推送时读入内存），说明文字为登录链接，并附「打开登录链接」「在面板中扫码」按钮，在电脑上收到也能用手机扫；发送图片失败时改发文字。按钮只用 http(s) 地址；按钮地址不被 Telegram 接受（例如局域网地址）时去掉按钮再发一次，链接已在正文中。去掉按钮与改发文字的重试都在同一个 10 秒时限内。上传图片用 Node 自带的 `fetch` 与 `FormData`，不增加依赖。令牌在请求路径中，日志不记录请求地址，失败原因中的令牌替换为掩码。
+普通事件用 `sendMessage` 发纯文本。需要扫码时用 `sendPhoto` 直接发送二维码截图（`login-qr.png`，推送时读入内存），说明文字为登录链接，并附「打开登录链接」「在面板中扫码」按钮，在电脑上收到也能用手机扫；发送图片失败时改发文字。按钮只用 http(s) 地址；按钮地址不被 Telegram 接受（例如局域网地址）时去掉按钮再发一次，链接已在正文中。去掉按钮与改发文字的重试都在同一个 10 秒时限内，时限到了就不再重试。上传图片用 Node 自带的 `fetch` 与 `FormData`，不增加依赖。令牌在请求路径中，日志不记录请求地址，失败原因中的令牌替换为掩码。
+
+各渠道的失败原因都先把密钥（及其 URL 编码形式）替换为掩码，再截断到 200 字，跨过截断位置的密钥不会留下前一段。
 
 ### 通知事件
 

@@ -235,8 +235,10 @@ const CONFIG_SCHEMA = [
     group: "webhook",
     label: "Webhook 附加请求头",
     description: "可选，一个请求头，例如 Authorization: Bearer xxx。按密钥保存。",
-    pattern: /^[!#$%&'*+.^_`|~0-9A-Za-z-]+[ \t]*:[ \t]*(?:[^\p{Cc}]|\t)+$/u,
-    patternHint: "格式为“名称: 值”，不能换行",
+    // 不能改写的请求头与 notify/channels/webhook.js 的 RESERVED_HEADERS 一致，保存时就拒绝
+    pattern:
+      /^(?!(?:host|content-length|content-type|transfer-encoding|connection)[ \t]*:)[!#$%&'*+.^_`|~0-9A-Za-z-]+[ \t]*:[ \t]*(?:[^\p{Cc}]|\t)+$/iu,
+    patternHint: "格式为“名称: 值”，不能换行，也不能改写 Host、Content-Type、Content-Length、Transfer-Encoding、Connection",
     secret: true,
     default: "",
   },
