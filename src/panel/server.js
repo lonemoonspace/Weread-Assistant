@@ -18,9 +18,10 @@ const { passkeyRelyingParty } = require("./options");
 const { createPasskeys } = require("./passkeys");
 const { createPlanner } = require("./planner");
 const { createRunner } = require("./runner");
+const { cleanupRunTempDirs } = require("./runner/process");
 const { markInterruptedRuns, restrictRunDirs } = require("./runs");
 const { createScheduler } = require("./scheduler");
-const { migrateLegacySeleniumUrl, warnPasswordLogin, warnUnusablePasskeys } = require("./startup");
+const { dropProfileName, migrateLegacySeleniumUrl, warnPasswordLogin, warnUnusablePasskeys } = require("./startup");
 const { createStore } = require("./store");
 
 // 除每次运行结束与修改保留设置时之外，定期按保留策略清理运行数据
@@ -121,6 +122,7 @@ async function startPanel(options) {
     if (!options.seleniumUrl) {
       await migrateLegacySeleniumUrl(store);
     }
+    await dropProfileName(store);
     const auth = createAuth({ store, envPassword: options.password, limits: options.limits });
     const generatedPassword = await auth.init();
     const passkeys = createPasskeys({ store, relyingParty: passkeyRelyingParty(options.publicUrl) });
@@ -128,6 +130,7 @@ async function startPanel(options) {
     warnPasswordLogin(store, passkeys, options.forcePasswordLogin);
     restrictRunDirs(options.dataDir);
     const interrupted = markInterruptedRuns(options.dataDir);
+    cleanupRunTempDirs(options.dataDir);
     // 按保留策略清理截图与日志；进行中的运行不清理
     const cleanup = () => {
       try {

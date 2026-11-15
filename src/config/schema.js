@@ -97,11 +97,13 @@ const CONFIG_SCHEMA = [
     default: "",
   },
   {
-    key: "profileName",
-    type: "string",
+    key: "persistProfile",
+    type: "boolean",
     group: "browser",
-    label: "浏览器配置名",
-    default: "weread-default",
+    label: "保留浏览器资料",
+    description:
+      "内置浏览器为每个账号保留固定的资料目录（账号数据目录下的 profile/），页面缓存、本地存储与登录状态跨运行保留，打开更快。关闭后每次运行使用全新的浏览器、注入 cookies 登录。连接 Selenium 时不生效。",
+    default: true,
   },
   {
     key: "barkKey",

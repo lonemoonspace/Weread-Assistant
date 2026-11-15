@@ -1,5 +1,5 @@
 // panel-smoke 使用的桩阅读子进程：协议与 src/reader/worker.js 相同，不连接浏览器。
-// 按账号 ID（即 config.profileName）的前缀决定行为：
+// 按账号 ID（即账号数据目录 config.dataDir 的目录名）的前缀决定行为：
 //   ok-*        正常阅读 2 分钟（写入两张截图）后上报 done
 //   login-*     仅登录：上报登录链接，随后登录成功
 //   qr-*        上报登录链接后一直等待扫码，收到 SIGTERM 后退出
@@ -48,7 +48,7 @@ async function exit(code) {
 }
 
 process.once("message", async ({ mode, config, screenshotDir, panelLink, browserStatus, retry, goalDeficit }) => {
-  const id = config.profileName;
+  const id = path.basename(config.dataDir);
   if (browserStatus) {
     log(`面板下发的内置浏览器：${browserStatus.message}`);
   }
@@ -67,6 +67,7 @@ process.once("message", async ({ mode, config, screenshotDir, panelLink, browser
 
   log(`mode=${mode} account=${config.accountName} dataDir=${config.dataDir} panelLink=${panelLink || "-"}`);
   log(`环境变量: ${JSON.stringify(Object.keys(process.env).sort())}`);
+  log(`TMPDIR=${process.env.TMPDIR}`);
   log(`barkKey 已下发: ${Boolean(config.barkKey)}`);
   log(`retry=${JSON.stringify(retry || null)} duration=${config.duration} goalDeficit=${goalDeficit || 0}`);
   // 模拟子进程不小心打印了密钥与登录链接，面板写入日志前应替换为掩码

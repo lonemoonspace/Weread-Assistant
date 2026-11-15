@@ -19,8 +19,10 @@ const {
   RUN_TIMEOUT_MARGIN_MS,
   WORKER_PATH,
   childEnv,
+  createRunTempDir,
   deleteSeleniumSession,
   killProcessGroup,
+  removeRunTempDir,
 } = require("./process");
 const { MODE_LABELS, TRIGGER_LABELS, createRedactor, publicRun, runMeta } = require("./view");
 
@@ -37,7 +39,8 @@ const MAX_DURATION = CONFIG_SCHEMA.find((field) => field.key === "duration").max
  *
  * options.publicUrl：面板的外网地址（PANEL_PUBLIC_URL），用于扫码推送中的面板链接
  * options.localBrowserStatus()：已缓存的内置浏览器状态（见 createLocalBrowserChecker 的 cached），随运行配置下发
- * options.onFinish(run, { config })：每次运行结束后调用，run 为对外的运行信息，config 为这次运行实际使用的配置（没能解析时为 null）
+ * options.onFinish(run, { config, retriesLeft })：每次运行结束后调用，run 为对外的运行信息，config 为这次运行实际使用的配置（没能解析时为 null），
+ * retriesLeft 为启动时下发给子进程的剩余重试次数（没有启动时为 0）
  * options.workerPath / killTimeoutMs / runTimeoutMs / startOptions 供测试替换子进程与缩短等待
  */
 function createRunner({
@@ -128,7 +131,7 @@ function createRunner({
     running.delete(run);
     active.delete(run.accountId);
     try {
-      onFinish(publicRun(run), { config: run.config || null });
+      onFinish(publicRun(run), { config: run.config || null, retriesLeft: run.retriesLeft || 0 });
     } catch (e) {
       console.error("处理运行结束失败:", e);
     }
@@ -194,6 +197,7 @@ function createRunner({
     // 子进程是进程组的组长，内置浏览器（chromedriver 与 Chromium）在同一进程组中。子进程被强制结束时
     // 它们不会随之退出，这里结束组内剩下的进程；正常退出时组内已没有进程
     killProcessGroup(run.child);
+    removeRunTempDir(run.tmpDir);
 
     // 删除子进程可能留在 Selenium 中的会话，避免一直占用会话槽位。正常退出时浏览器通常已经关闭（会话已不存在），
     // 但子进程关闭浏览器失败时只记录日志、仍以退出码 0 退出，所以只要建立过会话就请求删除一次
@@ -259,14 +263,16 @@ function createRunner({
 
     let child;
     try {
+      run.tmpDir = createRunTempDir(panelDataDir);
       child = fork(workerPath, [], {
         // 单独的进程组，退出后可以结束它留下的浏览器进程
         detached: true,
         stdio: ["ignore", "pipe", "pipe", "ipc"],
-        env: childEnv(),
+        env: childEnv({ TMPDIR: run.tmpDir }),
         serialization: "json",
       });
     } catch (e) {
+      removeRunTempDir(run.tmpDir);
       finish(run, "failed", `无法启动阅读子进程：${e.message}`, "crash");
       return;
     }

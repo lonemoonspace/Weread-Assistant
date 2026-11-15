@@ -192,4 +192,24 @@ describe("cleanupRuns", () => {
     assert.equal(exists(middle, "screenshot-1.png"), true, "进行中的运行保留截图");
     assert.equal(exists(latest, "screenshot-1.png"), true);
   });
+
+  it("删除账号目录中旧的邮件附件截图与一天前的临时文件，其他文件保留", () => {
+    const dir = dataDir();
+    const accountDir = path.join(dir, "accounts", "me");
+    fs.mkdirSync(path.join(accountDir, "profile"), { recursive: true });
+    const now = Date.now();
+    for (const name of ["email-done.png", "cookies.json", "cookies.json.1.tmp", "fresh.tmp", "login.png"]) {
+      fs.writeFileSync(path.join(accountDir, name), "x");
+    }
+    const old = new Date(now - 2 * 86400000);
+    fs.utimesSync(path.join(accountDir, "cookies.json.1.tmp"), old, old);
+    const info = console.info;
+    console.info = () => {};
+    try {
+      cleanupRuns(dir, { logRetentionDays: 30, screenshotRetentionRuns: 1 }, { now });
+    } finally {
+      console.info = info;
+    }
+    assert.deepEqual(fs.readdirSync(accountDir).sort(), ["cookies.json", "fresh.tmp", "login.png", "profile"]);
+  });
 });

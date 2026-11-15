@@ -7,7 +7,8 @@
 | `src/reader/run.js` `runOnce(config, options)` | 编排一次运行：连接浏览器、登录、选书、阅读、通知 | 返回 `{ status, minutes, error }`，`status` 为 `success` / `login-timeout` / `error` / `stopped`；不退出进程 |
 | `src/reader/worker.js` | 阅读子进程入口：由面板 fork，经 IPC 接收配置、上报事件 | 收到 SIGTERM / SIGINT 或与面板断开时关闭浏览器后退出 |
 | `src/reader/browser.js` | Selenium 地址留空时启动内置浏览器：在本机启动 chromedriver（`src/shared/local-browser.js` 在 `PATH` 中查找，或用 `CHROMEDRIVER_PATH`、`CHROME_BIN` 指定）与无界面模式（`--headless=new`）的 Chromium；否则连接该地址上的 Chromium。设置超时与随机窗口尺寸 | 隐式等待为 0；内置浏览器找不到、无法运行或 chromedriver 与 Chromium 主版本不一致时不启动，报错 `内置浏览器不可用：<原因>`，chromedriver 启动失败时报错 `无法启动 chromedriver（<路径>）：<原因>`；内置浏览器的 UA 去掉 `HeadlessChrome`，关闭浏览器时一并结束 chromedriver，连接后设置失败时关闭浏览器；连接前在日志中记录 `内置浏览器：<版本>` 或 Selenium 状态与会话数（`src/shared/selenium.js`）；连不上时报错 `无法连接 Selenium（<地址>）：<原因>`；日志中的地址去掉用户名与密码 |
-| `src/reader/login.js` | 打开首页、加载 cookies、展示二维码、等待扫码、保存 cookies | 按总时长等待，期间二维码过期就刷新 |
+| `src/reader/profile.js` | 内置浏览器按账号保留的资料目录：启动前创建、删除残留的锁、版本回退时重置、超过大小时清空缓存 | 见下文“浏览器资料目录” |
+| `src/reader/login.js` | 打开首页、加载 cookies、展示二维码、等待扫码、保存 cookies | 按总时长等待，期间二维码过期就刷新；资料目录中已是登录状态时不再注入 cookies |
 | `src/reader/reading.js` | 选书、切换上下滚动模式、阅读循环 | 每轮一次 `executeScript` 读取页面状态 |
 | `src/reader/selectors.js` | 页面地址、定位器与关键文案 | 微信读书改版时只改这里 |
 | `src/reader/timing.js` | 由配置得出各类等待时间与翻动间隔 | 测试可通过 `options.timing` 覆盖 |
@@ -27,7 +28,7 @@
 ```mermaid
 flowchart TD
   A[runOnce] --> B[createDriver]
-  B --> C[打开首页并加载 cookies]
+  B --> C[打开首页；资料目录中未登录时加载 cookies]
   C --> D{首页出现}
   D -->|登录入口| E[点击登录，截图并解析二维码，推送登录链接]
   D -->|我的书架| G
@@ -86,6 +87,21 @@ flowchart TD
 | `fast` | 4–8 秒 |
 
 旧版设置了 5 秒隐式等待，每轮对不存在元素的检查都会被拖慢，实测每轮 10–15 秒，上游 `WEREAD_SPEED` 原有的 0.1–1 秒随机间隔实际上不起作用。现在去掉了隐式等待，翻动节奏完全由上表决定，默认的 `slow` 与旧版的实际节奏接近。
+
+### 浏览器资料目录
+
+使用内置浏览器（Selenium 地址留空）且 `persistProfile` 打开（默认）时，Chromium 以 `--user-data-dir=<账号数据目录>/profile` 启动，页面缓存、本地存储、登录状态与阅读器设置跨运行保留，打开首页与阅读页更快，也更接近普通用户的浏览器。连接 Selenium 或关闭 `persistProfile` 时与旧版相同：每次使用全新的浏览器资料，注入 cookies 登录。
+
+| 规则 | 说明 |
+| --- | --- |
+| 位置与权限 | `accounts/<id>/profile/`，0700（属主变化等原因改不了权限时只记录警告，继续启动）；面板保证同一账号同时只有一个运行 |
+| 登录 | 打开首页后先看是否已经登录（出现书架）：已登录时记录“浏览器资料中已是登录状态，不再注入 cookies”；否则照旧加载 `cookies.json`。登录成功后仍然导出 cookies 到 `cookies.json`，作为资料目录重置后的备份 |
+| 锁文件 | `SingletonLock` 指向“主机名-进程号”。锁属于本机仍在运行的浏览器进程时（例如同一账号同时在面板与命令行中运行）拒绝启动、不删除锁；其余情况（主机名不同、进程已退出、进程号已被别的程序使用）启动前删除残留的 `SingletonLock`、`SingletonSocket`、`SingletonCookie`（进程被强制结束或容器重建后会留下，浏览器会以为目录被占用） |
+| 版本回退 | 资料目录中 `Last Version` 记录的主版本高于当前浏览器时（例如退回旧镜像），旧版本可能打不开，启动前重置 |
+| 启动失败 | 带资料目录启动浏览器失败时重置资料目录后再试一次；换成空目录仍然失败时说明问题不在资料目录，换回原来的目录（保留登录状态）后报错。chromedriver 本身没能启动时与资料目录无关，不重置 |
+| 重置 | 原目录改名为 `profile.broken`（只保留最近一份，便于排查），新建空目录，登录从 `cookies.json` 恢复；也可以在面板账号“配置”页手动重置（删除 `profile/` 与 `profile.broken/`） |
+| 大小 | HTTP 缓存限制为 50 MB（`--disk-cache-size`）；运行开始前整个目录超过 300 MB 时清空其中的缓存子目录（Cache、Code Cache、GPUCache、Service Worker 缓存等），不影响登录状态；清空后仍然超过（本地存储等无法单独清理的数据过大）时重置，避免每次运行都要清理 |
+| 临时文件 | 由面板运行时，chromedriver 与 Chromium 的临时文件写在面板为这次运行新建的 `TMPDIR` 中，结束后删除，见 `docs/panel.md`“运行队列” |
 
 ### 关键约束
 

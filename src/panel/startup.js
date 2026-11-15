@@ -30,6 +30,24 @@ async function migrateLegacySeleniumUrl(store) {
   }
 }
 
+// 0.4.0 删除了配置项 profileName（实际不起作用），改为按账号保留浏览器资料目录。
+// 清除全局默认与账号覆盖中残留的这个字段，只做一次
+const DROP_PROFILE_NAME_MIGRATION = "drop-profile-name";
+
+async function dropProfileName(store) {
+  if (store.get().migrations.includes(DROP_PROFILE_NAME_MIGRATION)) {
+    return;
+  }
+  await store.update((next) => {
+    for (const config of [next.defaults, ...next.accounts.map((account) => account.overrides)]) {
+      if (config && Object.hasOwn(config, "profileName")) {
+        delete config.profileName;
+      }
+    }
+    next.migrations.push(DROP_PROFILE_NAME_MIGRATION);
+  });
+}
+
 // 设置中关闭了密码登录、实际仍然允许时提示原因；PANEL_FORCE_PASSWORD_LOGIN 用完后应删掉
 function warnPasswordLogin(store, passkeys, forced) {
   const state = passwordLoginState(store, passkeys, forced);
@@ -56,6 +74,7 @@ function warnUnusablePasskeys(store, passkeys) {
 }
 
 module.exports = {
+  dropProfileName,
   migrateLegacySeleniumUrl,
   warnPasswordLogin,
   warnUnusablePasskeys,

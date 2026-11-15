@@ -336,6 +336,44 @@ function calendar(panelDataDir, account, { timezone, month, now = new Date() }) 
 
 // ---------- 清理 ----------
 
+// 账号数据目录中的遗留文件：旧版本发邮件时留下的附件截图 email-*.png，以及一天前的写入临时文件 *.tmp
+// （写入中途进程被结束时留下）。返回删除的文件数
+const LEFTOVER_TMP_AGE_MS = DAY_MS;
+
+function cleanupAccountLeftovers(panelDataDir, now = Date.now()) {
+  let removed = 0;
+  const root = path.join(path.resolve(panelDataDir), "accounts");
+  for (const accountId of listDirs(root)) {
+    if (!ACCOUNT_ID_PATTERN.test(accountId)) {
+      continue;
+    }
+    const dir = path.join(root, accountId);
+    let names;
+    try {
+      names = fs.readdirSync(dir);
+    } catch (_) {
+      continue;
+    }
+    for (const name of names) {
+      const file = path.join(dir, name);
+      try {
+        const stat = fs.statSync(file);
+        const stale = /^email-.*\.png$/.test(name) || (name.endsWith(".tmp") && now - stat.mtimeMs > LEFTOVER_TMP_AGE_MS);
+        if (stat.isFile() && stale) {
+          fs.rmSync(file, { force: true });
+          removed += 1;
+        }
+      } catch (_) {
+        // 期间被删除的文件跳过
+      }
+    }
+  }
+  if (removed > 0) {
+    console.info(`清理账号目录中的遗留文件 ${removed} 个（旧的邮件附件截图与临时文件）`);
+  }
+  return removed;
+}
+
 // 截图只保留每个账号最近 screenshotRetentionRuns 次有截图的运行；日志保留 logRetentionDays 天；
 // meta.json 永久保留。进行中的运行不清理
 function cleanupRuns(panelDataDir, settings, { activeRunIds = new Set(), now = Date.now() } = {}) {
@@ -372,6 +410,7 @@ function cleanupRuns(panelDataDir, settings, { activeRunIds = new Set(), now = D
       }
     }
   }
+  cleanupAccountLeftovers(panelDataDir, now);
   if (removed.screenshots || removed.logs) {
     console.info(`按保留策略清理运行数据：删除截图 ${removed.screenshots} 张、日志 ${removed.logs} 份`);
   }

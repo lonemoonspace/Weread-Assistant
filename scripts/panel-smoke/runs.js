@@ -2,10 +2,12 @@
 
 const assert = require("assert");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const { SECRET_MASK } = require(path.resolve(__dirname, "..", "..", "src", "panel", "config"));
 const { CHILD_ENV_KEYS } = require(path.resolve(__dirname, "..", "..", "src", "panel", "runner"));
+const { runTempPrefix } = require(path.resolve(__dirname, "..", "..", "src", "panel", "runner", "process"));
 const { startMockSelenium } = require("../fixtures/mock-selenium");
 const { CSRF, STUB_WORKER, tempDir, until, nextRun, ended, runFiles, openEvents, sessionCookie } = require("./helpers");
 
@@ -458,5 +460,49 @@ module.exports = async function runsScenarios({ scenario, start, login, startAut
     for (const dir of ["runs", path.join("runs", "old-1")]) {
       assert.strictEqual(fs.statSync(path.join(dataDir, dir)).mode & 0o777, 0o700, dir);
     }
+  });
+
+  await scenario("每次运行单独的临时目录经 TMPDIR 交给子进程，结束后删除，启动时清理上次遗留的；重置浏览器资料：运行中拒绝，之后删除资料目录", async () => {
+    const dataDir = tempDir();
+    const prefix = runTempPrefix(dataDir);
+    const leftover = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    const panel = await startAuthed({ dataDir });
+    assert.ok(!fs.existsSync(leftover), "启动时应删除上次遗留的运行临时目录");
+
+    await panel.call("POST", "api/accounts", { id: "slow-p" });
+    const profile = path.join(dataDir, "accounts", "slow-p", "profile");
+    fs.mkdirSync(path.join(profile, "Default"), { recursive: true });
+    fs.writeFileSync(path.join(profile, "Default", "Cookies"), Buffer.alloc(2048));
+    fs.mkdirSync(`${profile}.broken`);
+    fs.writeFileSync(path.join(`${profile}.broken`, "Cookies"), Buffer.alloc(1024));
+    const detail = (await panel.call("GET", "api/accounts/slow-p")).json;
+    assert.deepStrictEqual(detail.profile, { exists: true, broken: true, bytes: 3072 }, "大小含重置时留下的 profile.broken");
+    fs.writeFileSync(path.join(profile, "Default", "Preferences"), Buffer.alloc(1024));
+    const grown = (await panel.call("GET", "api/accounts/slow-p")).json.profile;
+    assert.strictEqual(grown.bytes, 4096, "资料目录有变化时重新统计大小");
+
+    const reading = nextRun(panel, (run) => run.accountId === "slow-p" && run.status === "reading");
+    const { run } = (await panel.call("POST", "api/accounts/slow-p/runs")).json;
+    await reading;
+    const files = runFiles(panel, "slow-p", run.id);
+    const tmpLine = fs.readFileSync(path.join(files.dir, "output.log"), "utf8").match(/TMPDIR=(\S+)/);
+    assert.ok(tmpLine, "子进程应收到 TMPDIR");
+    const tmpDir = tmpLine[1];
+    assert.ok(path.basename(tmpDir).startsWith(prefix), tmpDir);
+    assert.ok(fs.existsSync(tmpDir));
+    const busy = await panel.call("DELETE", "api/accounts/slow-p/profile");
+    assert.deepStrictEqual([busy.status, busy.json.error], [409, "account_busy"]);
+    assert.ok(fs.existsSync(profile));
+
+    const stopped = nextRun(panel, ended("slow-p"));
+    await panel.call("POST", "api/accounts/slow-p/stop");
+    await stopped;
+    await until(() => !fs.existsSync(tmpDir), { message: "运行结束后应删除临时目录" });
+    const reset = await panel.call("DELETE", "api/accounts/slow-p/profile");
+    assert.deepStrictEqual([reset.status, reset.json.profile], [200, { exists: false, broken: false, bytes: 0 }]);
+    assert.ok(!fs.existsSync(profile));
+    assert.ok(!fs.existsSync(`${profile}.broken`));
+    assert.ok(fs.existsSync(path.join(dataDir, "accounts", "slow-p")), "只删除资料目录，账号数据目录保留");
+    assert.strictEqual((await panel.call("DELETE", "api/accounts/nobody/profile")).status, 404);
   });
 };

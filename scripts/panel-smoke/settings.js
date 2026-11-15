@@ -113,7 +113,7 @@ module.exports = async function settingsScenarios({ scenario, startAuthed }) {
     assert.strictEqual(effective.speed, "fast", "账号覆盖优先");
     assert.strictEqual(effective.selection, -1);
     assert.strictEqual(effective.loginTimeout, 15, "内置默认");
-    for (const key of ["dataDir", "profileName", "accountName"]) {
+    for (const key of ["dataDir", "accountName"]) {
       assert.ok(!(key in effective), `${key} 不应出现在接口中`);
     }
     assert.strictEqual((await panel.call("PATCH", "api/accounts/me", { overrides: { duration: "abc" } })).status, 400);
@@ -124,7 +124,7 @@ module.exports = async function settingsScenarios({ scenario, startAuthed }) {
     const data = JSON.parse(fs.readFileSync(path.join(panel.options.dataDir, "panel.json"), "utf8"));
     const config = resolveAccountConfig(data, data.accounts[0], panel.options.dataDir);
     assert.strictEqual(config.dataDir, path.join(path.resolve(panel.options.dataDir), "accounts", "me"));
-    assert.strictEqual(config.profileName, "me");
+    assert.ok(!("profileName" in config), "profileName 已删除");
     assert.strictEqual(config.accountName, "小明");
   });
 
@@ -176,7 +176,7 @@ module.exports = async function settingsScenarios({ scenario, startAuthed }) {
     const schema = (await panel.call("GET", "api/schema")).json;
     const keys = schema.fields.map((field) => field.key);
     assert.ok(keys.includes("duration") && keys.includes("barkKey"));
-    for (const key of ["dataDir", "profileName", "accountName"]) {
+    for (const key of ["dataDir", "accountName"]) {
       assert.ok(!keys.includes(key), key);
     }
     assert.strictEqual(schema.fields.find((field) => field.key === "barkKey").secret, true);
