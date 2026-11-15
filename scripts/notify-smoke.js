@@ -551,7 +551,7 @@ async function main() {
       const feishuError = await send("feishu", { code: 19024, msg: "Key Words Not Found" });
       assert.strictEqual(feishuError.result.error, "错误码 19024：Key Words Not Found");
       const notJson = await send("wecom", "<html>");
-      assert.match(notJson.result.error, /^错误码|^响应不是 JSON/);
+      assert.match(notJson.result.error, /^响应不是(对象| JSON)/, "群机器人返回的不是对象时给出原因");
 
       // 不允许改写 Content-Type 等请求头：不发出请求
       mock.requests.length = 0;

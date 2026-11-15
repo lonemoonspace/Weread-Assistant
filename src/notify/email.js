@@ -179,23 +179,20 @@ function missingEmailFields(config) {
 
 // 发送邮件，返回 { ok, error }。filePaths：附件（见 toMailAttachments）；options.heading：邮件正文标题；options.html：完整的自定义 HTML
 async function deliverMail(config, subject, text, filePaths = [], options = {}) {
-  const nodemailer = require("nodemailer");
-  const transporter = nodemailer.createTransport(smtpTransportOptions(config));
-  const attachments = toMailAttachments(filePaths);
-
-  // Use the sender address if provided, otherwise fall back to the SMTP user
-  const fromAddress = config.emailFrom || config.emailUser;
-
-  let mailOptions = {
-    from: fromAddress,
-    to: config.emailTo,
-    subject: formatEmailSubject(subject),
-    text: text,
-    attachments: attachments,
-    html: options.html || buildReportEmailHtml(options.heading || "WeReadAssistant", text, attachments),
-  };
-
+  // 构造连接与邮件内容出错（例如 SMTP 参数无效、附件无法读取）也返回失败原因，不抛出
   try {
+    const nodemailer = require("nodemailer");
+    const transporter = nodemailer.createTransport(smtpTransportOptions(config));
+    const attachments = toMailAttachments(filePaths);
+    const mailOptions = {
+      // 没有填写发件人时用 SMTP 用户名
+      from: config.emailFrom || config.emailUser,
+      to: config.emailTo,
+      subject: formatEmailSubject(subject),
+      text: text,
+      attachments: attachments,
+      html: options.html || buildReportEmailHtml(options.heading || "WeReadAssistant", text, attachments),
+    };
     let info = await transporter.sendMail(mailOptions);
     console.info("Email sent successfully");
     console.info("Message ID: ", info.messageId);
