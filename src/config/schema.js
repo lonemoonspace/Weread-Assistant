@@ -1,4 +1,5 @@
 // 运行配置项清单：面板表单与配置校验都以此为准。key 为配置对象中的字段名，label 用于表单与错误提示。
+// format: "url" 表示 http(s) 地址，hosts 限定域名；只在面板保存时校验，已保存的旧值与环境变量照常加载，运行时再由原有逻辑报错
 const CONFIG_GROUPS = [
   { id: "reading", label: "阅读" },
   { id: "browser", label: "浏览器" },
@@ -52,6 +53,9 @@ const CONFIG_SCHEMA = [
     type: "string",
     group: "reading",
     label: "默认阅读链接",
+    // 保存时校验（见 src/panel/config.js）；已保存的旧值照常加载
+    format: "url",
+    hosts: ["weread.qq.com"],
     description: "选书方式为“直接打开默认阅读链接”，或书架中找不到可点击的书时使用。",
     default: "https://weread.qq.com/web/reader/276323e0813ab90a5g0144d7",
   },
@@ -77,6 +81,8 @@ const CONFIG_SCHEMA = [
     type: "string",
     group: "browser",
     label: "Selenium 地址",
+    // 可以省略协议（按 http 补全）
+    format: "url",
     description: "留空时使用镜像内置的浏览器；填写时连接该地址的 Selenium（例如 http://selenium:4444）。",
     default: "",
   },
@@ -101,6 +107,7 @@ const CONFIG_SCHEMA = [
     type: "string",
     group: "bark",
     label: "Bark 服务器地址",
+    format: "url",
     default: "https://api.day.app",
   },
   {
@@ -117,6 +124,7 @@ const CONFIG_SCHEMA = [
     type: "string",
     group: "ntfy",
     label: "ntfy 服务器地址",
+    format: "url",
     default: "https://ntfy.sh",
   },
   {
@@ -180,6 +188,14 @@ const CONFIG_SCHEMA = [
     min: 1,
     max: 65535,
     default: 465,
+  },
+  {
+    key: "emailAllowInsecure",
+    type: "boolean",
+    group: "email",
+    label: "允许不加密的 SMTP 连接",
+    description: "默认 465 端口使用 SSL，其他端口要求 STARTTLS；只有内网中不支持加密的 SMTP 服务器才需要开启，开启后密码与邮件内容可能以明文传输。",
+    default: false,
   },
   {
     key: "emailUser",
@@ -253,6 +269,16 @@ const CONFIG_SCHEMA = [
     label: "账号名称",
     description: "显示在通知标题中，便于区分多个账号。",
     default: "",
+  },
+  {
+    key: "pageWaitMultiplier",
+    type: "integer",
+    group: "advanced",
+    label: "页面等待倍率",
+    description: "等待页面元素出现的时间（默认 10 秒，页面加载 20 秒）乘以这个倍数。树莓派等较慢的设备上常出现“未出现目录按钮”之类的超时时调大。",
+    min: 1,
+    max: 5,
+    default: 1,
   },
   {
     key: "debug",

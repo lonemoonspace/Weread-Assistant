@@ -46,6 +46,8 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const SSE_HEARTBEAT_MS = 15000;
 // 除每次运行结束与修改保留设置时之外，定期按保留策略清理运行数据
 const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// 空闲连接的保持时间，见 startPanel
+const KEEP_ALIVE_TIMEOUT_MS = 95000;
 
 const CSP_DIRECTIVES = [
   "default-src 'self'",
@@ -122,7 +124,7 @@ function requireObject(body) {
   return body;
 }
 
-function createPanelApp(options, { auth, store, runner, passkeys }) {
+function createPanelApp(options, { auth, store, runner, passkeys, checkLocalBrowser = createLocalBrowserChecker(process.env, { timeoutMs: options.browserVersionTimeoutMs }) }) {
   const panelDataDir = path.resolve(options.dataDir);
   const settingsView = (data) => ({ settings: data.settings, defaults: maskValues(data.defaults) });
   // passkey 是否可用，以及可用时面板的地址（origin）：页面不在这个地址打开时不能使用 passkey
@@ -150,7 +152,6 @@ function createPanelApp(options, { auth, store, runner, passkeys }) {
     return normalizeSchedules(body.schedules);
   };
   const checkSelenium = createSeleniumChecker({ timeoutMs: options.seleniumTimeoutMs });
-  const checkLocalBrowser = createLocalBrowserChecker(process.env, { timeoutMs: options.browserVersionTimeoutMs });
 
   const app = express();
   app.disable("x-powered-by");
@@ -891,11 +892,14 @@ async function startPanel(options) {
         console.error("清理运行数据失败:", e);
       }
     };
+    // 内置浏览器的版本检查由面板与运行共用：面板检查过的结果随运行配置下发，子进程不必每次执行 --version
+    const checkLocalBrowser = createLocalBrowserChecker(process.env, { timeoutMs: options.browserVersionTimeoutMs });
     // options.runner：测试时替换阅读子进程、缩短超时
     runner = createRunner({
       dataDir: options.dataDir,
       store,
       publicUrl: options.publicUrl,
+      localBrowserStatus: checkLocalBrowser.cached,
       onFinish: () => setImmediate(cleanup),
       ...options.runner,
     });
@@ -911,9 +915,13 @@ async function startPanel(options) {
         setImmediate(cleanup);
       }
     });
-    const app = createPanelApp(options, { auth, store, runner, passkeys });
+    const app = createPanelApp(options, { auth, store, runner, passkeys, checkLocalBrowser });
     scheduler = createScheduler({ store, runner });
     server = http.createServer(app);
+    // 面板通常在 cloudflared、nginx 等反向代理之后：空闲连接的保持时间要长于代理的（常见为 60–90 秒），
+    // 否则代理复用一个刚被面板关闭的连接时会偶发 502。headersTimeout 须大于 keepAliveTimeout
+    server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+    server.headersTimeout = KEEP_ALIVE_TIMEOUT_MS + 5000;
 
     await new Promise((resolve, reject) => {
       server.once("error", (error) => {
@@ -925,6 +933,8 @@ async function startPanel(options) {
       });
       server.listen(options.port, options.host, resolve);
     });
+    // 启动后在后台检查一次内置浏览器，之后的运行直接使用这次的结果
+    checkLocalBrowser().catch(() => {});
 
     // 停止：不再接受新连接；结束进行中的运行（期间实时推送仍可送达）；断开剩余连接后释放锁
     let closing = null;

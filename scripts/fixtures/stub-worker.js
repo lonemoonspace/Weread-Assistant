@@ -45,8 +45,11 @@ async function exit(code) {
   process.exit(code);
 }
 
-process.once("message", async ({ mode, config, screenshotDir, panelLink }) => {
+process.once("message", async ({ mode, config, screenshotDir, panelLink, browserStatus }) => {
   const id = config.profileName;
+  if (browserStatus) {
+    log(`面板下发的内置浏览器：${browserStatus.message}`);
+  }
   const kind = id.split("-")[0];
   const sessionId = `stub-session-${id}`;
 

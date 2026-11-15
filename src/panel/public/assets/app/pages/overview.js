@@ -1,7 +1,7 @@
 import { computed } from "../../vendor/vue.esm-browser.prod.js";
 import { QrLogin, RunButtons, StatusBadge } from "../components/common.js";
 import { SeleniumStatus } from "../components/selenium-status.js";
-import { MODE_LABELS, STATUS_LABELS, TRIGGER_LABELS, formatShort } from "../format.js";
+import { MODE_LABELS, STATUS_LABELS, TRIGGER_LABELS, dateInZone, formatShort } from "../format.js";
 import { state, timezone } from "../store.js";
 
 const AccountCard = {
@@ -22,10 +22,19 @@ const AccountCard = {
       }
       return "";
     });
+    // 今天还没打卡，但正在运行或今天还有待运行的调度时显示中性的“待运行”，不显示红色的“未打卡”
+    const pendingToday = computed(() => {
+      if (run.value) {
+        return true;
+      }
+      const next = props.account.enabled && props.account.nextRunAt;
+      return Boolean(next) && dateInZone(next, timezone()) === dateInZone(new Date().toISOString(), timezone());
+    });
     return {
       run,
       avatarLetter,
       avatarClass,
+      pendingToday,
       tz: computed(timezone),
       formatShort,
       STATUS_LABELS,
@@ -61,6 +70,7 @@ const AccountCard = {
       <p>
         今天 <strong>{{ account.today.minutes }}</strong> 分钟
         <span v-if="account.today.checkedIn" class="badge status-success">已打卡</span>
+        <span v-else-if="pendingToday" class="badge status-stopped">待运行</span>
         <span v-else class="badge status-failed">未打卡</span>
       </p>
       <p class="muted">下次运行：{{ account.nextRunAt ? formatShort(account.nextRunAt, tz) : "未设置调度" }}</p>

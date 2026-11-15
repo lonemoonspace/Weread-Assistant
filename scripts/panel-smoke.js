@@ -2247,6 +2247,14 @@ async function main() {
           ["ready", true, "Chromium 155.0.8059.84 Alpine Linux", null, [{ id: "local-1", name: "本机" }]]
         );
 
+        // 检查过的版本随运行配置下发，阅读子进程不必再执行 --version
+        await panel.call("POST", "api/accounts", { id: "ok-local", name: "本机运行" });
+        const finished = nextRun(panel, ended("ok-local"));
+        assert.strictEqual((await panel.call("POST", "api/accounts/ok-local/runs")).status, 202);
+        const run = await finished;
+        const runLog = await runFiles(panel, "ok-local", run.id).log();
+        assert.match(runLog, /面板下发的内置浏览器：Chromium 155\.0\.8059\.84 Alpine Linux/);
+
         // chromedriver 与浏览器的主版本不一致
         fake("chromedriver", "ChromeDriver 154.0.7999.1");
         servers = await check();
@@ -2894,6 +2902,12 @@ async function main() {
       await until(() => !fs.existsSync(path.join(dataDir, "runs", "ok-1", done[0], "screenshot-1.png")), { message: "运行结束后应清理上一次的截图" });
       assert.ok(fs.existsSync(path.join(dataDir, "runs", "ok-1", done[1], "screenshot-2.png")));
       assert.ok(fs.existsSync(path.join(dataDir, "runs", "ok-1", done[0], "meta.json")));
+    });
+
+    await scenario("空闲连接保持 95 秒，长于常见反向代理的保持时间", async () => {
+      const panel = await start();
+      assert.strictEqual(panel.server.keepAliveTimeout, 95000);
+      assert.ok(panel.server.headersTimeout > panel.server.keepAliveTimeout);
     });
 
     await scenario("端口被占用时给出明确错误", async () => {

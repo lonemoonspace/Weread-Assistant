@@ -1,5 +1,6 @@
 import { reactive } from "../vendor/vue.esm-browser.prod.js";
 import { api, apiText } from "./api.js";
+import { msUntilMidnight } from "./format.js";
 
 // 全局状态：会话、表单清单、设置、账号，以及经实时推送维护的运行状态
 export const state = reactive({
@@ -185,6 +186,28 @@ export function connectEvents() {
   });
 }
 
+let midnightTimer = null;
+// 跨零点后“今天”的分钟数与打卡状态要重新计算：在面板时区的零点后刷新一次（夏令时切换当天可能早晚一小时，下次再校正）
+function scheduleMidnightRefresh() {
+  clearTimeout(midnightTimer);
+  midnightTimer = setTimeout(() => {
+    requestAccountsRefresh(true);
+    scheduleMidnightRefresh();
+  }, msUntilMidnight(timezone()) + 5000);
+}
+
+// 页面一直开着时，“今天”的分钟数、下次运行等只在运行事件到达时刷新。页面重新可见时（切回标签页、
+// 手机解锁）刷新一次，并重新安排零点刷新（后台标签页中的定时器可能被浏览器推迟）
+function startAutoRefresh() {
+  scheduleMidnightRefresh();
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      requestAccountsRefresh(true);
+      scheduleMidnightRefresh();
+    }
+  });
+}
+
 export async function loadAll() {
   try {
     const [session, schema] = await Promise.all([api("auth/session"), api("schema")]);
@@ -193,6 +216,7 @@ export async function loadAll() {
     await Promise.all([refreshSettings(), refreshAccounts()]);
     state.ready = true;
     connectEvents();
+    startAutoRefresh();
   } catch (error) {
     state.loadError = error.message;
   }

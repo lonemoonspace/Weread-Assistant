@@ -1,5 +1,8 @@
 const https = require("https");
 const http = require("http");
+const { VERSION } = require("./version");
+
+const USER_AGENT = `WeReadAssistant/${VERSION}`;
 
 const DEFAULT_POST_TIMEOUT_MS = 15000;
 // 响应体上限：这里的请求只读取 Selenium 状态、推送接口结果等小型响应
@@ -104,15 +107,13 @@ function postJson(urlString, payload, extraHeaders = {}, timeoutMs = DEFAULT_POS
 
     let req;
     try {
-      req = httpModule.request({
-        hostname: urlObj.hostname,
-        port: urlObj.port || (urlObj.protocol === "https:" ? 443 : 80),
-        path: `${urlObj.pathname}${urlObj.search}`,
+      // 直接传 URL 对象：IPv6 地址（如 http://[::1]:8080）的 hostname 带方括号，手动拆成 hostname 会连接失败
+      req = httpModule.request(urlObj, {
         method: "POST",
         headers: {
           "Content-Type": "application/json; charset=utf-8",
           "Content-Length": Buffer.byteLength(jsonData),
-          "User-Agent": "WeRead-Tracker/1.0",
+          "User-Agent": USER_AGENT,
           ...extraHeaders,
         },
       }, (res) => {

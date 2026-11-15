@@ -1,10 +1,10 @@
-import { createApp } from "../vendor/vue.esm-browser.prod.js";
+import { createApp, watchEffect } from "../vendor/vue.esm-browser.prod.js";
 import { NoticeBar } from "./components/common.js";
 import { AccountPage } from "./pages/account.js";
 import { NewAccountPage } from "./pages/new-account.js";
 import { OverviewPage } from "./pages/overview.js";
 import { SettingsPage } from "./pages/settings.js";
-import { route } from "./router.js";
+import { ACCOUNT_TAB_LABELS, route } from "./router.js";
 import { loadAll, logout, state } from "./store.js";
 
 const App = {
@@ -56,6 +56,17 @@ const App = {
     </footer>
     <notice-bar />`,
 };
+
+// 页面标题随路由变化，多个标签页、浏览器历史中便于区分
+const PAGE_TITLES = { overview: "总览", "new-account": "新建账号", settings: "设置", "not-found": "页面不存在" };
+watchEffect(() => {
+  let title = PAGE_TITLES[route.name] || "";
+  if (route.name === "account") {
+    const account = state.accounts.find((item) => item.id === route.params.id);
+    title = `${account ? account.name : route.params.id} · ${ACCOUNT_TAB_LABELS[route.params.tab] || ""}`;
+  }
+  document.title = title ? `${title} · WeReadAssistant` : "WeReadAssistant";
+});
 
 createApp(App).mount("#app");
 loadAll();

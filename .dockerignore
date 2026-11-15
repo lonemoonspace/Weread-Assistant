@@ -16,3 +16,5 @@ npm-debug.log
 .env.*
 # 本地测试用的 chromedriver
 chromedriver
+# 单元测试只在仓库中运行
+test

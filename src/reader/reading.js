@@ -67,7 +67,7 @@ async function pressDownArrow(driver) {
 
 // 页面处于左右翻页模式时切换到上下滚动阅读；已是上下滚动时找不到切换按钮，返回 false
 async function switchToVerticalMode(driver, ctx) {
-  const switchButton = await findElementsWithin(driver, XPATH.verticalModeButton, ctx.timing.elementWaitMs);
+  const switchButton = await findElementsWithin(driver, XPATH.verticalModeButton, ctx.timing.optionalWaitMs ?? ctx.timing.elementWaitMs);
   if (switchButton.length === 0) {
     return false;
   }
@@ -107,7 +107,7 @@ async function openBook(driver, ctx) {
       throw error;
     }
     const where = await driver.getCurrentUrl().catch(() => "未知");
-    throw new Error(`打开书籍后 ${formatDuration(timing.pageWaitMs)}内未出现阅读页的「目录」按钮，当前页面：${where}`);
+    throw new Error(`打开书籍后 ${formatDuration(timing.pageWaitMs)}内未出现阅读页的「目录」按钮，当前页面：${where}`, { cause: error });
   }
 
   if (!(await switchToVerticalMode(driver, ctx))) {
@@ -284,7 +284,7 @@ async function readLoop(driver, ctx) {
   }
 
   console.info("Reading completed.");
-  return Math.round((Date.now() - startTime) / 60000);
+  return Math.round((Date.now() - startTime) / timing.minuteMs);
 }
 
 module.exports = {

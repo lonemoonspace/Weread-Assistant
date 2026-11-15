@@ -135,4 +135,5 @@ module.exports = {
   describeSeleniumStatus,
   displaySeleniumUrl,
   normalizeSeleniumUrl,
+  parseSeleniumStatus,
 };

@@ -177,7 +177,7 @@ progress::-moz-progress-bar {
 .app-header nav ul:last-child {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.6rem;
 }
 
 .app-header nav ul:last-child li {
@@ -729,6 +729,11 @@ button.small,
   margin-top: 1rem;
 }
 
+/* 没有截图时日志占满整行 */
+.live-grid.no-screenshot {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .screenshot {
   margin: 0;
 }
@@ -1185,9 +1190,51 @@ tr.expanded > td {
     font-size: 0.74em;
   }
 
+  .app-header nav ul:last-child {
+    gap: 0.3rem;
+  }
+
   .app-header nav ul:last-child li {
-    padding-right: 0.25rem;
-    padding-left: 0.25rem;
+    padding-right: 0.15rem;
+    padding-left: 0.15rem;
+  }
+
+  /* 手机宽度下历史表格改为卡片：每次运行一张卡片，单元格前显示列名 */
+  table.history thead {
+    display: none;
+  }
+
+  table.history,
+  table.history tbody,
+  table.history tr,
+  table.history td {
+    display: block;
+    width: 100%;
+  }
+
+  table.history tr {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+  }
+
+  table.history td {
+    position: relative;
+    padding: 0.2rem 0;
+    border: 0;
+  }
+
+  table.history td[data-label] {
+    padding-left: 5.5em;
+  }
+
+  table.history td[data-label]::before {
+    content: attr(data-label);
+    position: absolute;
+    left: 0;
+    width: 5em;
+    color: var(--pico-muted-color);
+    font-size: 0.85em;
+    line-height: 1.9;
   }
 
   .app-header nav ul:last-child a {

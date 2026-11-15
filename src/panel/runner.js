@@ -159,6 +159,7 @@ function killProcessGroup(child) {
  * 同时运行的数量由面板设置 maxConcurrentRuns 决定。
  *
  * options.publicUrl：面板的外网地址（PANEL_PUBLIC_URL），用于扫码推送中的面板链接
+ * options.localBrowserStatus()：已缓存的内置浏览器状态（见 createLocalBrowserChecker 的 cached），随运行配置下发
  * options.workerPath / killTimeoutMs / runTimeoutMs / startOptions 供测试替换子进程与缩短等待
  */
 function createRunner({
@@ -169,6 +170,7 @@ function createRunner({
   exitAfterResultMs = EXIT_AFTER_RESULT_MS,
   runTimeoutMs,
   publicUrl = "",
+  localBrowserStatus = () => null,
   startOptions = {},
   onFinish = () => {},
 }) {
@@ -448,7 +450,8 @@ function createRunner({
     // 阅读截图直接写入运行目录
     // 配置了面板外网地址时，扫码推送附带该账号实时页面的链接
     const panelLink = publicUrl ? `${publicUrl}#/accounts/${run.accountId}/live` : "";
-    child.send({ type: "start", mode: run.mode, config, screenshotDir: run.dir, panelLink, ...startOptions });
+    const browserStatus = config.seleniumUrl ? null : localBrowserStatus();
+    child.send({ type: "start", mode: run.mode, config, screenshotDir: run.dir, panelLink, browserStatus, ...startOptions });
 
     const limitMs =
       runTimeoutMs || (config.loginTimeout + (run.mode === "read" ? config.duration : 0)) * 60000 + RUN_TIMEOUT_MARGIN_MS;
@@ -649,5 +652,7 @@ function createRunner({
 module.exports = {
   CHILD_ENV_KEYS,
   KILL_TIMEOUT_MS,
+  createRedactor,
   createRunner,
+  fillMinuteMarks,
 };

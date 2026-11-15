@@ -240,7 +240,7 @@ docker compose logs app | grep 面板初始密码
 
 ### Selenium 状态与 noVNC
 
-`GET api/selenium/status` 对全局默认配置与各账号实际生效配置中的每个 Selenium 地址查询一次 `/status`（同一地址同时只发一个请求）；地址为空的配置使用内置浏览器，合为一项（`builtin` 为 true、`url` 为空），由 `chromium-browser --version` 与 `chromedriver --version` 判断是否可用（两者主版本不一致时同样为 `unreachable`；同时只检查一次，多个页面同时刷新时共用结果），`message` 为浏览器版本（如 `Chromium 155.0.8059.84 Alpine Linux`），`sessions` 为 null：
+`GET api/selenium/status` 对全局默认配置与各账号实际生效配置中的每个 Selenium 地址查询一次 `/status`（同一地址同时只发一个请求）；地址为空的配置使用内置浏览器，合为一项（`builtin` 为 true、`url` 为空），由 `chromium-browser --version` 与 `chromedriver --version` 判断是否可用（两者主版本不一致时同样为 `unreachable`；同时只检查一次，多个页面同时刷新时共用结果；面板启动时在后台检查一次，结果随运行配置下发给阅读子进程），`message` 为浏览器版本（如 `Chromium 155.0.8059.84 Alpine Linux`），`sessions` 为 null：
 
 ```json
 {
@@ -301,7 +301,7 @@ noVNC 默认关闭，只在使用 Selenium 时可用（内置浏览器以无界�
 data/
   panel.json              # 面板设置、全局默认配置、账号与调度规则、密码哈希与 passkey 公钥（0600）
   panel.json.bak          # 上一版 panel.json，损坏时自动恢复（0600）
-  panel.log
+  panel.log               # 面板日志；启动时上一次的日志改名为 panel.log.1
   panel.lock              # 面板运行期间存在，防止同一数据目录启动多个面板
   accounts/<id>/          # 账号数据（0700）：cookies.json、login.png、login-qr.png（0600；命令行运行时的截图也在这里）
   runs/<id>/<runId>/      # 每次运行（目录 0700，启动时收紧旧目录）：meta.json、output.log、screenshot-*.png（0600）
@@ -426,7 +426,7 @@ data/
 | 跨站请求伪造 | 修改类请求必须带 `X-WA-Request: 1` 请求头且为 JSON，配合 `SameSite=Strict` |
 | 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`、`Permissions-Policy`（关闭摄像头、麦克风、定位等用不到的能力）；经 HTTPS 访问时（判断方式与会话 cookie 的 `Secure` 相同）`Strict-Transport-Security: max-age=15552000`（不含子域名）；接口响应与面板主页面、登录页 `Cache-Control: no-store` |
 | 文件 | 新建的数据目录 0700（已有的不改）；`panel.json` 权限 0600，已有文件在启动时收紧；账号数据目录 0700，`cookies.json` 与登录二维码图片 0600（等同于登录状态）；初始密码不写入日志文件 |
-| 容器 | 面板进程以 `node` 用户运行：入口脚本以 root 把数据目录本身与面板写入的 `panel.json`、`panel.json.bak`、`panel.lock`、`panel.log`、`accounts/`、`runs/` 中不属于 `node` 的改过来后再降权，数据目录中的其他文件不改。镜像的 `HEALTHCHECK` 由 Docker 以镜像默认用户（root）执行，只请求本机的 `/healthz`，不读写数据目录 |
+| 容器 | 面板进程以 `node` 用户运行：入口脚本以 root 把数据目录本身与面板写入的 `panel.json`、`panel.json.bak`、`panel.lock`、`panel.log`、`panel.log.1`、`accounts/`、`runs/` 中不属于 `node` 的改过来后再降权，数据目录中的其他文件不改。镜像的 `HEALTHCHECK` 由 Docker 以镜像默认用户（root）执行，只请求本机的 `/healthz`，不读写数据目录 |
 
 ### 反向代理
 
@@ -470,4 +470,5 @@ location /weread/api/events {
 | 只由面板写入 | `panel.json` 只由持有锁的面板写入；`run --account` 以只读方式读取 |
 | 请求体 | 修改类请求带请求体时必须是 JSON；不带请求体（如删除账号、退出登录）时只需 `X-WA-Request` 请求头 |
 | 停止信号 | 收到 SIGTERM / SIGINT 时结束进行中的运行（见“运行队列”），关闭服务后退出 |
-| 日志 | 写入标准输出与 `<数据目录>/panel.log`（每次启动覆盖） |
+| 日志 | 写入标准输出与 `<数据目录>/panel.log`；启动时把上一次的日志改名为 `panel.log.1`（只保留一份），崩溃重启后仍能看到上次退出前的日志。日志时间使用进程时区（容器的 `TZ`），与面板设置中的时区无关 |
+| 空闲连接 | `keepAliveTimeout` 为 95 秒（`headersTimeout` 100 秒），长于 cloudflared、nginx 等反向代理常见的 60–90 秒，避免代理复用刚被面板关闭的连接时出现 502 |

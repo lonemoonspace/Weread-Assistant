@@ -14,7 +14,7 @@ if [ "$(id -u)" = "0" ]; then
   # 新建的数据目录只允许属主访问
   [ -d "$dir" ] || mkdir -p -m 700 "$dir"
   find "$dir" -maxdepth 0 ! -user node -exec chown -h node:node {} +
-  for name in panel.json panel.json.bak panel.lock panel.log accounts runs; do
+  for name in panel.json panel.json.bak panel.lock panel.log panel.log.1 accounts runs; do
     if [ -e "$dir/$name" ] || [ -L "$dir/$name" ]; then
       find "$dir/$name" ! -user node -exec chown -h node:node {} +
     fi

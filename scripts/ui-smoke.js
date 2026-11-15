@@ -293,6 +293,12 @@ async function desktop(env, h, driver, results) {
   await h.go("#/accounts/qr-1/live");
   await h.waitFor(".live .qr-login img.qr");
   await h.waitText(".live-status", "等待扫码");
+  // 没有截图时日志面板占满整行
+  const [gridWidth, logWidth] = await driver.executeScript(
+    "return [document.querySelector('.live-grid').clientWidth, document.querySelector('.log-panel').clientWidth]"
+  );
+  assert.ok(logWidth >= gridWidth - 2, `没有截图时日志宽度 ${logWidth} 应占满 ${gridWidth}`);
+  assert.match(await driver.getTitle(), /^扫码测试 · 实时 · WeReadAssistant$/);
   await h.shot("04-live-scan");
   await h.clickButton("停止");
   await h.waitText(".live-status", "已停止");
@@ -370,6 +376,20 @@ async function desktop(env, h, driver, results) {
   await h.waitText(".notice", "调度已保存");
   assert.strictEqual((await call("GET", "api/accounts/ok-1/schedules")).schedules.length, 3);
   await h.shot("10-schedules");
+  // 有未保存的修改时离开需要确认：取消则留在调度页，确认后离开且不保存
+  const edited = (await driver.findElements(By.css(".schedule-rule")))[2];
+  await h.type(await edited.findElement(By.css("input")), "07:45");
+  await h.waitText("main", "有未保存的修改");
+  for (const accept of [false, true]) {
+    await h.go("#/accounts/ok-1/config");
+    await driver.wait(until.alertIsPresent(), 5000, "离开前应提示未保存的修改");
+    const alert = await driver.switchTo().alert();
+    assert.match(await alert.getText(), /未保存的修改/);
+    await (accept ? alert.accept() : alert.dismiss());
+    await driver.sleep(300);
+    assert.ok((await driver.getCurrentUrl()).endsWith(accept ? "#/accounts/ok-1/config" : "#/accounts/ok-1/schedules"));
+  }
+  assert.deepStrictEqual((await call("GET", "api/accounts/ok-1/schedules")).schedules[2].times, ["07:30"]);
   step("调度：添加规则、预览接下来的运行时间、保存后立即生效");
 
   await h.go("#/accounts/ok-1/config");
@@ -526,6 +546,15 @@ async function mobile(env, h, driver, results) {
     await driver.executeScript("window.scrollTo(0, 0)");
     await driver.sleep(300);
     await h.noHorizontalScroll(name);
+    if (name === "m03-history") {
+      // 手机宽度下历史表格改为卡片：不显示表头，单元格前显示列名
+      const display = await driver.executeScript("return getComputedStyle(document.querySelector('table.history thead')).display");
+      assert.strictEqual(display, "none");
+      const label = await driver.executeScript(
+        "return getComputedStyle(document.querySelector('table.history td[data-label]'), '::before').content"
+      );
+      assert.strictEqual(label, '"开始时间"');
+    }
     await h.shot(name);
   }
   await h.go("#/accounts/qr-1/live");

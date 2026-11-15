@@ -51,6 +51,14 @@ function initLogFile(filePath, options = {}) {
     return;
   }
 
+  // 上一次的日志改名为 <文件名>.1 保留一份：崩溃重启后仍能看到上次退出前的日志
+  try {
+    fs.renameSync(filePath, `${filePath}.1`);
+  } catch (e) {
+    if (e.code !== "ENOENT") {
+      writeStdout(`[WARN][${formatLocalTimestamp()}]: 无法保留上一次的日志 ${filePath}：${e.message}`);
+    }
+  }
   // 日志中有书名、错误信息等，只允许属主读写；mode 只对新文件生效，已有的文件再 chmod 一次
   const stream = fs.createWriteStream(filePath, { flags: "w", mode: 0o600 });
   // 数据目录只读、磁盘已满等写入失败时只输出到控制台，不让进程因未处理的 error 事件崩溃

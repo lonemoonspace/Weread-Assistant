@@ -169,7 +169,8 @@ async function main() {
     await scenario("Bark 负载保持原有字段；日志中不出现 Bark Key", async (logs) => {
       config = resolveConfig({
         barkKey: "bark-key-123",
-        barkServer: mock.baseUrl,
+        // 末尾的斜杠在拼接前去掉
+        barkServer: `${mock.baseUrl}/`,
       });
 
       const ok = await sendBark(config, "微信读书挑战", "登录成功", {
@@ -183,10 +184,12 @@ async function main() {
       assert.strictEqual(mock.requests.length, 1);
       const request = mock.requests[0];
       assert.strictEqual(request.method, "POST");
-      assert.strictEqual(request.url, "/bark-key-123");
+      assert.strictEqual(request.url, "/push");
+      assert.match(request.headers["user-agent"], /^WeReadAssistant\//);
       assert.ok(logs.some((line) => line.includes(`发送Bark推送: ${mock.baseUrl}`)));
       assert.ok(!logs.some((line) => line.includes("bark-key-123")), "日志中不应出现 Bark Key");
       assert.deepStrictEqual(parseBody(request), {
+        device_key: "bark-key-123",
         title: "微信读书挑战",
         body: "登录成功",
         sound: "birdsong",
@@ -337,7 +340,7 @@ async function main() {
       assert.strictEqual(mock.requests.length, 2);
       assert.deepStrictEqual(
         mock.requests.map((request) => request.url).sort(),
-        ["/", "/bark-key-123"]
+        ["/", "/push"]
       );
       const ntfyPayload = parseBody(mock.requests.find((request) => request.url === "/"));
       assert.strictEqual(ntfyPayload.title, "微信读书挑战 · 项目完成");
@@ -514,6 +517,8 @@ async function main() {
           emailUser: "reader@example.com",
           emailPass: "smtp-pass-123",
           emailTo: "me@example.com",
+          // 本地 mock 服务器不支持 STARTTLS；非 465 端口默认要求 STARTTLS（见单元测试）
+          emailAllowInsecure: "true",
         };
         config = resolveConfig(emailConfig);
         await createNotifier(config).event("done", "阅读完成，共 68 分钟", { attachments: [screenshot] });
@@ -526,6 +531,13 @@ async function main() {
         assert.match(message.data, /Content-Type: image\/png;\s+name=screenshot-1\.png/);
         assert.match(message.data, /Content-ID: <screenshot-1\.png>/);
         assert.match(message.data, /Content-Type: text\/html/);
+
+        // 内存中的附件（截图不落盘）
+        await createNotifier(config).event("done", "阅读完成", {
+          attachments: [{ filename: "done.png", content: fs.readFileSync(screenshot) }],
+        });
+        assert.match(smtp.messages[1].data, /Content-ID: <done\.png>/);
+        smtp.messages.splice(1, 1);
 
         const results = await sendTestNotification(config);
         assert.deepStrictEqual(results, [{ channel: "email", ok: true }]);

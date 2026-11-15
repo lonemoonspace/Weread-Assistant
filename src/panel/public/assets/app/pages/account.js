@@ -1,5 +1,6 @@
 import { computed } from "../../vendor/vue.esm-browser.prod.js";
 import { StatusBadge } from "../components/common.js";
+import { ACCOUNT_TAB_LABELS } from "../router.js";
 import { state } from "../store.js";
 import { CalendarTab } from "./account-calendar.js";
 import { ConfigTab } from "./account-config.js";
@@ -7,13 +8,7 @@ import { HistoryTab } from "./account-history.js";
 import { LiveTab } from "./account-live.js";
 import { SchedulesTab } from "./account-schedules.js";
 
-const TABS = [
-  ["live", "实时"],
-  ["history", "历史"],
-  ["calendar", "打卡日历"],
-  ["schedules", "调度"],
-  ["config", "配置"],
-];
+const TABS = ["live", "history", "calendar", "schedules", "config"].map((name) => [name, ACCOUNT_TAB_LABELS[name]]);
 
 export const AccountPage = {
   components: { CalendarTab, ConfigTab, HistoryTab, LiveTab, SchedulesTab, StatusBadge },

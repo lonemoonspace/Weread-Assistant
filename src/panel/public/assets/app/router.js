@@ -2,6 +2,7 @@ import { reactive } from "../vendor/vue.esm-browser.prod.js";
 
 // 基于 hash 的路由：页面地址不变，部署在子路径下时相对路径始终正确
 export const ACCOUNT_TABS = ["live", "history", "calendar", "config", "schedules"];
+export const ACCOUNT_TAB_LABELS = { live: "实时", history: "历史", calendar: "打卡日历", schedules: "调度", config: "配置" };
 
 export const route = reactive({ name: "overview", params: {} });
 
@@ -37,7 +38,36 @@ function parse() {
   Object.assign(route, { name: "not-found", params: {} });
 }
 
-window.addEventListener("hashchange", parse);
+// 离开当前页面前的确认：guard 返回提示文字时询问是否离开，取消则留在原地址
+let leaveGuard = null;
+let currentHash = location.hash;
+
+export function setLeaveGuard(guard) {
+  leaveGuard = guard;
+  return () => {
+    if (leaveGuard === guard) {
+      leaveGuard = null;
+    }
+  };
+}
+
+window.addEventListener("hashchange", () => {
+  const message = leaveGuard && leaveGuard();
+  if (message && !window.confirm(message)) {
+    // replaceState 不触发 hashchange
+    history.replaceState(null, "", currentHash || "#/");
+    return;
+  }
+  currentHash = location.hash;
+  parse();
+});
+// 关闭或刷新页面时由浏览器询问（浏览器不显示自定义文字）
+window.addEventListener("beforeunload", (event) => {
+  if (leaveGuard && leaveGuard()) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
 parse();
 
 export function go(path) {
