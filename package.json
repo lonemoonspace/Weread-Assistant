@@ -21,7 +21,7 @@
     "test:unit:coverage": "node --test --experimental-test-coverage --test-coverage-include=\"src/**\" \"test/unit/**/*.test.js\"",
     "test:notify": "node scripts/notify-smoke.js",
     "test:reader": "node scripts/reader-smoke.js",
-    "test:panel": "node scripts/panel-smoke.js",
+    "test:panel": "node scripts/panel-smoke",
     "test:config": "node scripts/config-smoke.js",
     "test:ui": "node scripts/ui-smoke.js",
     "test:runtime": "node scripts/runtime-smoke.js docker",
