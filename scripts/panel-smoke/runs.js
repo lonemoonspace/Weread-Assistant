@@ -477,6 +477,9 @@ module.exports = async function runsScenarios({ scenario, start, login, startAut
     fs.writeFileSync(path.join(`${profile}.broken`, "Cookies"), Buffer.alloc(1024));
     const detail = (await panel.call("GET", "api/accounts/slow-p")).json;
     assert.deepStrictEqual(detail.profile, { exists: true, broken: true, bytes: 3072 }, "大小含重置时留下的 profile.broken");
+    fs.writeFileSync(path.join(profile, "Default", "Preferences"), Buffer.alloc(1024));
+    const grown = (await panel.call("GET", "api/accounts/slow-p")).json.profile;
+    assert.strictEqual(grown.bytes, 4096, "资料目录有变化时重新统计大小");
 
     const reading = nextRun(panel, (run) => run.accountId === "slow-p" && run.status === "reading");
     const { run } = (await panel.call("POST", "api/accounts/slow-p/runs")).json;
