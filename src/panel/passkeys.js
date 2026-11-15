@@ -223,6 +223,11 @@ function createPasskeys({ store, relyingParty, now = Date.now }) {
       return store.get().auth.passkeys.map(publicPasskey);
     },
 
+    // passkey 在当前域名下是否可用（登录只接受可用的）
+    isUsable(passkey) {
+      return usable(passkey);
+    },
+
     // 当前域名下可用的 passkey 数量
     usableCount() {
       return store.get().auth.passkeys.filter(usable).length;

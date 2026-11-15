@@ -3,7 +3,8 @@ const { writeFileAtomic } = require("../shared/files");
 
 // 会话持久化文件 data/sessions.json（0600）：面板重启后已登录的设备不必重新登录。
 // 只保存令牌的 SHA-256 哈希与会话的时间、登录方式，拿到文件也得不到可用的 cookie。
-// 结构：{ version, salt, fingerprint, sessions: [{ key, createdAt, expiresAt, cookieSetAt, method, credentialId }] }
+// 结构：{ version, salt, fingerprint, sessions: [{ key, createdAt, expiresAt, cookieSetAt, method, credentialId, keepWithoutPasswordLogin? }] }，
+// keepWithoutPasswordLogin 为关闭密码登录时保留下来的那个密码会话
 // fingerprint 为当时面板密码的指纹（见 auth.js），启动时密码变了就不恢复用密码登录的会话
 const FILE_VERSION = 1;
 const KEY_PATTERN = /^[0-9a-f]{64}$/;
@@ -23,7 +24,8 @@ function validSession(item) {
     isTime(item.cookieSetAt) &&
     METHODS.has(item.method) &&
     typeof item.credentialId === "string" &&
-    item.credentialId.length <= 1024
+    item.credentialId.length <= 1024 &&
+    (item.keepWithoutPasswordLogin === undefined || typeof item.keepWithoutPasswordLogin === "boolean")
   );
 }
 
@@ -37,6 +39,12 @@ function readSessionFile(file) {
       console.warn(`读取 ${file} 失败，已登录的设备需要重新登录：${e.message}`);
     }
     return null;
+  }
+  // 从备份还原或被改过权限的文件收紧为 0600（与 panel.json 相同）
+  try {
+    fs.chmodSync(file, 0o600);
+  } catch (e) {
+    console.warn(`无法把 ${file} 的权限改为 0600：${e.message}`);
   }
   try {
     const data = JSON.parse(text);
