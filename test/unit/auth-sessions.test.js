@@ -129,6 +129,60 @@ describe("会话持久化", () => {
     assert.ok(auth.touchSession(token));
     scheduled = 0;
     await quietly(() => auth.login("1.1.1.1", "correct-horse"));
-    assert.equal(scheduled, 0, "写入失败后不再尝试");
+    assert.equal(scheduled, 1, "写入失败后，之后的会话变化仍然再试");
+  });
+
+  it("写入失败时删除旧文件，已退出的会话不会在重启后恢复；之后能写入时恢复保存", async () => {
+    const auth = await makeAuth();
+    const tokens = await quietly(async () => [
+      (await auth.login("1.1.1.1", "correct-horse")).token,
+      (await auth.login("1.1.1.1", "correct-horse")).token,
+    ]);
+    runTimers();
+    assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).sessions.length, 2);
+    // 临时文件的位置被目录占住，写入失败
+    const blocker = `${file}.${process.pid}.tmp`;
+    fs.mkdirSync(blocker);
+    await quietly(async () => {
+      auth.destroySession(tokens[0]);
+      await Promise.resolve();
+    });
+    assert.equal(fs.existsSync(file), false, "写不进去时删除旧文件，避免已退出的会话复活");
+    const restarted = await makeAuth();
+    assert.deepEqual(await quietly(() => restarted.restoreSessions()), { restored: 0, dropped: 0 });
+
+    // 能写入后，面板停止时再写一次
+    fs.rmdirSync(blocker);
+    await quietly(() => auth.close());
+    const saved = JSON.parse(fs.readFileSync(file, "utf8")).sessions;
+    assert.equal(saved.length, 1);
+    const next = await makeAuth();
+    await quietly(() => next.restoreSessions());
+    assert.ok(next.touchSession(tokens[1]));
+    assert.equal(next.touchSession(tokens[0]), null);
+  });
+
+  it("关闭密码登录时保留下来的密码会话，重启后仍然恢复；其他密码会话不恢复", async () => {
+    const auth = await makeAuth();
+    const [kept, other] = await quietly(async () => [
+      (await auth.login("1.1.1.1", "correct-horse")).token,
+      (await auth.login("1.1.1.1", "correct-horse")).token,
+    ]);
+    runTimers();
+    assert.equal(auth.endPasswordSessions(kept), 1);
+    await Promise.resolve();
+    const next = await makeAuth();
+    assert.deepEqual(await quietly(() => next.restoreSessions({ passwordLoginActive: false })), { restored: 1, dropped: 0 });
+    assert.ok(next.touchSession(kept));
+    assert.equal(next.touchSession(other), null);
+  });
+
+  it("启动时把会话文件的权限收紧为 0600", async () => {
+    const auth = await makeAuth();
+    await quietly(() => auth.login("1.1.1.1", "correct-horse"));
+    runTimers();
+    fs.chmodSync(file, 0o644);
+    await makeAuth();
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   });
 });
