@@ -265,6 +265,12 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
     const [run] = await settle(panel, "goal-k", 1);
     assert.deepStrictEqual([run.trigger, run.scheduleId, run.delayedMinutes], ["schedule", "r1", 2]);
     assert.ok(run.plannedMinutes >= 2 && run.plannedMinutes <= 5, `计划时长 ${run.plannedMinutes}`);
+
+    // 按计划器给出的分钟数读的运行（重试、补跑、恢复）不再随机增加，日志中也不出现随机增加
+    panel.runner.enqueue("goal-k", { mode: "read", trigger: "retry", minutes: 1, attempt: 2, originRunId: run.id });
+    const [, retried] = await settle(panel, "goal-k", 2);
+    assert.strictEqual(retried.plannedMinutes, 1);
+    assert.doesNotMatch(runLog(panel, retried), /随机增加/);
   });
 
   await scenario("每日目标：到检查时间后补跑差额；补跑不跨过 23:57，每天最多 3 次；扫码超时后当天不再补跑；接口校验", async () => {
