@@ -27,8 +27,9 @@ const STARTUP_DELAY_MS = 2 * 60000;
 const TICK_MS = 60000;
 // 补跑最晚读到当天的 23:57
 const DAY_END_TIME = "23:57";
-// 计算停机期间错过的触发时间时，每条规则最多看这么多次
-const MAX_MISSED_LOOKUP = 500;
+// 待办到期时账号正在运行或排队：每隔这么久再试一次，从原定时间起最多顺延 BUSY_GIVE_UP_MS，之后放弃并记录日志
+const BUSY_POSTPONE_MS = 5 * 60000;
+const BUSY_GIVE_UP_MS = 2 * 60 * 60000;
 
 const systemClock = {
   now: () => Date.now(),
@@ -92,8 +93,19 @@ function loadState(file) {
     return emptyState();
   }
   const pending = Array.isArray(raw.pending)
-    ? raw.pending.filter((item) => isPlainObject(item) && PENDING_KINDS.includes(item.kind) && typeof item.accountId === "string")
+    ? raw.pending.filter(
+        (item) =>
+          isPlainObject(item) &&
+          PENDING_KINDS.includes(item.kind) &&
+          typeof item.accountId === "string" &&
+          // 到期时间无效的待办既不会到期也不会过期，还会让这个账号的每日目标检查一直等它：丢弃
+          (item.kind === "resume" || (typeof item.dueAt === "string" && !Number.isNaN(Date.parse(item.dueAt))))
+      )
     : [];
+  const dropped = Array.isArray(raw.pending) ? raw.pending.length - pending.length : 0;
+  if (dropped > 0) {
+    console.warn(`${file} 中有 ${dropped} 个待办格式无效，已丢弃`);
+  }
   return {
     version: STATE_VERSION,
     lastCheckAt: typeof raw.lastCheckAt === "string" && !Number.isNaN(Date.parse(raw.lastCheckAt)) ? raw.lastCheckAt : null,
@@ -102,13 +114,17 @@ function loadState(file) {
   };
 }
 
+// 待办中的分钟数交给运行队列：null 与旧版本写入的 0 都表示按配置的时长
+const minutesOption = (minutes) => (Number.isInteger(minutes) && minutes > 0 ? minutes : null);
+
 const minutesBetween = (from, to) => Math.max(0, Math.round((to - from) / 60000));
 const formatTime = (ts) => new Date(ts).toISOString();
 
-// 恢复被中断的运行时补读的分钟数：开始过的运行为计划时长减去已读，还没开始的（排队时被中断）为 0，表示按配置的时长
+// 重试或恢复时补读的分钟数：开始过的运行为计划时长减去已读（可能为 0，即已经读满），
+// 还没开始的（排队时被中断、启动前失败）为 null，表示按配置的时长
 function remainingMinutes(run) {
   if (!run.startedAt) {
-    return 0;
+    return null;
   }
   return Math.max(0, (Number(run.plannedMinutes) || 0) - (Number(run.minutes) || 0));
 }
@@ -180,7 +196,10 @@ function createPlanner({
 
   // 调度器到点后调用。规则带 jitterMinutes 时随机延后，等待中的项目写入 planner.json
   function fireSchedule(accountId, rule) {
-    state.lastCheckAt = formatTime(clock.now());
+    // 启动恢复完成之前不更新：此时面板若再次崩溃，下次启动仍要从上次停止前的检查时间算错过的调度
+    if (ready) {
+      state.lastCheckAt = formatTime(clock.now());
+    }
     const label = `定时触发：账号 ${accountId}，规则 ${rule.id}（${describeSchedule(rule)}）`;
     const jitter = jitterOf(rule);
     const delay = jitter > 0 ? Math.floor(random() * (jitter + 1)) : 0;
@@ -221,6 +240,11 @@ function createPlanner({
       if (!AUTO_TRIGGERS.includes(run.trigger) || run.trigger === "resume") {
         return;
       }
+      const minutes = remainingMinutes(run);
+      if (minutes === 0) {
+        // 已经读满计划的分钟数，没有要补读的
+        return;
+      }
       addPending({
         kind: "resume",
         accountId: run.accountId,
@@ -228,7 +252,7 @@ function createPlanner({
         trigger: run.trigger,
         originRunId: run.originRunId || run.id,
         attempt: run.attempt || 1,
-        minutes: remainingMinutes(run),
+        minutes,
         endedAt: run.endedAt,
       });
       return;
@@ -255,7 +279,10 @@ function createPlanner({
       // 需要人扫码：当天不再补跑
       blockCatchups(run.accountId);
     }
-    if (RETRYABLE_ERROR_KINDS.includes(run.errorKind) && left > 0 && !closing && account && account.enabled) {
+    const minutes = remainingMinutes(run);
+    if (RETRYABLE_ERROR_KINDS.includes(run.errorKind) && left > 0 && minutes === 0) {
+      console.info(`运行失败时已经读满计划的分钟数，不再重试：账号 ${run.accountId}，运行 ${run.id}`);
+    } else if (RETRYABLE_ERROR_KINDS.includes(run.errorKind) && left > 0 && !closing && account && account.enabled) {
       const delay = retryDelayMs(attempt, retryDelaysMs);
       const dueAt = clock.now() + delay;
       addPending({
@@ -264,14 +291,16 @@ function createPlanner({
         failedRunId: run.id,
         originRunId: run.originRunId || run.id,
         attempt: attempt + 1,
-        minutes: remainingMinutes(run),
+        minutes,
         dueAt: formatTime(dueAt),
       });
       console.info(`运行失败，${Math.round(delay / 60000)} 分钟后第 ${attempt} 次重试：账号 ${run.accountId}，运行 ${run.id}`);
       return;
     }
-    // 子进程崩溃或超时被结束时来不及发通知，由面板代发；不再重试时才发
-    if ((run.errorKind === "timeout" || run.errorKind === "crash") && config) {
+    // 不再重试时由面板代发失败通知的情况：子进程崩溃或超时被结束，来不及发；
+    // 或者子进程启动时还有重试次数，出错时没有发通知，但结束时没有安排重试（重试次数调小、账号停用、面板正在停止、已经读满）
+    const childSilent = run.errorKind === "error" && run.retriesLeft > 0;
+    if ((run.errorKind === "timeout" || run.errorKind === "crash" || childSilent) && config) {
       notify(config, failureNotice(run)).catch((e) => console.warn("发送失败通知出错:", e.message));
     }
   }
@@ -319,13 +348,16 @@ function createPlanner({
       return;
     }
     const minutes = Math.min(deficit, window);
-    state.catchups[accountId] = { ...record, count: record.count + 1 };
-    save();
-    enqueue(
+    const run = enqueue(
       accountId,
       { trigger: "catchup", minutes, goalDeficit: deficit },
       `每日目标补跑（今天已读 ${read}/${account.goal.minutes} 分钟，补 ${minutes} 分钟，今天第 ${record.count + 1} 次）`
     );
+    // 加入队列成功才计入当天的次数
+    if (run) {
+      state.catchups[accountId] = { ...record, count: record.count + 1 };
+      save();
+    }
   }
 
   // ---------- 待办 ----------
@@ -337,14 +369,24 @@ function createPlanner({
       console.info(`账号 ${item.accountId} 已删除或停用，丢弃待办（${item.kind}）`);
       return;
     }
+    const what = item.kind === "retry" ? "重试" : "延后的定时运行";
     if (runner.isActive(item.accountId)) {
-      console.info(`账号 ${item.accountId} 正在运行或排队，放弃这次${item.kind === "retry" ? "重试" : "延后的定时运行"}`);
+      // 账号正在运行或排队（例如手动运行）：顺延，从原定时间起超过 BUSY_GIVE_UP_MS 才放弃
+      const firstDueAt = Date.parse(item.firstDueAt || item.dueAt);
+      const now = clock.now();
+      if (now - firstDueAt >= BUSY_GIVE_UP_MS) {
+        console.info(`账号 ${item.accountId} 从 ${formatTime(firstDueAt)} 起一直在运行或排队，放弃这次${what}，不再执行`);
+        return;
+      }
+      const dueAt = formatTime(now + BUSY_POSTPONE_MS);
+      addPending({ ...item, firstDueAt: formatTime(firstDueAt), dueAt });
+      console.info(`账号 ${item.accountId} 正在运行或排队，这次${what}顺延到 ${dueAt}`);
       return;
     }
     if (item.kind === "retry") {
       enqueue(
         item.accountId,
-        { trigger: "retry", minutes: item.minutes, attempt: item.attempt, originRunId: item.originRunId },
+        { trigger: "retry", minutes: minutesOption(item.minutes), attempt: item.attempt, originRunId: item.originRunId },
         `失败重试（第 ${item.attempt} 次尝试，最初运行 ${item.originRunId}）`
       );
     } else if (item.kind === "schedule") {
@@ -405,7 +447,7 @@ function createPlanner({
       }
       enqueue(
         item.accountId,
-        { trigger: "resume", minutes: item.minutes, attempt: item.attempt, originRunId: item.originRunId },
+        { trigger: "resume", minutes: minutesOption(item.minutes), attempt: item.attempt, originRunId: item.originRunId },
         `恢复被中断的运行 ${item.runId}${item.minutes > 0 ? `（补读剩余 ${item.minutes} 分钟）` : ""}`
       );
     }
@@ -416,7 +458,11 @@ function createPlanner({
     if (!lastCheckAtBefore || grace === 0) {
       return;
     }
-    const from = new Date(lastCheckAtBefore);
+    const lastCheck = Date.parse(lastCheckAtBefore);
+    // 只需要宽限时间以内的触发时间：从宽限时间的起点（不早于上次检查）往后找。调度规则最细到每分钟一次，
+    // 宽限时间有多少分钟就最多有多少次，高频规则加上长时间停机也不会漏掉最近的一次
+    const windowStart = Math.max(lastCheck, now - grace - 60000);
+    const lookup = Math.ceil(grace / 60000) + 2;
     const data = store.get();
     const { timezone } = data.settings;
     for (const account of data.accounts) {
@@ -427,18 +473,19 @@ function createPlanner({
         if (!rule.enabled) {
           continue;
         }
-        const missed = nextRuns(rule, { timezone, from, count: MAX_MISSED_LOOKUP })
+        const label = `账号 ${account.id}，规则 ${rule.id}（${describeSchedule(rule)}）`;
+        const missed = nextRuns(rule, { timezone, from: new Date(windowStart), count: lookup })
           .map((time) => Date.parse(time))
-          .filter((time) => time < startedAt);
+          .filter((time) => time < startedAt && now - time <= grace);
         if (missed.length === 0) {
+          // 宽限时间以内没有错过的；更早的只记录日志
+          const [earliest] = nextRuns(rule, { timezone, from: new Date(lastCheck), count: 1 }).map((time) => Date.parse(time));
+          if (earliest !== undefined && earliest < startedAt) {
+            console.info(`停机期间错过了调度 ${label}（最早 ${formatTime(earliest)}），已超过补触发宽限时间，不补触发`);
+          }
           continue;
         }
         const latest = missed.at(-1);
-        const label = `账号 ${account.id}，规则 ${rule.id}（${describeSchedule(rule)}）`;
-        if (now - latest > grace) {
-          console.info(`停机期间错过了调度 ${label} 的 ${formatTime(latest)}，已超过补触发宽限时间，不补触发`);
-          continue;
-        }
         enqueue(
           account.id,
           { trigger: "schedule", scheduleId: rule.id, delayedMinutes: minutesBetween(latest, now) },
