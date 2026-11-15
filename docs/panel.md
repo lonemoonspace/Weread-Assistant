@@ -279,12 +279,12 @@ docker compose logs app | grep 面板初始密码
 | 内容 | 是否包含 |
 | --- | --- |
 | 面板设置、全局默认配置、账号及其覆盖配置、调度规则、挑战、每日目标 | 始终包含 |
-| 密钥类配置（Bark Key、ntfy 主题、令牌与密码、SMTP 密码、Webhook 地址与请求头、Telegram 令牌）与带密码的 Selenium 地址 | 可选，默认不包含；不包含时在 `omittedSecrets` 中列出，导入后需要重新填写 |
-| 各账号的登录 cookies | 可选，默认不包含 |
+| 密钥类配置（Bark Key、ntfy 主题、令牌与密码、SMTP 密码、Webhook 地址与请求头、Telegram 令牌）与带密码的地址（Selenium、Bark 与 ntfy 服务器、Telegram 接口地址等地址类配置中写了 `用户名:密码@` 的） | 可选，默认不包含；不包含时在 `omittedSecrets` 中列出，导入后需要重新填写 |
+| 各账号的登录 cookies | 可选，默认不包含；导入到已有账号且该账号保留了浏览器资料时，下次运行仍优先用资料目录中的登录状态，cookies.json 只在资料目录未登录或被重置后使用 |
 | 面板密码、passkey、会话 | 不包含（passkey 与域名绑定，换机器后本来就要重新添加） |
 | 运行记录、日志、截图、浏览器资料 | 不包含，需要时直接备份 `data/` 目录 |
 
-备份文件结构：`{ format: "weread-assistant-backup", formatVersion: 1, appVersion, exportedAt, secretsIncluded, cookiesIncluded, omittedSecrets, settings, defaults, accounts, sealed }`。包含密钥或登录状态时必须设置备份密码（至少 8 位），这两部分只放在 `sealed` 中：用备份密码经 scrypt（N=32768、r=8、p=1，随机盐）派生密钥后以 AES-256-GCM 加密（随机 IV，带认证标签），文件中的其他部分不含任何密钥值。
+备份文件结构：`{ format: "weread-assistant-backup", formatVersion: 1, appVersion, exportedAt, secretsIncluded, cookiesIncluded, omittedSecrets, settings, defaults, accounts, sealed }`。包含密钥或登录状态时必须设置备份密码（至少 8 位），这两部分只放在 `sealed` 中：用备份密码经 scrypt（N=32768、r=8、p=1，随机盐）派生密钥后以 AES-256-GCM 加密（随机 IV，带认证标签，认证数据绑定格式名与文件自己的 `formatVersion`），文件中的其他部分不含任何密钥值。是否包含密钥以加密部分里的 `secretsIncluded` 为准，外层的同名字段只用于显示。读取时 scrypt 参数的内存与计算量不能超过默认参数的 2 倍。最多 200 个账号，超过时不导出。
 
 | 导入规则 | 说明 |
 | --- | --- |
@@ -292,7 +292,7 @@ docker compose logs app | grep 面板初始密码
 | 账号 | `options.accounts` 为 `merge`（默认，保留现有账号）或 `replace`（备份中没有的账号从面板移除，保留数据目录）；合并时同 ID 账号默认跳过，`options.overwrite` 为 true 时覆盖 |
 | 设置 | `options.settings`（默认 true）时同时导入面板设置与全局默认配置（以备份为准整体替换全局默认） |
 | 校验 | 全部内容都走面板接口的校验：账号 ID、名称、配置项（逐项，无效的项跳过）、调度规则、挑战与每日目标；账号 ID 用作目录名，无效时整条跳过。无效条目不影响其他内容 |
-| 密钥 | 备份不含密钥时，同 ID 账号与全局默认中已有的密钥保留 |
+| 密钥 | 密钥只接受来自加密部分的：未加密的部分出现密钥（文件被改动过，例如把推送地址换成别人的）时整个文件无效，不导入任何内容。备份不含密钥（或外层写着包含、却没有能解开的加密部分）时，同 ID 账号与全局默认中已有的密钥保留 |
 | 正在运行的账号 | 不覆盖、不移除，预览中标出 |
 | 一次写入 | 全部变化在一次写入中完成；写入前把 `panel.json` 另存为 `panel.json.pre-import-<时间>`（0600，保留最近 3 份），导入错了可以拿回来；cookies 在写入后写到各账号的 `cookies.json`（0600） |
 | 版本 | `formatVersion` 比当前面板支持的新时拒绝并提示升级面板 |
