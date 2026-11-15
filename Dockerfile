@@ -9,9 +9,8 @@ LABEL org.opencontainers.image.title="WeReadAssistant" \
 # su-exec：入口脚本修正数据目录属主后，以 node 用户运行
 # tini：作为 1 号进程转发信号、回收浏览器退出后留下的进程
 # chromium、chromium-chromedriver：内置浏览器，面板设置中的 Selenium 地址留空时使用；font-wqy-zenhei：中文字体
-# Chromium 的界面语言包只保留中文与英文（浏览器以中文运行，见 src/reader/browser.js），在同一层删除才会减小体积
-RUN apk add --no-cache su-exec tini chromium chromium-chromedriver font-wqy-zenhei \
-  && find /usr/lib/chromium/locales -name '*.pak' ! -name 'zh-CN.pak' ! -name 'en-US.pak' -delete
+# （Alpine 把 Chromium 的界面语言包拆在 chromium-lang 中，这里没有安装，不需要另外删除）
+RUN apk add --no-cache su-exec tini chromium chromium-chromedriver font-wqy-zenhei
 
 WORKDIR /app
 COPY package.json package-lock.json ./
