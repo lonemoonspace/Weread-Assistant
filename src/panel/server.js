@@ -9,6 +9,7 @@ const { CSRF_HEADER, SESSION_COOKIE, createSessionCookies, csrfGuard, securityHe
 const { identifySession, passwordLoginState, requireSession } = require("./http/session");
 const { accountRoutes } = require("./http/routes/accounts");
 const { authRoutes, publicAuthRoutes } = require("./http/routes/auth");
+const { BACKUP_IMPORT_PATH, backupRoutes } = require("./http/routes/backup");
 const { eventRoutes } = require("./http/routes/events");
 const { pageRoutes } = require("./http/routes/pages");
 const { runRoutes } = require("./http/routes/runs");
@@ -68,7 +69,9 @@ function createPanelApp(
   });
   api.use(csrfGuard);
   // 面板前端不发送压缩的请求体；不解压可以避免未登录的请求进入 gzip/Brotli 解码（Node.js 的解码器漏洞，如 CVE-2026-111497）
-  api.use(express.json({ limit: "10kb", inflate: false }));
+  // 导入备份的接口在确认已登录并近期验证过之后，才按更大的上限解析请求体（见 routes/backup.js）
+  const smallJson = express.json({ limit: "10kb", inflate: false });
+  api.use((req, res, next) => (req.method === "POST" && req.path === BACKUP_IMPORT_PATH ? next() : smallJson(req, res, next)));
   api.use(publicAuthRoutes(ctx));
   api.use(requireSession);
   api.use(authRoutes(ctx));
@@ -76,6 +79,7 @@ function createPanelApp(
   api.use(accountRoutes(ctx));
   api.use(runRoutes(ctx));
   api.use(eventRoutes(ctx));
+  api.use(backupRoutes(ctx));
   api.use((req, res) => {
     res.status(404).json({ error: "not_found" });
   });

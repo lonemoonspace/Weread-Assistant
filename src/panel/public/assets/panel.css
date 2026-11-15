@@ -1055,6 +1055,26 @@ tr.expanded > td {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+/* 备份与迁移 */
+.backup-panel .switch-line.indent {
+  margin-left: 1.75rem;
+}
+
+.backup-panel fieldset {
+  margin-bottom: 0.75rem;
+}
+
+.backup-preview {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+}
+
+.backup-preview h5 {
+  margin-bottom: 0.75rem;
+}
+
 .danger-zone {
   padding-top: 1.25rem;
   border-top: 2px dashed var(--wa-red-border);

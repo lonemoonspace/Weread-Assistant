@@ -97,6 +97,8 @@ docker compose logs app | grep 面板初始密码
 | `GET api/accounts/:id/goal` | 是 | 每日目标：`{ timezone, goal, suggestedMinutes, warning, today, planned }`。`goal` 为 `{ enabled, minutes, checkAt }` 或 null；`suggestedMinutes` 为按挑战折算的每天分钟数（没有挑战时为 null）；`warning` 为检查时间太晚、补不满目标时的提示；`today` 同账号列表；`planned` 为计划器中的待办与今天的补跑次数 `{ pending, catchups: { count, max, blocked } }` |
 | `PUT api/accounts/:id/goal` | 是 | `{ goal: { enabled?, minutes, checkAt } \| null }`：保存每日目标，`minutes` 为 1–1440，`checkAt` 为 `HH:MM`（面板时区），null 表示不设置；返回同上 |
 | `DELETE api/accounts/:id/profile` | 是 | 重置浏览器资料：删除账号的 `profile/` 与 `profile.broken/`，返回 `{ profile }`；下次运行从 cookies.json 恢复登录；账号正在运行或排队时 409 `account_busy` |
+| `POST api/backup/export` | 是，需二次验证 | `{ includeSecrets?, includeCookies?, passphrase? }`：返回备份文件（JSON，带 `Content-Disposition` 文件名），见下文“备份与迁移”；包含密钥或登录状态而没有至少 8 位的备份密码时 400 `backup_passphrase_required` |
+| `POST api/backup/import` | 是，需二次验证 | `{ mode: "preview" \| "apply", backup, passphrase?, options? }`：`preview` 返回 `{ preview }`，不写入；`apply` 写入并返回 `{ preview, applied: true, copy }`。请求体上限 2MB（其他接口 10KB）。不是备份文件 400 `backup_invalid`，版本更新 400 `backup_too_new`，备份密码错误或文件被改动 400 `backup_decrypt_failed` |
 | `POST api/schedules/preview` | 是 | `{ schedules: [...] }`：校验并返回每条规则接下来的触发时间，不保存，供填写表单时预览 |
 | `DELETE api/accounts/:id` | 是 | `{ deleteData? }`，可以不带请求体；默认只从面板移除，`deleteData: true` 时同时删除账号数据目录与运行记录（先把两个目录移开，保存成功后再删除；移开失败时返回 500 `delete_data_failed`，账号与数据保持原样）；账号正在运行或排队时返回 409 `account_busy` |
 | `POST api/accounts/:id/runs` | 是 | `{ mode? }`，`read`（默认）或 `login`（仅登录），可以不带请求体；加入队列后返回 202 与运行状态；账号不存在 404，已停用 409 `account_disabled`，已在运行或排队 409 `run_active` |
@@ -219,6 +221,32 @@ docker compose logs app | grep 面板初始密码
 
 内置浏览器的资料目录 `accounts/<id>/profile/` 在每次运行开始前整理：超过 300 MB 时清空其中的缓存（HTTP 缓存本身限制为 50 MB）。在账号“配置”页可以查看占用并重置，见 `docs/reader.md` 的“浏览器资料目录”。
 
+### 备份与迁移
+
+在“设置 → 备份与迁移”中导出与导入，或用 `node src/cli.js export --out <文件>` 导出（见 `docs/cli.md`）。用于迁移到另一台机器，或把配置放进定期备份。实现见 `src/panel/backup.js`。
+
+| 内容 | 是否包含 |
+| --- | --- |
+| 面板设置、全局默认配置、账号及其覆盖配置、调度规则、挑战、每日目标 | 始终包含 |
+| 密钥类配置（Bark Key、ntfy 主题、令牌与密码、SMTP 密码、Webhook 地址与请求头、Telegram 令牌）与带密码的地址（Selenium、Bark 与 ntfy 服务器、Telegram 接口地址等地址类配置中写了 `用户名:密码@` 的） | 可选，默认不包含；不包含时在 `omittedSecrets` 中列出，导入后需要重新填写 |
+| 各账号的登录 cookies | 可选，默认不包含；导入到已有账号且该账号保留了浏览器资料时，下次运行仍优先用资料目录中的登录状态，cookies.json 只在资料目录未登录或被重置后使用 |
+| 面板密码、passkey、会话 | 不包含（passkey 与域名绑定，换机器后本来就要重新添加） |
+| 运行记录、日志、截图、浏览器资料 | 不包含，需要时直接备份 `data/` 目录 |
+
+备份文件结构：`{ format: "weread-assistant-backup", formatVersion: 1, appVersion, exportedAt, secretsIncluded, cookiesIncluded, omittedSecrets, settings, defaults, accounts, sealed }`。包含密钥或登录状态时必须设置备份密码（至少 8 位），这两部分只放在 `sealed` 中：用备份密码经 scrypt（N=32768、r=8、p=1，随机盐）派生密钥后以 AES-256-GCM 加密（随机 IV，带认证标签，认证数据绑定格式名与文件自己的 `formatVersion`），文件中的其他部分不含任何密钥值。是否包含密钥以加密部分里的 `secretsIncluded` 为准，外层的同名字段只用于显示。读取时 scrypt 参数的内存与计算量不能超过默认参数的 2 倍。最多 200 个账号，超过时不导出。
+
+| 导入规则 | 说明 |
+| --- | --- |
+| 先预览再应用 | 预览返回将要新增、覆盖、跳过与移除的账号，设置与全局默认配置的变化（密钥显示为掩码），无效条目与原因，以及需要重新填写的密钥；预览不写入任何内容 |
+| 账号 | `options.accounts` 为 `merge`（默认，保留现有账号）或 `replace`（备份中没有的账号从面板移除，保留数据目录）；合并时同 ID 账号默认跳过，`options.overwrite` 为 true 时覆盖 |
+| 设置 | `options.settings`（默认 true）时同时导入面板设置与全局默认配置（以备份为准整体替换全局默认） |
+| 校验 | 全部内容都走面板接口的校验：账号 ID、名称、配置项（逐项，无效的项跳过）、调度规则、挑战与每日目标；账号 ID 用作目录名，无效时整条跳过。无效条目不影响其他内容 |
+| 密钥 | 密钥只接受来自加密部分的：未加密的部分出现密钥（文件被改动过，例如把推送地址换成别人的）时整个文件无效，不导入任何内容。备份不含密钥（或外层写着包含、却没有能解开的加密部分）时，同 ID 账号与全局默认中已有的密钥保留 |
+| 正在运行的账号 | 不覆盖、不移除，预览中标出 |
+| 一次写入 | 全部变化在一次写入中完成；写入前把 `panel.json` 另存为 `panel.json.pre-import-<时间>`（0600，保留最近 3 份），导入错了可以拿回来；cookies 在写入后写到各账号的 `cookies.json`（0600） |
+| 版本 | `formatVersion` 比当前面板支持的新时拒绝并提示升级面板 |
+| 鉴权 | 导出与导入都要求 5 分钟内登录或二次验证过，并校验 `X-WA-Request`；导入的请求体在鉴权之后才按 2MB 上限解析 |
+
 ### 调度
 
 每个账号可以有多条调度规则，到点后以“定时”方式把阅读加入运行队列。时间按面板设置中的时区（默认 `Asia/Shanghai`）解释，夏令时由时区数据处理。
@@ -334,6 +362,7 @@ data/
   panel.log               # 面板日志；启动时上一次的日志改名为 panel.log.1
   panel.lock              # 面板运行期间存在，防止同一数据目录启动多个面板
   sessions.json           # 已登录的会话（只有令牌哈希，0600），见“安全”；备份时建议排除
+  panel.json.pre-import-* # 导入配置备份前的 panel.json（0600，保留最近 3 份），见“备份与迁移”
   accounts/<id>/          # 账号数据（0700）：cookies.json、login.png、login-qr.png（0600；命令行运行时的截图也在这里）
   accounts/<id>/profile/  # 内置浏览器的资料目录（0700）：缓存、本地存储与登录状态，备份时可以排除；profile.broken/ 为最近一次重置前的目录
   planner.json            # 计划器的待办与当天的补跑次数（0600），见“重试、补跑与恢复”

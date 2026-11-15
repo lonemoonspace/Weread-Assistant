@@ -194,6 +194,7 @@ module.exports = {
   createAccount,
   deleteAccount,
   findAccount,
+  normalizeName,
   publicAccount,
   updateAccount,
 };
