@@ -14,6 +14,7 @@ const { eventRoutes } = require("./http/routes/events");
 const { pageRoutes } = require("./http/routes/pages");
 const { runRoutes } = require("./http/routes/runs");
 const { settingsRoutes } = require("./http/routes/settings");
+const { statsRoutes } = require("./http/routes/stats");
 const { acquirePanelLock } = require("./lock");
 const { passkeyRelyingParty } = require("./options");
 const { createPasskeys } = require("./passkeys");
@@ -78,6 +79,7 @@ function createPanelApp(
   api.use(settingsRoutes(ctx));
   api.use(accountRoutes(ctx));
   api.use(runRoutes(ctx));
+  api.use(statsRoutes(ctx));
   api.use(eventRoutes(ctx));
   api.use(backupRoutes(ctx));
   api.use((req, res) => {

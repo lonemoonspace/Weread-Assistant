@@ -6,7 +6,8 @@ const { createAccount, deleteAccount, findAccount, publicAccount, updateAccount 
 const { accountDataDir, publicEffectiveConfig, resolveAccountConfig } = require("../../config");
 const { PanelError, badRequest, requireObject } = require("../../errors");
 const { normalizeGoal, publicGoal } = require("../../goal");
-const { calendar, challengeProgress, lastRun, todayStats } = require("../../history");
+const { lastRun } = require("../../history");
+const { accountStreak, calendar, challengeProgress, todayStats } = require("../../stats");
 const { nextRunInfo, normalizeSchedules, publicSchedule } = require("../../schedules");
 
 // 账号的增删改查、调度规则、每日目标、打卡日历与等待扫码时的二维码截图
@@ -17,6 +18,7 @@ function accountRoutes({ dataDir, store, runner, planner }) {
   const accountView = (account, timezone = store.get().settings.timezone) => ({
     ...publicAccount(account, dataDir, timezone),
     today: todayStats(dataDir, account.id, { timezone }),
+    streak: accountStreak(dataDir, account.id, { timezone }),
     lastRun: lastRun(dataDir, account.id),
     planned: plannedView(account.id, timezone),
   });

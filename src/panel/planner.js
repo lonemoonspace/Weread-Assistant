@@ -5,7 +5,8 @@ const { createNotifier } = require("../notify");
 const { writeFileAtomic } = require("../shared/files");
 const { PanelError } = require("./errors");
 const { MAX_CATCHUPS_PER_DAY } = require("./goal");
-const { dateInZone, todayStats } = require("./history");
+const { dateInZone } = require("./dates");
+const { todayStats } = require("./stats");
 const { AUTO_TRIGGERS, RETRYABLE_ERROR_KINDS, RETRY_DELAYS_MS, retriesLeftFor, retryDelayMs } = require("./retry");
 const { describeSchedule, jitterOf, nextRuns } = require("./schedules");
 

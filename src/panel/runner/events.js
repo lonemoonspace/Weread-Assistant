@@ -34,6 +34,7 @@ function applyWorkerEvent(run, message) {
       return {};
     case "login-required":
       run.status = "waiting-login";
+      run.loginPrompted = true;
       run.loginUrl = String(data.url || "");
       run.loginQrAt = new Date().toISOString();
       return {};

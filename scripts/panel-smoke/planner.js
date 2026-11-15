@@ -6,7 +6,7 @@ const http = require("http");
 const path = require("path");
 
 const { zonedTime } = require(path.resolve(__dirname, "..", "..", "src", "panel", "planner"));
-const { dateInZone } = require(path.resolve(__dirname, "..", "..", "src", "panel", "history"));
+const { dateInZone } = require(path.resolve(__dirname, "..", "..", "src", "panel", "dates"));
 const { writeRun } = require("../fixtures/run-records");
 const { tempDir, until } = require("./helpers");
 

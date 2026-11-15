@@ -1,10 +1,11 @@
-// 面板 smoke：运行历史、按天统计、挑战进度与保留策略
+// 面板 smoke：运行历史、按天统计、统计页接口、挑战进度与保留策略
 
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 
-const { challengeProgress, cleanupRuns, dateInZone } = require(path.resolve(__dirname, "..", "..", "src", "panel", "history"));
+const { cleanupRuns } = require(path.resolve(__dirname, "..", "..", "src", "panel", "history"));
+const { challengeProgress, dateInZone } = require(path.resolve(__dirname, "..", "..", "src", "panel", "stats"));
 const { minutesFrom, writeRun } = require("../fixtures/run-records");
 const { tempDir, until, nextRun, ended } = require("./helpers");
 
@@ -163,6 +164,9 @@ module.exports = async function historyScenarios({ scenario, startAuthed }) {
       requiredMinutes: 1800,
       missedDays: 1,
       allowedMissedDays: 1,
+      remainingDays: 21,
+      missesLeft: 0,
+      minutesPerDayNeeded: 73,
       achieved: false,
     });
     const before = at("2026-03-20T00:00:00.000Z");
@@ -199,6 +203,69 @@ module.exports = async function historyScenarios({ scenario, startAuthed }) {
     assert.strictEqual((await panel.call("GET", "api/accounts/me")).json.challengeProgress, null);
     // 旧版本保存下来的继承属性类型：没有进度，不让账号详情与打卡日历出错
     assert.strictEqual(challengeProgress(dataDir, { id: "ch", challenge: { type: "constructor", startDate: "2026-04-01" } }, { timezone }), null);
+  });
+
+  await scenario("统计接口：概览数字、趋势、热力图与运行情况，本月数字与日历一致；全部账号相加；账号带连续天数；运行历史可按日期查看；参数校验", async () => {
+    const panel = await startAuthed();
+    await panel.call("PATCH", "api/settings", { settings: { timezone: "UTC" } });
+    await panel.call("POST", "api/accounts", { id: "me" });
+    await panel.call("POST", "api/accounts", { id: "you" });
+    const dataDir = panel.options.dataDir;
+    const today = dateInZone(new Date(), "UTC");
+    const shift = (days) => new Date(Date.parse(`${today}T00:00:00.000Z`) + days * 86400000).toISOString();
+    const dayOf = (days) => shift(days).slice(0, 10);
+    writeRun(dataDir, "me", { queuedAt: shift(0), marks: minutesFrom(shift(0), 10) });
+    writeRun(dataDir, "me", { queuedAt: shift(-1), marks: minutesFrom(shift(-1), 6), trigger: "catchup" });
+    writeRun(dataDir, "me", { queuedAt: shift(-2), marks: minutesFrom(shift(-2), 3), status: "failed", loginPrompted: true });
+    writeRun(dataDir, "you", { queuedAt: shift(-1), marks: minutesFrom(shift(-1), 7) });
+
+    const res = await panel.call("GET", "api/stats?account=me&days=30");
+    assert.strictEqual(res.status, 200);
+    const stats = res.json;
+    assert.deepStrictEqual([stats.account, stats.today, stats.timezone, stats.rangeDays], ["me", today, "UTC", 30]);
+    assert.deepStrictEqual(stats.accounts.map((item) => item.id), ["me", "you"]);
+    assert.strictEqual(stats.summary.currentStreak, 2);
+    assert.strictEqual(stats.trend.length, 30);
+    assert.deepStrictEqual(stats.trend.slice(-3).map((day) => [day.date, day.minutes, day.checkedIn]), [
+      [dayOf(-2), 3, false],
+      [dayOf(-1), 6, true],
+      [today, 10, true],
+    ]);
+    assert.strictEqual(stats.heatmap.length, 365);
+    assert.deepStrictEqual([stats.heatmap.at(-1).level, stats.heatmap.at(-2).level], [1, 1]);
+    assert.deepStrictEqual([stats.runs.total, stats.runs.catchups, stats.runs.loginPrompted, stats.runs.byStatus.failed], [3, 1, 1, 1]);
+    assert.strictEqual(stats.note, "按本工具运行记录统计，非微信读书官方数据");
+    const calendar = (await panel.call("GET", "api/accounts/me/calendar")).json;
+    assert.deepStrictEqual(
+      [stats.summary.month.minutes, stats.summary.month.checkedDays],
+      [calendar.monthMinutes, calendar.monthCheckedDays],
+      "本月累计与打卡天数与日历一致"
+    );
+
+    const all = (await panel.call("GET", "api/stats?days=90")).json;
+    assert.deepStrictEqual([all.account, all.trend.length, all.challenge], ["all", 90, null]);
+    assert.strictEqual(all.trend.at(-2).minutes, 13, "全部账号时分钟数相加");
+    const accounts = (await panel.call("GET", "api/accounts")).json.accounts;
+    assert.deepStrictEqual(accounts.map((account) => account.streak), [2, 1], "you 今天还没读、昨天打卡，不算中断");
+
+    const onDay = (await panel.call("GET", `api/accounts/me/runs?date=${dayOf(-1)}`)).json.runs;
+    assert.deepStrictEqual(onDay.map((run) => run.queuedAt), [shift(-1), shift(-2)], "按日期查看时从当天往前");
+
+    for (const query of ["days=7", "days=abc", "account=me&days=0"]) {
+      assert.strictEqual((await panel.call("GET", `api/stats?${query}`)).status, 400, query);
+    }
+    assert.strictEqual((await panel.call("GET", "api/stats?account=nobody")).status, 404);
+    assert.strictEqual((await panel.call("GET", "api/accounts/me/runs?date=2026-02-30")).status, 400);
+
+    // 面板自己完成的运行：结束后统计立即包含（缓存随运行记录的写入更新）
+    await panel.call("POST", "api/accounts", { id: "ok-1" });
+    const before = (await panel.call("GET", "api/stats?account=ok-1")).json.trend.at(-1).minutes;
+    const finished = nextRun(panel, ended("ok-1"));
+    await panel.call("POST", "api/accounts/ok-1/runs");
+    const run = await finished;
+    const after = (await panel.call("GET", "api/stats?account=ok-1")).json;
+    assert.ok(run.minutes > 0);
+    assert.strictEqual(after.summary.last30.minutes - before, run.minutes);
   });
 
   await scenario("保留策略：截图只保留最近 N 次有截图的运行，日志超过天数后删除，运行记录永久保留；进行中的运行不清理；运行结束后自动清理", async () => {
