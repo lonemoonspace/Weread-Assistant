@@ -12,7 +12,9 @@ export const STATUS_LABELS = {
 };
 
 export const ACTIVE_STATUSES = ["queued", "starting", "waiting-login", "reading"];
-export const TRIGGER_LABELS = { manual: "手动", schedule: "定时" };
+export const TRIGGER_LABELS = { manual: "手动", schedule: "定时", retry: "重试", catchup: "补跑", resume: "恢复" };
+// 计划器中的待办
+export const PLANNED_LABELS = { retry: "重试", schedule: "定时运行（随机延后）" };
 export const MODE_LABELS = { read: "阅读", login: "仅登录" };
 export const SCHEDULE_TYPE_LABELS = { daily: "每天固定时间", interval: "每 N 小时", cron: "cron 表达式" };
 
@@ -56,6 +58,33 @@ export function formatShort(iso, timezone) {
   }
   const p = parts(iso, timezone);
   return `${p.month}-${p.day} ${WEEKDAYS[p.weekday] || ""} ${p.hour}:${p.minute}`;
+}
+
+// 06:00
+export function formatHourMinute(iso, timezone) {
+  if (!iso || Number.isNaN(new Date(iso).getTime())) {
+    return "-";
+  }
+  const p = parts(iso, timezone);
+  return `${p.hour}:${p.minute}`;
+}
+
+// 下次定时运行：规则带随机延后时显示时间范围，例如“11-16 周一 06:00 到 06:10 之间”
+export function formatNextRun(at, jitterMinutes, timezone) {
+  if (!at) {
+    return "";
+  }
+  if (!jitterMinutes) {
+    return formatShort(at, timezone);
+  }
+  const latest = new Date(Date.parse(at) + jitterMinutes * 60000).toISOString();
+  return `${formatShort(at, timezone)} 到 ${formatHourMinute(latest, timezone)} 之间`;
+}
+
+// 计划器的待办：“11-16 周一 06:05 第 2 次重试”
+export function formatPlanned(item, timezone) {
+  const what = item.kind === "retry" ? `第 ${item.attempt} 次尝试（重试）` : PLANNED_LABELS[item.kind] || item.kind;
+  return `${formatShort(item.dueAt, timezone)} ${what}`;
 }
 
 export function formatClock(iso, timezone) {

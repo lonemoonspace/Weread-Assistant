@@ -1,6 +1,6 @@
 import { computed, onMounted, onUnmounted, ref } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
-import { SCHEDULE_TYPE_LABELS, formatShort } from "../format.js";
+import { SCHEDULE_TYPE_LABELS, formatNextRun, formatShort } from "../format.js";
 import { setLeaveGuard } from "../router.js";
 import { notify, refreshAccounts, timezone } from "../store.js";
 
@@ -19,13 +19,14 @@ function toEditable(rule) {
     minute: rule.minute || 0,
     expression: rule.expression || "0 6 * * *",
     enabled: rule.enabled !== false,
+    jitterMinutes: rule.jitterMinutes || 0,
     description: rule.description || "",
     nextRuns: rule.nextRuns || [],
   };
 }
 
 function toPayload(rule) {
-  const base = { id: rule.id || undefined, type: rule.type, enabled: rule.enabled };
+  const base = { id: rule.id || undefined, type: rule.type, enabled: rule.enabled, jitterMinutes: Number(rule.jitterMinutes) || 0 };
   if (rule.type === "daily") {
     return { ...base, times: rule.timesText.split(/[\s,，、]+/).filter(Boolean) };
   }
@@ -35,13 +36,94 @@ function toPayload(rule) {
   return { ...base, expression: rule.expression };
 }
 
+// 每日目标：到检查时间后当天分钟数不够就补跑差额
+const GoalCard = {
+  props: { account: Object },
+  setup(props) {
+    const view = ref(null);
+    const form = ref({ enabled: false, minutes: 30, checkAt: "22:00" });
+    const error = ref("");
+    const busy = ref(false);
+
+    function apply(data) {
+      view.value = data;
+      const goal = data.goal;
+      form.value = goal
+        ? { ...goal }
+        : { enabled: false, minutes: data.suggestedMinutes || 30, checkAt: "22:00" };
+    }
+
+    async function load() {
+      try {
+        apply(await api(`accounts/${props.account.id}/goal`));
+      } catch (e) {
+        notify(e.message, "error");
+      }
+    }
+
+    async function save() {
+      busy.value = true;
+      error.value = "";
+      try {
+        const goal = { enabled: form.value.enabled, minutes: Number(form.value.minutes), checkAt: form.value.checkAt };
+        apply(await api(`accounts/${props.account.id}/goal`, { method: "PUT", body: { goal } }));
+        await refreshAccounts();
+        notify(goal.enabled ? "每日目标已保存" : "每日目标已关闭");
+      } catch (e) {
+        error.value = e.message;
+      } finally {
+        busy.value = false;
+      }
+    }
+
+    function useSuggested() {
+      form.value.minutes = view.value.suggestedMinutes;
+    }
+
+    onMounted(load);
+    return { view, form, error, busy, save, useSuggested };
+  },
+  template: `
+    <article class="goal-card">
+      <h3>每日目标</h3>
+      <p class="muted">每天到检查时间，如果今天累计阅读不到目标分钟数，就补跑差额。补跑最晚读到 23:57，每天最多 3 次；补跑时需要扫码而超时，当天不再补跑。</p>
+      <template v-if="view">
+        <div class="grid rule-fields">
+          <label>
+            目标（分钟）
+            <input type="number" min="1" max="1440" v-model.number="form.minutes">
+          </label>
+          <label>
+            检查时间（HH:MM，{{ view.timezone }}）
+            <input v-model.trim="form.checkAt" placeholder="22:00" inputmode="numeric">
+          </label>
+        </div>
+        <p v-if="view.suggestedMinutes" class="muted">
+          按当前挑战，平均每天约需 {{ view.suggestedMinutes }} 分钟。
+          <button type="button" class="outline small" @click="useSuggested">使用建议值</button>
+        </p>
+        <p v-if="view.warning" class="callout callout-warn" role="note">{{ view.warning }}</p>
+        <p v-if="view.goal && view.goal.enabled" class="muted">
+          今天已读 {{ view.today.minutes }}/{{ view.goal.minutes }} 分钟<template v-if="view.planned">，已补跑 {{ view.planned.catchups.count }}/{{ view.planned.catchups.max }} 次<template v-if="view.planned.catchups.blocked">（今天不再补跑）</template></template>。
+        </p>
+        <p v-if="error" class="error-text">{{ error }}</p>
+        <div class="rule-footer">
+          <label class="switch-line"><input type="checkbox" role="switch" v-model="form.enabled"> 启用</label>
+          <button type="button" :aria-busy="busy" :disabled="busy" @click="save">保存目标</button>
+        </div>
+      </template>
+    </article>`,
+};
+
 // 调度：多条规则，可单独启停；预览接下来的运行时间，保存后立即生效
 export const SchedulesTab = {
+  components: { GoalCard },
   props: { account: Object },
   setup(props) {
     const rules = ref([]);
     const tz = ref("");
     const nextRunAt = ref(null);
+    const nextRunJitter = ref(0);
     const error = ref("");
     const busy = ref(false);
     // 上次加载或保存时的规则，用于判断是否有未保存的修改
@@ -55,6 +137,7 @@ export const SchedulesTab = {
       tz.value = data.timezone;
       if ("nextRunAt" in data) {
         nextRunAt.value = data.nextRunAt;
+        nextRunJitter.value = data.nextRunJitterMinutes || 0;
       }
     }
 
@@ -100,6 +183,7 @@ export const SchedulesTab = {
       rules,
       tz,
       nextRunAt,
+      nextRunJitter,
       error,
       busy,
       dirty,
@@ -108,6 +192,7 @@ export const SchedulesTab = {
       preview: () => submit(true),
       save: () => submit(false),
       formatShort,
+      formatNextRun,
       timezone,
       INTERVAL_HOURS,
       SCHEDULE_TYPE_LABELS,
@@ -116,10 +201,10 @@ export const SchedulesTab = {
   template: `
     <section>
       <p>
-        下次运行：<strong>{{ nextRunAt ? formatShort(nextRunAt, tz) : "未设置" }}</strong>
+        下次运行：<strong>{{ nextRunAt ? formatNextRun(nextRunAt, nextRunJitter, tz) : "未设置" }}</strong>
         <span v-if="!account.enabled" class="muted">（账号已停用，不会定时运行）</span>
       </p>
-      <p class="muted">时间按 {{ tz }} 时区解释，可在“设置”中修改。账号正在运行或排队时，到点的触发会跳过；面板停机期间错过的时间不补跑。</p>
+      <p class="muted">时间按 {{ tz }} 时区解释，可在“设置”中修改。账号正在运行或排队时，到点的触发会跳过；面板停机期间错过的时间，重启后在“补触发宽限时间”内的会补触发一次。</p>
 
       <article v-for="(rule, index) in rules" :key="rule.key" class="schedule-rule">
         <div class="grid rule-fields">
@@ -149,6 +234,10 @@ export const SchedulesTab = {
             cron 表达式（分 时 日 月 周）
             <input v-model="rule.expression" placeholder="30 6 * * 1-5">
           </label>
+          <label>
+            随机延后（0–30 分钟）
+            <input type="number" min="0" max="30" v-model.number="rule.jitterMinutes">
+          </label>
         </div>
         <div class="rule-footer">
           <label class="switch-line"><input type="checkbox" role="switch" v-model="rule.enabled"> 启用</label>
@@ -168,5 +257,7 @@ export const SchedulesTab = {
         <button type="button" :aria-busy="busy" :disabled="busy" @click="save">保存</button>
       </div>
       <p v-if="dirty" class="muted">有未保存的修改。</p>
+
+      <goal-card :account="account" />
     </section>`,
 };

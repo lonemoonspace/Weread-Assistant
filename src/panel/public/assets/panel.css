@@ -1027,8 +1027,18 @@ tr.expanded > td {
   gap: 0.5rem;
 }
 
-.schedule-rule {
+.schedule-rule,
+.goal-card {
   padding: 1rem;
+}
+
+.goal-card {
+  margin-top: 1.5rem;
+}
+
+.goal-card h3 {
+  margin-bottom: 0.5rem;
+  font-size: 1.05rem;
 }
 
 .rule-footer {

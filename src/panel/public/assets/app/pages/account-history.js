@@ -90,7 +90,7 @@ export const HistoryTab = {
             <template v-for="run in runs" :key="run.id">
               <tr>
                 <td data-label="开始时间">{{ formatShort(run.startedAt || run.queuedAt, tz()) }}<br><small class="muted">{{ durationBetween(run.startedAt, run.endedAt) }}</small></td>
-                <td data-label="触发">{{ TRIGGER_LABELS[run.trigger] || run.trigger }}<br><small class="muted">{{ MODE_LABELS[run.mode] }}</small></td>
+                <td data-label="触发">{{ TRIGGER_LABELS[run.trigger] || run.trigger }}<template v-if="run.attempt > 1">（第 {{ run.attempt }} 次）</template><br><small class="muted">{{ MODE_LABELS[run.mode] }}</small></td>
                 <td data-label="结果"><status-badge :status="run.status" /><br><small v-if="run.error" class="error-text">{{ run.error }}</small></td>
                 <td data-label="阅读">{{ run.minutes }} 分钟<br><small v-if="run.book" class="muted">《{{ run.book }}》</small></td>
                 <td class="actions">

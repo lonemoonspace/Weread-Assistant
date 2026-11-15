@@ -1,7 +1,7 @@
 import { computed } from "../../vendor/vue.esm-browser.prod.js";
 import { QrLogin, RunButtons, StatusBadge } from "../components/common.js";
 import { SeleniumStatus } from "../components/selenium-status.js";
-import { MODE_LABELS, STATUS_LABELS, TRIGGER_LABELS, dateInZone, formatShort } from "../format.js";
+import { MODE_LABELS, STATUS_LABELS, TRIGGER_LABELS, dateInZone, formatNextRun, formatPlanned, formatShort } from "../format.js";
 import { state, timezone } from "../store.js";
 
 const AccountCard = {
@@ -24,19 +24,27 @@ const AccountCard = {
     });
     // 今天还没打卡，但正在运行或今天还有待运行的调度时显示中性的“待运行”，不显示红色的“未打卡”
     const pendingToday = computed(() => {
-      if (run.value) {
+      if (run.value || (props.account.planned && props.account.planned.pending.length > 0)) {
         return true;
       }
       const next = props.account.enabled && props.account.nextRunAt;
       return Boolean(next) && dateInZone(next, timezone()) === dateInZone(new Date().toISOString(), timezone());
     });
+    // 已启用的每日目标
+    const goal = computed(() => (props.account.goal && props.account.goal.enabled ? props.account.goal : null));
+    // 计划器中最早的待办（重试、随机延后的定时运行）
+    const planned = computed(() => (props.account.planned && props.account.planned.pending[0]) || null);
     return {
       run,
       avatarLetter,
       avatarClass,
       pendingToday,
+      goal,
+      planned,
       tz: computed(timezone),
       formatShort,
+      formatNextRun,
+      formatPlanned,
       STATUS_LABELS,
     };
   },
@@ -68,12 +76,13 @@ const AccountCard = {
         <progress :value="run.minutes" :max="run.plannedMinutes"></progress>
       </div>
       <p>
-        今天 <strong>{{ account.today.minutes }}</strong> 分钟
+        今天 <strong>{{ account.today.minutes }}</strong><template v-if="goal">/{{ goal.minutes }}</template> 分钟<span v-if="goal" class="muted">，{{ goal.checkAt }} 检查</span>
         <span v-if="account.today.checkedIn" class="badge status-success">已打卡</span>
         <span v-else-if="pendingToday" class="badge status-stopped">待运行</span>
         <span v-else class="badge status-failed">未打卡</span>
       </p>
-      <p class="muted">下次运行：{{ account.nextRunAt ? formatShort(account.nextRunAt, tz) : "未设置调度" }}</p>
+      <p class="muted">下次运行：{{ account.nextRunAt ? formatNextRun(account.nextRunAt, account.nextRunJitterMinutes, tz) : "未设置调度" }}</p>
+      <p v-if="planned" class="muted">待办：{{ formatPlanned(planned, tz) }}</p>
       <footer>
         <run-buttons :account="account" />
       </footer>
