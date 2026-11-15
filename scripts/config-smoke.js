@@ -177,6 +177,51 @@ const scenarios = [
     assert.strictEqual(fs.readFileSync(path.join(dataDir, "panel.json"), "utf8"), panelJson, "按账号运行时只读取 panel.json");
     fs.rmSync(dataDir, { recursive: true, force: true });
   }],
+
+  ["CLI：export 只读导出配置备份；包含密钥时从文件读取备份密码并加密；参数不对时报错", async () => {
+    const { openBackup } = require(path.resolve(__dirname, "..", "src", "panel", "backup"));
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "config-smoke-export-"));
+    try {
+      assert.match(runCli(["export", "--out", path.join(dataDir, "x.json")], { PANEL_DATA_DIR: dataDir }).stderr, /面板数据不存在/);
+      const store = createStore(dataDir);
+      await store.update((data) => {
+        data.defaults.barkKey = "bark-secret-123";
+        data.accounts.push({ id: "me", name: "小明", enabled: true, createdAt: new Date().toISOString(), overrides: { speed: "fast" } });
+      });
+      const panelJson = fs.readFileSync(path.join(dataDir, "panel.json"), "utf8");
+
+      const out = path.join(dataDir, "backup.json");
+      const plain = runCli(["export", "--out", out], { PANEL_DATA_DIR: dataDir });
+      assert.strictEqual(plain.status, 0, plain.stderr);
+      assert.match(plain.stderr, /已导出配置备份：.*backup\.json（1 个账号，不含密钥，不含登录状态）/);
+      assert.strictEqual(fs.statSync(out).mode & 0o777, 0o600);
+      const text = fs.readFileSync(out, "utf8");
+      assert.ok(!text.includes("bark-secret-123"));
+      assert.strictEqual(JSON.parse(text).accounts[0].overrides.speed, "fast");
+
+      const stdout = runCli(["export", "--out", "-"], { PANEL_DATA_DIR: dataDir });
+      assert.strictEqual(JSON.parse(stdout.stdout).format, "weread-assistant-backup");
+
+      const noPass = runCli(["export", "--out", out, "--include-secrets"], { PANEL_DATA_DIR: dataDir });
+      assert.strictEqual(noPass.status, 1);
+      assert.match(noPass.stderr, /--passphrase-file/);
+      const passFile = path.join(dataDir, "pass.txt");
+      fs.writeFileSync(passFile, "backup-pass-1\n");
+      const sealedOut = path.join(dataDir, "sealed.json");
+      const sealed = runCli(["export", "--out", sealedOut, "--include-secrets", "--passphrase-file", passFile], { PANEL_DATA_DIR: dataDir });
+      assert.strictEqual(sealed.status, 0, sealed.stderr);
+      const sealedText = fs.readFileSync(sealedOut, "utf8");
+      assert.ok(!sealedText.includes("bark-secret-123"));
+      const opened = await openBackup(JSON.parse(sealedText), "backup-pass-1");
+      assert.strictEqual(opened.defaults.barkKey, "bark-secret-123", "密码文件末尾的换行不算密码");
+
+      assert.match(runCli(["export"], { PANEL_DATA_DIR: dataDir }).stderr, /需要指定输出文件/);
+      assert.match(runCli(["export", "--out", out, "--bogus"], { PANEL_DATA_DIR: dataDir }).stderr, /Unexpected arguments for export: --bogus/);
+      assert.strictEqual(fs.readFileSync(path.join(dataDir, "panel.json"), "utf8"), panelJson, "导出时只读取 panel.json");
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  }],
 ];
 
 (async () => {

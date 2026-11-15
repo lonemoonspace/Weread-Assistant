@@ -14,6 +14,10 @@ Usage:
   node src/cli.js [panel]                  Start the web panel (default command).
   node src/cli.js run --account <id>       Run one reading session for a panel account, using its saved settings.
                                            Add --login-only to only log in (scan the QR code if needed) and save cookies.
+  node src/cli.js export --out <file>      Export the panel configuration (settings, accounts, schedules) as a backup file.
+                                           Add --include-secrets / --include-cookies to also export notification keys /
+                                           login cookies, encrypted with the passphrase read from --passphrase-file <file>.
+                                           Reads the data directory only; works while the panel is running.
   node src/cli.js help                     Show this help text.
 
 Reading settings, notifications and schedules are configured in the panel.
@@ -101,6 +105,54 @@ function configFromPanelAccount(accountId) {
   return resolveAccountConfig(data, account, dataDir);
 }
 
+function parseExportArgs(args) {
+  const parsed = { out: "", includeSecrets: false, includeCookies: false, passphraseFile: "" };
+  for (let i = 0; i < args.length; i += 1) {
+    const value = args[i + 1];
+    if (args[i] === "--include-secrets") {
+      parsed.includeSecrets = true;
+    } else if (args[i] === "--include-cookies") {
+      parsed.includeCookies = true;
+    } else if ((args[i] === "--out" || args[i] === "--passphrase-file") && value && (value === "-" || !value.startsWith("-"))) {
+      parsed[args[i] === "--out" ? "out" : "passphraseFile"] = value;
+      i += 1;
+    } else {
+      throw new Error(`Unexpected arguments for export: ${args.slice(i).join(" ")}`);
+    }
+  }
+  if (!parsed.out) {
+    throw new Error("export 需要指定输出文件：node src/cli.js export --out <文件>（- 表示输出到标准输出）");
+  }
+  if ((parsed.includeSecrets || parsed.includeCookies) && !parsed.passphraseFile) {
+    throw new Error("包含密钥或登录状态时需要用 --passphrase-file <文件> 指定备份密码（密码不放在命令行参数中）");
+  }
+  return parsed;
+}
+
+// 导出配置备份：只读打开面板数据，面板运行中也可以执行；导入只能在面板中进行
+async function exportCommand(args) {
+  const options = parseExportArgs(args);
+  const dataDir = path.resolve(panelDataDirFromEnv(process.env));
+  if (!fs.existsSync(path.join(dataDir, "panel.json"))) {
+    throw new Error(`面板数据不存在：${path.join(dataDir, "panel.json")}（或设置 PANEL_DATA_DIR）`);
+  }
+  const { createStore } = require("./panel/store");
+  const { backupFileName, buildBackup } = require("./panel/backup");
+  const { writeFileAtomic } = require("./shared/files");
+  // 只去掉末尾的换行：密码文件通常以换行结尾
+  const passphrase = options.passphraseFile ? fs.readFileSync(options.passphraseFile, "utf8").replace(/\r?\n$/, "") : "";
+  const data = createStore(dataDir, { readOnly: true }).get();
+  const backup = await buildBackup(data, { dataDir, includeSecrets: options.includeSecrets, includeCookies: options.includeCookies, passphrase });
+  const text = `${JSON.stringify(backup, null, 2)}\n`;
+  if (options.out === "-") {
+    process.stdout.write(text);
+    return;
+  }
+  const out = fs.existsSync(options.out) && fs.statSync(options.out).isDirectory() ? path.join(options.out, backupFileName()) : options.out;
+  writeFileAtomic(out, text, { mode: 0o600 });
+  console.error(`已导出配置备份：${out}（${data.accounts.length} 个账号，${backup.secretsIncluded ? "含" : "不含"}密钥，${backup.cookiesIncluded ? "含" : "不含"}登录状态）`);
+}
+
 async function main(argv) {
   const [command, ...rest] = argv;
 
@@ -111,6 +163,15 @@ async function main(argv) {
 
   if (!command || command === "panel") {
     await startPanelCommand(rest);
+    return;
+  }
+
+  if (command === "export") {
+    if (rest.includes("-h") || rest.includes("--help")) {
+      showHelp();
+      return;
+    }
+    await exportCommand(rest);
     return;
   }
 

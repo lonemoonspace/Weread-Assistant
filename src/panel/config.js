@@ -73,6 +73,15 @@ function maskValue(field, value) {
   return value;
 }
 
+// 是否为需要保护的值：密钥类配置项，或带密码的 Selenium 地址。导出备份时这些值只放进加密部分
+function isSensitiveValue(key, value) {
+  const field = FIELD_BY_KEY.get(key);
+  if (!field || !value) {
+    return false;
+  }
+  return Boolean(field.secret) || (URL_WITH_PASSWORD_KEYS.has(key) && Boolean(splitUrlPassword(String(value))));
+}
+
 function maskValues(values) {
   const masked = {};
   for (const [key, value] of Object.entries(values)) {
@@ -188,6 +197,7 @@ module.exports = {
   ACCOUNT_ID_PATTERN,
   accountDataDir,
   applyConfigPatch,
+  isSensitiveValue,
   maskValues,
   publicEffectiveConfig,
   publicSchema,
