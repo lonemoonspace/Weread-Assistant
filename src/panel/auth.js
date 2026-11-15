@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const { promisify } = require("util");
+const { readSessionFile, writeSessionFile } = require("./session-file");
 
 const scrypt = promisify(crypto.scrypt);
 
@@ -11,6 +12,10 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 // 会话按访问滑动延期；cookie 最多每小时重新下发一次
 const COOKIE_REFRESH_MS = 60 * 60 * 1000;
+// 新建会话后合并这段时间内的多次变化再写入 sessions.json（会话结束时立即写入）
+const SESSION_WRITE_DELAY_MS = 1000;
+// 续期只在过期时间比文件中的值推后超过这个时长时才写入，避免每个请求都写磁盘（树莓派的 SD 卡寿命）
+const SESSION_RENEW_WRITE_MS = 60 * 60 * 1000;
 const MAX_TRUSTED_IPS = 100;
 // 添加、删除 passkey 等敏感操作要求会话在这段时间内登录或二次验证过，被盗用的会话不能给自己添加 passkey
 const REAUTH_WINDOW_MS = 5 * 60 * 1000;
@@ -100,9 +105,18 @@ function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
+// sessionFile：会话持久化文件的路径（sessions.json），为空时会话只在内存中；timers 供测试替换
+function createAuth({ store, envPassword = "", limits = {}, now = Date.now, sessionFile = "", timers = { setTimeout, clearTimeout } }) {
   const cfg = { ...DEFAULT_LIMITS, ...limits };
   const sessions = new Map();
+  // 会话持久化：saved 为上次读到的文件内容；persisted 为每个会话写入文件时的过期时间
+  let saved = null;
+  let salt = "";
+  let envFingerprint = "";
+  let persistEnabled = Boolean(sessionFile);
+  let writeTimer = null;
+  let urgentWrite = false;
+  const persisted = new Map();
   // 令牌哈希 → 会话结束时的回调；供实时推送在退出登录、修改密码时立即断开
   const sessionWatchers = new Map();
   const attempts = new Map();
@@ -120,8 +134,79 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
     return envPasswordHash || store.get().auth.passwordHash;
   }
 
+  // 当前面板密码的指纹：密码在停机期间改了（改了 PANEL_PASSWORD、从备份恢复了 panel.json）时与文件中的不同。
+  // 密码来自环境变量时每次启动的哈希不同（随机盐），改为用 scrypt 与文件中的盐计算，同样不能据此快速反推密码
+  function passwordFingerprint() {
+    if (envPassword) {
+      return envFingerprint;
+    }
+    return crypto.createHash("sha256").update(`${salt}:${currentHash()}`).digest("hex").slice(0, 32);
+  }
+
+  function scheduleWrite() {
+    if (!persistEnabled || writeTimer) {
+      return;
+    }
+    writeTimer = timers.setTimeout(() => {
+      writeTimer = null;
+      writeSessions();
+    }, SESSION_WRITE_DELAY_MS);
+    if (writeTimer && typeof writeTimer.unref === "function") {
+      writeTimer.unref();
+    }
+  }
+
+  // 会话结束（退出、被撤销）后立即写入：不能因为面板恰好在这 1 秒内崩溃而让已退出的会话在重启后复活。
+  // 同一轮中结束多个会话（退出其他设备、修改密码）只写一次
+  function writeSoon() {
+    if (!persistEnabled || urgentWrite) {
+      return;
+    }
+    urgentWrite = true;
+    queueMicrotask(() => {
+      urgentWrite = false;
+      if (writeTimer) {
+        timers.clearTimeout(writeTimer);
+        writeTimer = null;
+      }
+      writeSessions();
+    });
+  }
+
+  // 把未过期的会话写入文件；写入失败时改为只在内存中保存会话（不影响登录）
+  function writeSessions() {
+    if (!persistEnabled) {
+      return;
+    }
+    const t = now();
+    const list = [];
+    persisted.clear();
+    for (const [key, session] of sessions) {
+      if (session.expiresAt <= t) {
+        continue;
+      }
+      list.push({
+        key,
+        createdAt: session.createdAt,
+        expiresAt: session.expiresAt,
+        cookieSetAt: session.cookieSetAt,
+        method: session.method,
+        credentialId: session.credentialId,
+      });
+      persisted.set(key, session.expiresAt);
+    }
+    try {
+      writeSessionFile(sessionFile, { salt, fingerprint: passwordFingerprint(), sessions: list });
+    } catch (e) {
+      persistEnabled = false;
+      console.warn(`保存会话失败，之后会话只保存在内存中，面板重启后需要重新登录：${e.message}`);
+    }
+  }
+
   function endSession(key) {
-    sessions.delete(key);
+    if (sessions.delete(key)) {
+      writeSoon();
+    }
     const watchers = sessionWatchers.get(key);
     if (!watchers) {
       return;
@@ -147,6 +232,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
         endSession(key);
       }
     }
+    scheduleWrite();
     sessions.set(hashToken(token), {
       expiresAt: t + SESSION_TTL_MS,
       cookieSetAt: t,
@@ -315,6 +401,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
           );
         }
         envPasswordHash = await hashPassword(envPassword);
+        await prepareSessionFile();
         return "";
       }
       const storedHash = store.get().auth.passwordHash;
@@ -325,6 +412,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
               "或删除 panel.json 中的 passwordHash 后重新启动（会生成新的初始密码），账号与设置不受影响"
           );
         }
+        await prepareSessionFile();
         return "";
       }
       const generated = generatePassword();
@@ -332,7 +420,71 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
       await store.update((data) => {
         data.auth.passwordHash = passwordHash;
       });
+      await prepareSessionFile();
       return generated;
+    },
+
+    // 恢复上次保存的会话（init 之后调用）。不恢复：已过期的、所用 passkey 已删除的、
+    // 密码在停机期间变了或密码登录已关闭时用密码登录的。恢复的会话需要重新验证才能进行敏感操作
+    restoreSessions({ passkeyIds = new Set(), passwordLoginActive = true } = {}) {
+      if (!saved) {
+        return { restored: 0, dropped: 0 };
+      }
+      const t = now();
+      const samePassword = Boolean(saved.fingerprint) && saved.fingerprint === passwordFingerprint();
+      let restored = 0;
+      let dropped = 0;
+      for (const item of saved.sessions) {
+        const expiresAt = Math.min(item.expiresAt, item.createdAt + SESSION_MAX_AGE_MS);
+        const keep =
+          expiresAt > t &&
+          (item.method === "passkey" ? passkeyIds.has(item.credentialId) : samePassword && passwordLoginActive);
+        if (!keep) {
+          dropped += 1;
+          continue;
+        }
+        sessions.set(item.key, {
+          expiresAt,
+          cookieSetAt: item.cookieSetAt,
+          createdAt: item.createdAt,
+          method: item.method,
+          credentialId: item.credentialId,
+          verifiedAt: 0,
+          verifiedBy: "",
+        });
+        persisted.set(item.key, expiresAt);
+        restored += 1;
+      }
+      saved = null;
+      // 有会话被丢弃或密码指纹变了时立即改写文件
+      if (dropped > 0 || !samePassword) {
+        writeSessions();
+      }
+      if (restored > 0 || dropped > 0) {
+        console.info(`已恢复 ${restored} 个登录会话${dropped > 0 ? `，丢弃了 ${dropped} 个已过期或已失效的` : ""}`);
+      }
+      return { restored, dropped };
+    },
+
+    // 结束当前会话以外的所有会话（“退出其他设备”）。返回结束的数量
+    endOtherSessions(keepToken) {
+      return endSessions(() => true, keepToken);
+    },
+
+    // 当前会话以外仍然有效的会话数
+    otherSessionCount(token) {
+      const keep = token ? hashToken(token) : "";
+      const t = now();
+      return [...sessions].filter(([key, session]) => key !== keep && session.expiresAt > t).length;
+    },
+
+    // 面板停止时写入还没有保存的会话变化
+    close() {
+      if (writeTimer) {
+        timers.clearTimeout(writeTimer);
+        writeTimer = null;
+        writeSessions();
+      }
     },
 
     // 返回 { ok: true, token } / { ok: false, locked: true, retryAfterMs } / { ok: false, retryAfterMs }
@@ -414,6 +566,9 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
         return null;
       }
       session.expiresAt = Math.min(t + SESSION_TTL_MS, session.createdAt + SESSION_MAX_AGE_MS);
+      if (session.expiresAt - (persisted.get(key) || 0) > SESSION_RENEW_WRITE_MS) {
+        scheduleWrite();
+      }
       const refreshCookie = t - session.cookieSetAt >= COOKIE_REFRESH_MS;
       if (refreshCookie) {
         session.cookieSetAt = t;
@@ -468,6 +623,19 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now }) {
       return run;
     },
   };
+
+  // 读取会话文件并准备好盐与环境变量密码的指纹；init 中调用
+  async function prepareSessionFile() {
+    if (!sessionFile) {
+      return;
+    }
+    saved = readSessionFile(sessionFile);
+    salt = saved ? saved.salt : crypto.randomBytes(16).toString("base64url");
+    if (envPassword) {
+      const derived = await scrypt(envPassword, `weread-assistant-sessions:${salt}`, 32, { ...SCRYPT_PARAMS, maxmem: SCRYPT_MAXMEM });
+      envFingerprint = derived.toString("hex").slice(0, 32);
+    }
+  }
 
   async function applyPasswordChange(ip, currentPassword, nextPassword) {
     if (envPassword) {

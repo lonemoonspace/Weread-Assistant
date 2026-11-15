@@ -117,6 +117,7 @@ function authRoutes(ctx) {
       minPasswordLength: MIN_PASSWORD_LENGTH,
       passkey: passkeyView(),
       passwordLogin: passwordLogin(),
+      otherSessions: auth.otherSessionCount(req.sessionToken),
       ...auth.sessionInfo(req.sessionToken),
     });
   });
@@ -203,6 +204,13 @@ function authRoutes(ctx) {
       console.info(`已关闭密码登录${ended > 0 ? `，结束了用密码登录的 ${ended} 个会话` : ""}${state.forced ? "（PANEL_FORCE_PASSWORD_LOGIN 生效期间仍可用密码登录）" : ""}`);
     }
     res.json({ passwordLogin: state });
+  });
+
+  // 退出其他设备：结束当前会话以外的所有会话。会话跨重启保留，不能再靠重启面板让其他设备退出
+  router.post("/auth/logout-others", recentAuth, (req, res) => {
+    const ended = auth.endOtherSessions(req.sessionToken);
+    console.info(`已退出其他设备，结束了 ${ended} 个会话`);
+    res.json({ ended });
   });
 
   router.post("/auth/logout", (req, res) => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 面板 smoke 测试：在本机启动面板，用 HTTP 请求验证鉴权、会话、限速、反向代理、安全响应头、
+ * 面板 smoke 测试：在本机启动面板，用 HTTP 请求验证鉴权、会话（含跨重启保留）、限速、反向代理、安全响应头、
  * passkey（软件认证器 scripts/fixtures/soft-authenticator.js）、配置与账号，以及运行队列（排队、成功、失败、停止、强制结束、实时推送）。
  * 运行队列使用桩子进程 scripts/fixtures/stub-worker.js，不需要浏览器与 Selenium。
  * 每组场景在同目录下的一个文件中，各场景自己启动面板、准备数据，互不依赖。
@@ -9,7 +9,7 @@
 
 const { createSuite } = require("./helpers");
 
-const GROUPS = ["auth", "security", "passkeys", "settings", "accounts", "startup", "runs", "planner", "schedules", "history"];
+const GROUPS = ["auth", "sessions", "security", "passkeys", "settings", "accounts", "startup", "runs", "planner", "schedules", "history"];
 
 function selectedGroups(argv) {
   const index = argv.indexOf("--only");
