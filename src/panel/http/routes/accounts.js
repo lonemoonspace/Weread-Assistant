@@ -7,7 +7,7 @@ const { accountDataDir, publicEffectiveConfig, resolveAccountConfig } = require(
 const { PanelError, badRequest, requireObject } = require("../../errors");
 const { normalizeGoal, publicGoal } = require("../../goal");
 const { lastRun } = require("../../history");
-const { accountStreak, calendar, challengeProgress, todayStats } = require("../../stats");
+const { accountStreak, calendar, challengeProgress, dropAccountDays, todayStats } = require("../../stats");
 const { nextRunInfo, normalizeSchedules, publicSchedule } = require("../../schedules");
 
 // 浏览器资料目录大小缓存的最长时间
@@ -21,7 +21,7 @@ function accountRoutes({ dataDir, store, runner, planner }) {
   const accountView = (account, timezone = store.get().settings.timezone) => ({
     ...publicAccount(account, dataDir, timezone),
     today: todayStats(dataDir, account.id, { timezone }),
-    streak: accountStreak(dataDir, account.id, { timezone }),
+    streak: accountStreak(dataDir, account.id, { timezone, lazy: true }),
     lastRun: lastRun(dataDir, account.id),
     planned: plannedView(account.id, timezone),
   });
@@ -124,6 +124,7 @@ function accountRoutes({ dataDir, store, runner, planner }) {
       deleteData: body.deleteData === true,
       isBusy: (id) => runner.isActive(id),
     });
+    dropAccountDays(dataDir, req.params.id);
     console.info("删除账号:", req.params.id, body.deleteData === true ? "（同时删除数据）" : "");
     res.status(204).end();
   });
