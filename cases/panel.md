@@ -4,7 +4,7 @@
 
 | 场景 | 前置条件 / 输入 | 预期结果 |
 | --- | --- | --- |
-| smoke 自查 | 执行 `npm run test:panel` | 87 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
+| smoke 自查 | 执行 `npm run test:panel` | 90 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
 | 首次启动生成密码 | 空数据目录、未设置 `PANEL_PASSWORD` | 生成 16 位密码；`panel.json` 只保存 scrypt 哈希且权限为 0600；再次启动不再生成，原密码可登录 |
 | 未登录访问 | 不带会话 | `healthz` 返回 `{"status":"ok"}`；`/` 302 到 `login`；登录页与静态资源可访问；`api/auth/session` 返回 401 |
 | 登录与退出 | 设置 `PANEL_PASSWORD` | 错误密码 401；正确密码 204，`Set-Cookie` 带 `HttpOnly`、`SameSite=Strict`、`Path=/`，HTTP 下不带 `Secure`；登录后可访问首页；退出后会话失效 |
@@ -20,6 +20,9 @@
 | 子路径部署 | `PANEL_BASE_PATH=/weread/` | `/weread?x=1` 301 到 `/weread/?x=1`；`/weread/healthz` 200、`/healthz` 404；cookie `Path=/weread/` |
 | 修改密码 | 两个会话中的一个修改密码 | 当前密码错误、新密码过短时拒绝；成功后两个旧会话都失效、新会话可用，旧密码不能登录；密码来自环境变量时返回 409 |
 | 并发修改密码 | 两个会话同时用同一个当前密码修改为不同的新密码 | 只有一个返回 204，另一个返回 400 `wrong_password`；成功者的新会话保持有效，只有成功者的新密码能登录 |
+| 会话跨重启保留 | 登录后退出其他设备，停止面板，用同一数据目录重新启动；用原 cookie 访问 | `sessions.json` 权限 0600，只有一个会话，键为令牌的 SHA-256，字段只有 `key`、`createdAt`、`expiresAt`、`cookieSetAt`、`method`、`credentialId`，不含令牌本身；重启后原 cookie 有效，`verifiedUntil` 为 null；退出其他设备返回 403 `reauth_required`，用密码二次验证后 200 |
+| 不恢复的会话 | 把文件中的过期时间改到过去；改用另一个 `PANEL_PASSWORD` 重启；停机时把 `panel.json` 的密码哈希换成另一个密码的；用 passkey 登录后停机时删除 `panel.json` 中的 passkey；把文件写成 `{oops` | 过期的、密码变了的、passkey 已删除的会话重启后 401，丢弃后文件立即改写；密码没变时恢复；passkey 删除时用密码登录的会话仍有效；文件损坏时照常启动、旧 cookie 401、可以重新登录，停止后文件恢复为完好的 |
+| 退出其他设备 | 两个会话；其中一个查看会话信息、退出其他设备；再重启面板；不带 `X-WA-Request` 请求 | 会话信息 `otherSessions` 为 1；返回 `{ ended: 1 }`，另一个会话立即 401，`otherSessions` 变为 0；重启后被退出的会话仍为 401、当前会话有效；缺少请求头 403 |
 | passkey 是否可用 | `PANEL_PUBLIC_URL` 依次为空、`http://example.com/`、`https://192.168.1.2:26868/`、`https://[::1]/`、`http://localhost:26868/`、`https://example.com:8443/weread/`、`https://example.com.:8443/`（域名末尾带点）；另以 `https://example.com./` 启动 | 前四种 `api/auth/methods` 与会话中 `passkey.available` 为 false，申请参数 409 `passkey_unavailable`；后三种可用，`origin` 分别为 `http://localhost:26868`、`https://example.com:8443` 与 `https://example.com:8443`（去掉末尾的点）；添加参数的 RP ID 为 `example.com`（带点的地址同样如此），要求可发现凭据与用户验证，attestation 为 none，算法为 -8、-7、-257；`purpose` 非法 400，缺少 `X-WA-Request` 403 |
 | passkey 添加与登录 | 用软件认证器（`scripts/fixtures/soft-authenticator.js`）添加名为“我的手机”的 passkey 后登录；重复添加；不填名称添加第二个；改名，名称含换行、`\u0000`、`\u0085`、`\u2028`、`\u202E`、`\u2066` 或制表符 | 列表有名称、`usable`、`backedUp`，不返回公钥；登录 204 并下发 `HttpOnly` cookie，会话 `method` 为 `passkey`；`panel.json` 只有 ID、公钥、计数、传输方式、是否备份、RP ID、名称与时间，计数为 1；重复添加时参数排除已有的，强行提交 409 `passkey_exists`；不填名称时为“passkey 日期”；改名去掉首尾空白，空名称、超过 64 个字符或含这些字符时 400（添加与改名都是），emoji 可以；不存在 404；未登录 401 |
 | passkey 校验 | 登录时篡改 origin（含端口不同）、RP ID、类型、去掉用户验证标志、改签名，使用未登记的认证器，计数不增或回退，重放 challenge，用二次验证或添加的 challenge 登录，请求体格式不对；添加时篡改 origin、RP ID、去掉用户验证、用登录的 challenge | 登录都返回 401 `passkey_failed` 且不下发 cookie；计数增加时成功；添加都返回 400 `passkey_failed` 且不保存 |

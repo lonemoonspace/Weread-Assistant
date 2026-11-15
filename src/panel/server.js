@@ -6,7 +6,7 @@ const { createAuth } = require("./auth");
 const { PanelError } = require("./errors");
 const { cleanupRuns } = require("./history");
 const { CSRF_HEADER, SESSION_COOKIE, createSessionCookies, csrfGuard, securityHeaders } = require("./http/security");
-const { identifySession, requireSession } = require("./http/session");
+const { identifySession, passwordLoginState, requireSession } = require("./http/session");
 const { accountRoutes } = require("./http/routes/accounts");
 const { authRoutes, publicAuthRoutes } = require("./http/routes/auth");
 const { eventRoutes } = require("./http/routes/events");
@@ -115,6 +115,7 @@ async function startPanel(options) {
   let scheduler;
   let planner;
   let cleanupTimer;
+  let auth;
   try {
     const store = createStore(path.resolve(options.dataDir), {
       seedDefaults: options.seleniumUrl ? { seleniumUrl: options.seleniumUrl } : {},
@@ -123,11 +124,27 @@ async function startPanel(options) {
       await migrateLegacySeleniumUrl(store);
     }
     await dropProfileName(store);
-    const auth = createAuth({ store, envPassword: options.password, limits: options.limits });
+    // 会话保存在 sessions.json 中，面板重启后已登录的设备不必重新登录
+    auth = createAuth({
+      store,
+      envPassword: options.password,
+      limits: options.limits,
+      sessionFile: path.join(options.dataDir, "sessions.json"),
+    });
     const generatedPassword = await auth.init();
     const passkeys = createPasskeys({ store, relyingParty: passkeyRelyingParty(options.publicUrl) });
     warnUnusablePasskeys(store, passkeys);
     warnPasswordLogin(store, passkeys, options.forcePasswordLogin);
+    auth.restoreSessions({
+      // 只恢复当前域名下仍可用的 passkey 的会话，与登录时一致
+      passkeyIds: new Set(
+        store
+          .get()
+          .auth.passkeys.filter((passkey) => passkeys.isUsable(passkey))
+          .map((passkey) => passkey.id)
+      ),
+      passwordLoginActive: passwordLoginState(store, passkeys, options.forcePasswordLogin).active,
+    });
     restrictRunDirs(options.dataDir);
     const interrupted = markInterruptedRuns(options.dataDir);
     cleanupRunTempDirs(options.dataDir);
@@ -202,6 +219,7 @@ async function startPanel(options) {
       planner.close();
       server.closeAllConnections();
       await serverClosed;
+      auth.close();
       lock.release();
     };
 
@@ -224,6 +242,9 @@ async function startPanel(options) {
     }
     if (planner) {
       planner.close();
+    }
+    if (auth) {
+      auth.close();
     }
     lock.release();
     throw error;
