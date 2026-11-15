@@ -74,6 +74,12 @@ module.exports = async function settingsScenarios({ scenario, startAuthed }) {
       [{ defaults: { duration: "9".repeat(400) } }, /阅读时长（分钟） 超出允许的范围/],
       [{ defaults: { selection: 9 } }, /选书方式 只能是/],
       [{ defaults: { dataDir: "/etc" } }, /未知的配置项：dataDir/],
+      [{ defaults: { webhookUrl: "ftp://hook" } }, /Webhook 地址必须是以 http:\/\/ 或 https:\/\/ 开头的地址/],
+      [{ defaults: { webhookFormat: "slack" } }, /Webhook 格式 只能是 json、wecom、feishu、dingtalk/],
+      [{ defaults: { webhookHeader: "Authorization Bearer x" } }, /Webhook 附加请求头：格式为“名称: 值”/],
+      [{ defaults: { telegramBotToken: "not-a-token" } }, /Telegram 机器人令牌：形如/],
+      [{ defaults: { telegramChatId: "me" } }, /Telegram 会话 ID：只能是数字 ID/],
+      [{ defaults: { telegramApiBase: "api.telegram.org" } }, /Telegram 接口地址必须是/],
     ];
     for (const [body, pattern] of invalid) {
       const res = await panel.call("PATCH", "api/settings", body);
@@ -454,7 +460,7 @@ module.exports = async function settingsScenarios({ scenario, startAuthed }) {
     }
   });
 
-  await scenario("测试通知：按账号或全局默认配置向已配置的渠道发送，不受事件开关影响", async () => {
+  await scenario("测试通知：按账号或全局默认配置向已配置的渠道发送，不受事件开关影响；失败带原因，账号中关闭的渠道不发送", async () => {
     const requests = [];
     const ntfy = http.createServer((req, res) => {
       let body = "";
@@ -478,15 +484,29 @@ module.exports = async function settingsScenarios({ scenario, startAuthed }) {
         overrides: { ntfyTopic: "smoke_topic", ntfyServer: server, notifyOnDone: false, notifyOnFailure: false, emailEnabled: true },
       });
       const result = await panel.call("POST", "api/notifications/test", { accountId: "me" });
-      assert.deepStrictEqual(result.json.results, [{ channel: "ntfy", ok: true }, { channel: "email", ok: false }], "邮件缺少 SMTP 配置时为失败");
+      assert.deepStrictEqual(
+        result.json.results,
+        [
+          { channel: "ntfy", ok: true, error: "" },
+          { channel: "email", ok: false, error: "缺少配置：SMTP 服务器、SMTP 用户名、SMTP 密码、收件人" },
+        ],
+        "邮件缺少 SMTP 配置时为失败并说明原因"
+      );
       assert.strictEqual(requests.length, 1);
       assert.strictEqual(requests[0].title, "WeReadAssistant · 小明 · 测试通知");
       assert.match(requests[0].message, /测试通知/);
 
       await panel.call("PATCH", "api/settings", { defaults: { ntfyTopic: "global_topic", ntfyServer: server } });
-      assert.deepStrictEqual((await panel.call("POST", "api/notifications/test")).json.results, [{ channel: "ntfy", ok: true }]);
+      assert.deepStrictEqual((await panel.call("POST", "api/notifications/test")).json.results, [{ channel: "ntfy", ok: true, error: "" }]);
       assert.strictEqual(requests[1].title, "WeReadAssistant · 测试通知", "全局默认配置没有账号名称");
       assert.strictEqual(requests[1].topic, "global_topic");
+
+      // 全局配置了 ntfy，账号中关闭：不发送，记为已关闭
+      await panel.call("PATCH", "api/accounts/me", { overrides: { ntfyTopic: null, ntfyServer: null, ntfyEnabled: false, emailEnabled: null } });
+      assert.deepStrictEqual((await panel.call("POST", "api/notifications/test", { accountId: "me" })).json.results, [
+        { channel: "ntfy", ok: false, error: "已在配置中关闭，未发送", disabled: true },
+      ]);
+      assert.strictEqual(requests.length, 2, "账号中关闭的渠道不发送");
 
       assert.strictEqual((await panel.call("POST", "api/notifications/test", { accountId: "nobody" })).status, 404);
       assert.strictEqual((await panel.request("api/notifications/test", { method: "POST", cookie: panel.cookie })).status, 403);

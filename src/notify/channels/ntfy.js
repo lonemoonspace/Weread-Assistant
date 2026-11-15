@@ -1,4 +1,5 @@
-const { isHttpUrl, postJson } = require("../shared/http");
+const { isHttpUrl, postJson } = require("../../shared/http");
+const { CHANNEL_TIMEOUT_MS, failure, httpFailure, success } = require("./common");
 
 // ntfy 的 JSON 发布接口（POST /）将 priority 定义为 int，字符串别名只对 X-Priority 请求头有效，
 // 写进 JSON body 会导致整个负载解析失败（400 {"code":40024,"error":"invalid request: request body must be valid JSON"}），
@@ -28,7 +29,7 @@ const NTFY_PRIORITY_ALIAS_VALUES = {
 };
 const NTFY_DEFAULT_PRIORITY = 3;
 
-function isNtfyEnabled(config) {
+function isNtfyConfigured(config) {
   return Boolean(config.ntfyTopic);
 }
 
@@ -85,21 +86,22 @@ function buildNtfyPublishUrl(server) {
   return `${base}/`;
 }
 
-async function sendNtfy(config, title, body, options = {}) {
+// 发送一条 ntfy 推送，返回 { ok, error }
+async function pushNtfy(config, title, body, options = {}) {
   if (!config.ntfyTopic) {
     console.info("ntfy 主题未配置");
-    return false;
+    return failure("没有填写 ntfy 主题");
   }
 
   // ntfy 的 topic 等价于密码，只允许字母、数字、下划线与短横线
   if (!NTFY_TOPIC_PATTERN.test(config.ntfyTopic)) {
     // 不打印主题本身：它等同于密钥
     console.error(`ntfy 主题不合法（${config.ntfyTopic.length} 个字符）：仅支持字母、数字、下划线与短横线，且不超过 64 个字符`);
-    return false;
+    return failure("ntfy 主题不合法：只能包含字母、数字、下划线与短横线，且不超过 64 个字符");
   }
   if (!isHttpUrl(buildNtfyPublishUrl(config.ntfyServer))) {
     console.error("ntfy 服务器地址无效（需以 http:// 或 https:// 开头）:", config.ntfyServer);
-    return false;
+    return failure("ntfy 服务器地址无效（需以 http:// 或 https:// 开头）");
   }
 
   const {
@@ -113,6 +115,7 @@ async function sendNtfy(config, title, body, options = {}) {
     tags = "",
     markdown = false,
     actions = [],
+    timeoutMs = CHANNEL_TIMEOUT_MS,
   } = options;
 
   const payload = {
@@ -150,21 +153,40 @@ async function sendNtfy(config, title, body, options = {}) {
   const publishUrl = buildNtfyPublishUrl(config.ntfyServer);
   console.info("发送ntfy推送:", publishUrl);
 
-  const result = await postJson(publishUrl, payload, getNtfyAuthHeaders(config));
+  const result = await postJson(publishUrl, payload, getNtfyAuthHeaders(config), timeoutMs);
   if (result.ok) {
     console.info("ntfy推送发送成功");
-    return true;
+    return success();
   }
-  if (result.error) {
-    console.error("ntfy推送请求错误:", result.error);
-  } else {
-    console.error(`ntfy推送失败: ${result.status} - ${result.body}`);
-  }
-  return false;
+  const reason = httpFailure(config, result);
+  console.error("ntfy推送失败:", reason);
+  return failure(reason);
 }
 
+// 兼容旧的调用方式：返回是否发送成功
+async function sendNtfy(config, title, body, options = {}) {
+  return (await pushNtfy(config, title, body, options)).ok;
+}
+
+const ntfyChannel = {
+  id: "ntfy",
+  label: "ntfy",
+  toggle: "ntfyEnabled",
+  isConfigured: isNtfyConfigured,
+  send: (config, message) =>
+    pushNtfy(config, message.title, message.body, {
+      subtitle: message.subtitle,
+      level: message.level,
+      sound: message.sound,
+      url: message.url,
+      actions: message.actions,
+    }),
+};
+
 module.exports = {
-  isNtfyEnabled,
+  isNtfyConfigured,
   normalizeNtfyPriority,
+  ntfyChannel,
+  pushNtfy,
   sendNtfy,
 };

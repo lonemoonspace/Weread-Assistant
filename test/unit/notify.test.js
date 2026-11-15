@@ -4,7 +4,7 @@ const http = require("http");
 const { resolveConfig } = require("../../src/config/resolve");
 const { createNotifier } = require("../../src/notify");
 const { canSendEmail, formatEmailTime, smtpTransportOptions, toMailAttachments } = require("../../src/notify/email");
-const { normalizeNtfyPriority } = require("../../src/notify/ntfy");
+const { normalizeNtfyPriority } = require("../../src/notify/channels/ntfy");
 const { postJson } = require("../../src/shared/http");
 
 // 静默运行，返回捕获的日志

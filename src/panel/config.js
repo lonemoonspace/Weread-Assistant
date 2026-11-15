@@ -150,6 +150,12 @@ function applyConfigPatch(current, patch) {
       }
       validateFormat(field, next[key]);
     }
+    if (field.pattern && !field.pattern.test(String(next[key]).trim())) {
+      throw badRequest(`${field.label}${field.patternHint ? `：${field.patternHint}` : "格式不对"}`);
+    }
+    if (field.pattern) {
+      next[key] = String(next[key]).trim();
+    }
   }
   return next;
 }
