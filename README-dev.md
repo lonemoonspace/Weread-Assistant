@@ -25,6 +25,8 @@ node src/cli.js help
 
 # 测试
 npm run check          # 自查：语法（面板页面按 ES 模块）、第三方文件校验值、页面约定
+npm run lint           # ESLint
+npm run test:unit      # 单元测试（node:test），test:unit:coverage 输出覆盖率
 npm run test:notify
 npm run test:panel     # 面板鉴权、接口、运行队列（桩子进程）与调度，不需要浏览器
 npm run test:config    # 配置解析与校验
@@ -54,8 +56,9 @@ Pull Request 上的 CI 运行以上全部检查（阅读流程与页面 smoke �
 | `src/cli.js` | 命令行入口 |
 | `src/config/` | 配置项清单（`schema.js`）与配置解析（`resolve.js`） |
 | `src/reader/` | 自动阅读流程：连接浏览器、登录、选书、阅读循环、单次运行编排，以及由面板启动的阅读子进程 `worker.js`；页面定位器集中在 `selectors.js`，见 `docs/reader.md` |
-| `src/notify/` | Bark、ntfy、邮件通知 |
-| `src/panel/` | Web 面板：服务端、鉴权、`panel.json` 存储、运行队列与页面，见 `docs/panel.md` |
+| `src/notify/` | 通知：Bark、ntfy、Webhook、Telegram（`channels/`）与邮件 |
+| `src/panel/` | Web 面板：服务端、鉴权与会话、`panel.json` 存储、运行队列、调度与计划器（重试、补跑、恢复）、统计、备份与页面，见 `docs/panel.md` |
 | `src/shared/` | 日志、HTTP、Selenium 状态、内置浏览器（`local-browser.js`）、版本号等公共工具 |
 | `scripts/` | smoke 测试与镜像构建脚本 |
+| `test/unit/` | 单元测试 |
 | `docs/`、`cases/` | 功能说明与验收用例；整体设计见 `docs/design.md` |
