@@ -229,12 +229,32 @@ describe("createPlanner", () => {
     await store.update((data) => {
       data.settings.retryCount = 0;
     });
-    quietly(() => planner.handleFinished(failedRun({ retriesLeft: 2, error: "出错了" }), { config }));
+    quietly(() => planner.handleFinished(failedRun({ error: "出错了" }), { config, retriesLeft: 2 }));
     assert.equal(planner.accountStatus("a1").pending.length, 0);
     assert.deepEqual(sent, ["运行失败：出错了"]);
     // 子进程自己发过通知（启动时没有重试次数）的不重复发送
-    quietly(() => planner.handleFinished(failedRun({ retriesLeft: 0, error: "又出错了" }), { config }));
+    quietly(() => planner.handleFinished(failedRun({ error: "又出错了" }), { config, retriesLeft: 0 }));
     assert.equal(sent.length, 1);
+  });
+
+  it("定时触发因账号忙而顺延时，记录的延后分钟数包括顺延的时间", () => {
+    const dueAt = new Date(now + 60000).toISOString();
+    fs.writeFileSync(
+      path.join(dataDir, "planner.json"),
+      JSON.stringify({ pending: [{ kind: "schedule", accountId: "a1", scheduleId: "r1", dueAt, delayedMinutes: 3 }] })
+    );
+    const planner = createPlanner({ dataDir, store, runner, clock });
+    quietly(() => planner.recover());
+    active.add("a1");
+    now += 60000;
+    quietly(() => planner.tick());
+    assert.equal(enqueued.length, 0);
+    active.clear();
+    now += 5 * 60000;
+    quietly(() => planner.tick());
+    assert.equal(enqueued.length, 1);
+    assert.equal(enqueued[0].delayedMinutes, 8);
+    planner.close();
   });
 
   it("待办写入 planner.json，重启后仍在；文件损坏时当作没有待办", () => {

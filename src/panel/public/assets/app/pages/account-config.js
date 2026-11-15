@@ -166,14 +166,15 @@ export const ConfigTab = {
       <h3>浏览器资料</h3>
       <p class="muted">使用内置浏览器并打开“保留浏览器资料”时，页面缓存、本地存储与登录状态跨运行保留，超过 300 MB 时在运行开始前清空缓存。页面反复加载失败或登录异常时可以重置。</p>
       <p v-if="profile">
-        <template v-if="profile.exists">当前占用 {{ formatBytes(profile.bytes) }}</template>
+        <template v-if="profile.exists">当前占用 {{ formatBytes(profile.bytes) }}<template v-if="profile.broken">（含重置时留下的旧资料）</template></template>
+        <template v-else-if="profile.broken">只有重置时留下的旧资料，占用 {{ formatBytes(profile.bytes) }}</template>
         <template v-else>还没有浏览器资料（第一次用内置浏览器运行时创建）</template>
       </p>
       <button
         type="button"
         class="secondary"
         :aria-busy="resettingProfile"
-        :disabled="resettingProfile || !profile || (!profile.exists && !profile.bytes)"
+        :disabled="resettingProfile || !profile || !(profile.exists || profile.broken)"
         @click="resetProfile"
       >重置浏览器资料</button>
     </section>

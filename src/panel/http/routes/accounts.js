@@ -9,6 +9,9 @@ const { normalizeGoal, publicGoal } = require("../../goal");
 const { calendar, challengeProgress, lastRun, todayStats } = require("../../history");
 const { nextRunInfo, normalizeSchedules, publicSchedule } = require("../../schedules");
 
+// 浏览器资料目录大小的缓存时间
+const PROFILE_SIZE_CACHE_MS = 60000;
+
 // 账号的增删改查、调度规则、每日目标、打卡日历与等待扫码时的二维码截图
 function accountRoutes({ dataDir, store, runner, planner }) {
   // 计划器中该账号的待办（重试、随机延后的定时运行）与今天的补跑次数
@@ -44,10 +47,21 @@ function accountRoutes({ dataDir, store, runner, planner }) {
     return normalizeSchedules(body.schedules);
   };
   const profileDirOf = (accountId) => path.join(accountDataDir(dataDir, accountId), "profile");
-  // 浏览器资料目录是否存在与占用的大小（含重置时留下的 profile.broken）
+  // 浏览器资料目录是否存在与占用的大小（含重置时留下的 profile.broken）。统计大小要遍历整个目录，
+  // 结果缓存一分钟，重置后立即失效；页面上的大小只是参考
+  const sizeCache = new Map();
+  const cachedSize = (dir) => {
+    const hit = sizeCache.get(dir);
+    if (hit && Date.now() - hit.at < PROFILE_SIZE_CACHE_MS) {
+      return hit.bytes;
+    }
+    const bytes = dirSize(dir) + dirSize(`${dir}.broken`);
+    sizeCache.set(dir, { at: Date.now(), bytes });
+    return bytes;
+  };
   const profileView = (accountId) => {
     const dir = profileDirOf(accountId);
-    return { exists: fs.existsSync(dir), bytes: dirSize(dir) + dirSize(`${dir}.broken`) };
+    return { exists: fs.existsSync(dir), broken: fs.existsSync(`${dir}.broken`), bytes: cachedSize(dir) };
   };
   const router = express.Router();
 
@@ -83,6 +97,7 @@ function accountRoutes({ dataDir, store, runner, planner }) {
     const dir = profileDirOf(req.params.id);
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(`${dir}.broken`, { recursive: true, force: true });
+    sizeCache.delete(dir);
     console.info("已重置浏览器资料:", req.params.id);
     res.json({ profile: profileView(req.params.id) });
   });
