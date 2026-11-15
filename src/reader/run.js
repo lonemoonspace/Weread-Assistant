@@ -8,7 +8,7 @@ const { openBook, readLoop } = require("./reading");
 const { formatDuration, resolveTiming } = require("./timing");
 
 const MAX_ERROR_LENGTH_IN_NOTIFICATION = 100;
-// 关闭浏览器的最长等待，短于面板停止时强制结束子进程的时限（runner.js 的 KILL_TIMEOUT_MS）
+// 关闭浏览器的最长等待，短于面板停止时强制结束子进程的时限（src/panel/runner/process.js 的 KILL_TIMEOUT_MS）
 const QUIT_TIMEOUT_MS = 10000;
 // 收到停止请求时等待后台通知的最长时间：关闭浏览器（最多 QUIT_TIMEOUT_MS）加上这段时间仍短于 KILL_TIMEOUT_MS
 const STOPPED_FLUSH_TIMEOUT_MS = 3000;
