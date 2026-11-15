@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const fs = require("fs");
 const { promisify } = require("util");
 const { readSessionFile, writeSessionFile } = require("./session-file");
 
@@ -113,7 +114,9 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now, sess
   let saved = null;
   let salt = "";
   let envFingerprint = "";
-  let persistEnabled = Boolean(sessionFile);
+  const persistEnabled = Boolean(sessionFile);
+  // 上次写入失败：之后每次会话变化与面板停止时都再试，成功后恢复正常
+  let writeFailed = false;
   let writeTimer = null;
   let urgentWrite = false;
   const persisted = new Map();
@@ -173,7 +176,8 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now, sess
     });
   }
 
-  // 把未过期的会话写入文件；写入失败时改为只在内存中保存会话（不影响登录）
+  // 把未过期的会话写入文件。写入失败（磁盘满、数据目录只读等）时不影响登录，但旧文件中可能还有已退出、
+  // 已撤销的会话，重启后会被恢复：尽量删除旧文件（代价是重启后所有设备都要重新登录），之后的会话变化与面板停止时再试
   function writeSessions() {
     if (!persistEnabled) {
       return;
@@ -192,14 +196,32 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now, sess
         cookieSetAt: session.cookieSetAt,
         method: session.method,
         credentialId: session.credentialId,
+        ...(session.keepWithoutPasswordLogin ? { keepWithoutPasswordLogin: true } : {}),
       });
       persisted.set(key, session.expiresAt);
     }
     try {
       writeSessionFile(sessionFile, { salt, fingerprint: passwordFingerprint(), sessions: list });
+      if (writeFailed) {
+        writeFailed = false;
+        console.info("会话已重新保存到文件");
+      }
     } catch (e) {
-      persistEnabled = false;
-      console.warn(`保存会话失败，之后会话只保存在内存中，面板重启后需要重新登录：${e.message}`);
+      let removed = false;
+      try {
+        fs.rmSync(sessionFile, { force: true });
+        removed = true;
+      } catch (_) {
+        // 删除也失败时只能记录
+      }
+      if (!writeFailed) {
+        console.warn(
+          removed
+            ? `保存会话失败，已删除旧的会话文件，面板重启后需要重新登录；之后会话变化时再试：${e.message}`
+            : `保存会话失败，旧的会话文件也删不掉，其中已退出的会话可能在面板重启后恢复，请检查数据目录：${e.message}`
+        );
+      }
+      writeFailed = true;
     }
   }
 
@@ -425,7 +447,8 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now, sess
     },
 
     // 恢复上次保存的会话（init 之后调用）。不恢复：已过期的、所用 passkey 已删除的、
-    // 密码在停机期间变了或密码登录已关闭时用密码登录的。恢复的会话需要重新验证才能进行敏感操作
+    // 密码在停机期间变了或密码登录已关闭时用密码登录的（关闭密码登录时保留下来的那个除外）；
+    // passkeyIds 由调用者传入当前域名下可用的 passkey。恢复的会话需要重新验证才能进行敏感操作
     restoreSessions({ passkeyIds = new Set(), passwordLoginActive = true } = {}) {
       if (!saved) {
         return { restored: 0, dropped: 0 };
@@ -438,7 +461,9 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now, sess
         const expiresAt = Math.min(item.expiresAt, item.createdAt + SESSION_MAX_AGE_MS);
         const keep =
           expiresAt > t &&
-          (item.method === "passkey" ? passkeyIds.has(item.credentialId) : samePassword && passwordLoginActive);
+          (item.method === "passkey"
+            ? passkeyIds.has(item.credentialId)
+            : samePassword && (passwordLoginActive || item.keepWithoutPasswordLogin === true));
         if (!keep) {
           dropped += 1;
           continue;
@@ -449,6 +474,7 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now, sess
           createdAt: item.createdAt,
           method: item.method,
           credentialId: item.credentialId,
+          keepWithoutPasswordLogin: item.keepWithoutPasswordLogin === true,
           verifiedAt: 0,
           verifiedBy: "",
         });
@@ -480,9 +506,11 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now, sess
 
     // 面板停止时写入还没有保存的会话变化
     close() {
-      if (writeTimer) {
-        timers.clearTimeout(writeTimer);
-        writeTimer = null;
+      if (writeTimer || writeFailed) {
+        if (writeTimer) {
+          timers.clearTimeout(writeTimer);
+          writeTimer = null;
+        }
         writeSessions();
       }
     },
@@ -548,8 +576,14 @@ function createAuth({ store, envPassword = "", limits = {}, now = Date.now, sess
       return endSessions((session) => session.method === "passkey" && session.credentialId === credentialId, keepToken);
     },
 
-    // 结束用密码登录的会话（关闭密码登录后），keepToken 对应的会话除外。返回结束的数量
+    // 结束用密码登录的会话（关闭密码登录后），keepToken 对应的会话除外。返回结束的数量。
+    // 保留下来的密码会话打上标记，面板重启后仍然恢复（否则关闭密码登录的这台设备会在重启后被登出）
     endPasswordSessions(keepToken = "") {
+      const kept = keepToken ? sessions.get(hashToken(keepToken)) : null;
+      if (kept && kept.method === "password" && !kept.keepWithoutPasswordLogin) {
+        kept.keepWithoutPasswordLogin = true;
+        writeSoon();
+      }
       return endSessions((session) => session.method === "password", keepToken);
     },
 
