@@ -13,12 +13,12 @@ const CHANNEL_TIMEOUT_MS = 10000;
 const SECRET_MASK = "••••••";
 const SECRET_KEYS = CONFIG_SCHEMA.filter((field) => field.secret).map((field) => field.key);
 
-// 把配置中的密钥值（4 个字符以上）替换为掩码：错误信息与响应体中可能带有请求地址或密钥
+// 把配置中的密钥值（4 个字符以上）替换为掩码：错误信息与响应体中可能带有请求地址或密钥。
+// 同时替换 URL 编码后的形式（密钥出现在回显的请求地址中时）。只能替换完整的值，所以要在截断之前调用
 function redact(config, text) {
   let result = String(text);
-  const secrets = SECRET_KEYS.map((key) => config[key])
-    .filter((value) => typeof value === "string" && value.length >= 4)
-    .sort((a, b) => b.length - a.length);
+  const values = SECRET_KEYS.map((key) => config[key]).filter((value) => typeof value === "string" && value.length >= 4);
+  const secrets = [...new Set(values.flatMap((value) => [value, encodeURIComponent(value)]))].sort((a, b) => b.length - a.length);
   for (const secret of secrets) {
     result = result.split(secret).join(SECRET_MASK);
   }
@@ -35,8 +35,9 @@ function httpFailure(config, result) {
   if (result.error) {
     return redact(config, `请求出错：${result.error}`);
   }
-  const body = truncate(result.body);
-  return redact(config, `HTTP ${result.status}${body ? `：${body}` : ""}`);
+  // 先脱敏再截断：密钥跨过截断位置时，截断后只剩前一段，按完整值就匹配不到了
+  const body = truncate(redact(config, result.body || ""));
+  return `HTTP ${result.status}${body ? `：${body}` : ""}`;
 }
 
 // 纯文本形式的消息：标题 · 副标题、正文；有点击地址且正文中没有时附在最后

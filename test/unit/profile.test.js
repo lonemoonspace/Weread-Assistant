@@ -71,6 +71,9 @@ describe("prepareProfile", () => {
     const wait = ["-e", "setTimeout(() => {}, 30000)"];
     const browser = spawn(fake, wait, { stdio: "ignore" });
     const other = spawn(process.execPath, wait, { stdio: "ignore" });
+    const driverPath = path.join(dir, "chromedriver");
+    fs.symlinkSync(process.execPath, driverPath);
+    const driver = spawn(driverPath, wait, { stdio: "ignore" });
     try {
       const comm = (pid) => fs.readFileSync(`/proc/${pid}/comm`, "utf8").trim();
       for (let i = 0; i < 50 && !/chrom/.test(comm(browser.pid)); i += 1) {
@@ -85,9 +88,18 @@ describe("prepareProfile", () => {
       fs.symlinkSync(`${os.hostname()}-${other.pid}`, path.join(profile, "SingletonLock"));
       quietly(() => prepareProfile(dir, 153));
       assert.equal(fs.existsSync(path.join(profile, "SingletonLock")), false, "进程不是浏览器时视为残留");
+
+      // chromedriver 进程名也含 chrom，但不是浏览器
+      for (let i = 0; i < 50 && !/driver/.test(comm(driver.pid)); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      fs.symlinkSync(`${os.hostname()}-${driver.pid}`, path.join(profile, "SingletonLock"));
+      quietly(() => prepareProfile(dir, 153));
+      assert.equal(fs.existsSync(path.join(profile, "SingletonLock")), false, "chromedriver 不算正在运行的浏览器");
     } finally {
       browser.kill();
       other.kill();
+      driver.kill();
     }
   });
 
