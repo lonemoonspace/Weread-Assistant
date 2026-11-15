@@ -19,8 +19,10 @@ const {
   RUN_TIMEOUT_MARGIN_MS,
   WORKER_PATH,
   childEnv,
+  createRunTempDir,
   deleteSeleniumSession,
   killProcessGroup,
+  removeRunTempDir,
 } = require("./process");
 const { MODE_LABELS, TRIGGER_LABELS, createRedactor, publicRun, runMeta } = require("./view");
 
@@ -194,6 +196,7 @@ function createRunner({
     // 子进程是进程组的组长，内置浏览器（chromedriver 与 Chromium）在同一进程组中。子进程被强制结束时
     // 它们不会随之退出，这里结束组内剩下的进程；正常退出时组内已没有进程
     killProcessGroup(run.child);
+    removeRunTempDir(run.tmpDir);
 
     // 删除子进程可能留在 Selenium 中的会话，避免一直占用会话槽位。正常退出时浏览器通常已经关闭（会话已不存在），
     // 但子进程关闭浏览器失败时只记录日志、仍以退出码 0 退出，所以只要建立过会话就请求删除一次
@@ -258,14 +261,16 @@ function createRunner({
 
     let child;
     try {
+      run.tmpDir = createRunTempDir(panelDataDir);
       child = fork(workerPath, [], {
         // 单独的进程组，退出后可以结束它留下的浏览器进程
         detached: true,
         stdio: ["ignore", "pipe", "pipe", "ipc"],
-        env: childEnv(),
+        env: childEnv({ TMPDIR: run.tmpDir }),
         serialization: "json",
       });
     } catch (e) {
+      removeRunTempDir(run.tmpDir);
       finish(run, "failed", `无法启动阅读子进程：${e.message}`, "crash");
       return;
     }

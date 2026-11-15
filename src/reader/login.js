@@ -278,7 +278,12 @@ async function login(driver, ctx) {
   const homeUrl = ctx.homeUrl || WEREAD_HOME_URL;
 
   await driver.get(homeUrl);
-  if (await loadCookies(driver, paths.cookies)) {
+  // 使用浏览器资料目录时先看是否已经登录（资料中保存着上次的登录状态），没有登录才注入 cookies.json：
+  // 第一次使用资料目录、或资料目录被重置后，从 cookies.json 恢复登录
+  const loggedIn = driver.usesProfile && (await waitForAnyXpath(driver, [XPATH.loginLink, XPATH.shelfLink], timing.pageWaitMs)) === 1;
+  if (loggedIn) {
+    console.info("浏览器资料中已是登录状态，不再注入 cookies");
+  } else if (await loadCookies(driver, paths.cookies)) {
     await driver.navigate().refresh(); // Refresh to apply cookies
   }
 

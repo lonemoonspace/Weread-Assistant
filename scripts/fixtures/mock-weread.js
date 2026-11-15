@@ -91,8 +91,13 @@ function homePage(name, scenario, loggedIn) {
       ...Array.from({ length: scenario.books || 0 }, (_, i) =>
         `<div class="wr_index_mini_shelf_card"><a href="${base}/reader?book=${i + 1}&ch=1">书 ${i + 1}</a></div>`),
     ].join("");
+    // 上报并累加本地存储中的访问次数：验证浏览器资料目录跨运行保留本地存储
+    const storageScript = `${reportScript(base)}
+      const visits = Number(localStorage.getItem("visits") || 0);
+      report("storage", { visits });
+      localStorage.setItem("visits", String(visits + 1));`;
     if (!scenario.shelfLoadMs) {
-      return page("微信读书", `<div class="wr_index_page_top_section_header_action_link">我的书架</div><div>${cards}</div>`, "");
+      return page("微信读书", `<div class="wr_index_page_top_section_header_action_link">我的书架</div><div>${cards}</div>`, storageScript);
     }
     // 书架加载完成前先显示 4 个不含链接的占位卡片
     const skeletons = '<div class="wr_index_mini_shelf_card">加载中</div>'.repeat(4);
@@ -121,7 +126,8 @@ function homePage(name, scenario, loggedIn) {
       const overlay = document.getElementById("overlay");
       overlay.innerHTML = "";
       if (cfg.scanOnQr === n) {
-        setTimeout(() => { document.cookie = "wr_vid=1; path=/"; location.reload(); }, cfg.scanDelayMs || 0);
+        // 与真实站点一样是带有效期的 cookie：浏览器资料目录会在重启后保留它
+        setTimeout(() => { document.cookie = "wr_vid=1; path=/; max-age=86400"; location.reload(); }, cfg.scanDelayMs || 0);
         return;
       }
       setTimeout(() => {

@@ -1,6 +1,9 @@
+const fs = require("fs");
+const path = require("path");
 const express = require("express");
+const { dirSize } = require("../../../reader/profile");
 const { createAccount, deleteAccount, findAccount, publicAccount, updateAccount } = require("../../accounts");
-const { publicEffectiveConfig, resolveAccountConfig } = require("../../config");
+const { accountDataDir, publicEffectiveConfig, resolveAccountConfig } = require("../../config");
 const { PanelError, badRequest, requireObject } = require("../../errors");
 const { normalizeGoal, publicGoal } = require("../../goal");
 const { calendar, challengeProgress, lastRun, todayStats } = require("../../history");
@@ -40,6 +43,12 @@ function accountRoutes({ dataDir, store, runner, planner }) {
     }
     return normalizeSchedules(body.schedules);
   };
+  const profileDirOf = (accountId) => path.join(accountDataDir(dataDir, accountId), "profile");
+  // 浏览器资料目录是否存在与占用的大小（含重置时留下的 profile.broken）
+  const profileView = (accountId) => {
+    const dir = profileDirOf(accountId);
+    return { exists: fs.existsSync(dir), bytes: dirSize(dir) + dirSize(`${dir}.broken`) };
+  };
   const router = express.Router();
 
   router.get("/accounts", (req, res) => {
@@ -61,7 +70,21 @@ function accountRoutes({ dataDir, store, runner, planner }) {
       account: accountView(account, data.settings.timezone),
       challengeProgress: challengeProgress(dataDir, account, { timezone: data.settings.timezone }),
       effective: publicEffectiveConfig(resolveAccountConfig(data, account, dataDir)),
+      profile: profileView(account.id),
     });
+  });
+
+  // 重置浏览器资料：删除账号的浏览器资料目录，下次运行从 cookies.json 恢复登录。账号正在运行或排队时拒绝
+  router.delete("/accounts/:id/profile", (req, res) => {
+    findAccount(store.get(), req.params.id);
+    if (runner.isActive(req.params.id)) {
+      throw new PanelError(409, "account_busy", "账号正在运行或排队，请先停止再重置浏览器资料");
+    }
+    const dir = profileDirOf(req.params.id);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(`${dir}.broken`, { recursive: true, force: true });
+    console.info("已重置浏览器资料:", req.params.id);
+    res.json({ profile: profileView(req.params.id) });
   });
 
   router.patch("/accounts/:id", async (req, res) => {

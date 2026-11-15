@@ -5,11 +5,11 @@ const { normalizeSeleniumUrl } = require("../shared/selenium");
 const { badRequest } = require("./errors");
 const { SETTINGS_FIELDS } = require("./settings");
 
-// 账号 ID 同时用作数据目录名与浏览器配置名：小写字母、数字与短横线，1–32 位，不以短横线开头或结尾
+// 账号 ID 同时用作数据目录名：小写字母、数字与短横线，1–32 位，不以短横线开头或结尾
 const ACCOUNT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 
 // 由面板按账号强制设置的配置项，不出现在表单中，也不能通过接口修改
-const PANEL_MANAGED_KEYS = new Set(["dataDir", "profileName", "accountName"]);
+const PANEL_MANAGED_KEYS = new Set(["dataDir", "accountName"]);
 // 密钥只写不读：接口返回掩码；提交掩码或空字符串表示不修改，提交 null 表示清除
 const SECRET_MASK = "••••••";
 
@@ -162,13 +162,12 @@ function accountDataDir(panelDataDir, accountId) {
   return path.join(path.resolve(panelDataDir), "accounts", accountId);
 }
 
-// 账号的实际运行配置：账号覆盖 > 全局默认 > 内置默认；数据目录、浏览器配置名与账号名称由面板决定
+// 账号的实际运行配置：账号覆盖 > 全局默认 > 内置默认；数据目录与账号名称由面板决定
 function resolveAccountConfig(data, account, panelDataDir) {
   return resolveConfig({
     ...data.defaults,
     ...account.overrides,
     dataDir: accountDataDir(panelDataDir, account.id),
-    profileName: account.id,
     accountName: account.name,
   });
 }

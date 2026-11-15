@@ -8,8 +8,8 @@
  * 检查经 IPC 上报的事件，以及收到 SIGTERM 后关闭浏览器。不访问微信读书。
  *
  * 用法: SELENIUM_URL=http://localhost:4444 node scripts/reader-smoke.js
- *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / timeout / no-entry / no-qr / qr-late / corrupt / reading / single /
- *   single-only / no-catalog / shot-fail / worker / worker-stop / worker-no-selenium）。
+ *   READER_SMOKE_ONLY=<场景名> 只运行一个场景（login / push-hang / timeout / no-entry / no-qr / qr-late / corrupt / reading / single /
+ *   single-only / no-catalog / shot-fail / profile（仅内置浏览器） / worker / worker-stop / worker-no-selenium）。
  *   SELENIUM_URL 默认 http://localhost:4444，也可以直接指向 chromedriver（如 http://localhost:9515）；
  *   设为空（SELENIUM_URL= node scripts/reader-smoke.js）时使用内置浏览器，即本机的 chromedriver 与 Chromium。
  *   浏览器需要能访问本机的模拟服务；Selenium 跑在容器里时用 --network host 启动，
@@ -420,6 +420,58 @@ async function main() {
         assert.ok(!pushes.some((push) => push.title.endsWith("运行失败")), "截图失败不应让运行失败");
       },
     });
+
+    // 内置浏览器按账号保留资料目录：同一个数据目录连续运行
+    if (BUILTIN && (!ONLY || ONLY === "profile")) {
+      const name = "profile";
+      const startedAt = Date.now();
+      const homeUrl = mock.addScenario(name, { scanOnQr: 1, scanDelayMs: 500, qrExpireMs: 60000 });
+      const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "reader-smoke-profile-"));
+      const profile = path.join(dataDir, "profile");
+      const config = resolveConfig({ seleniumUrl: "", dataDir, screenshot: false, bookUrl: `${homeUrl}reader?book=1&ch=1` });
+      const runLogin = async () => {
+        const logs = [];
+        const original = { info: console.info, warn: console.warn, error: console.error, debug: console.debug, log: console.log };
+        Object.assign(console, Object.fromEntries(Object.keys(original).map((key) => [key, (...args) => logs.push(args.join(" "))])));
+        try {
+          const result = await runOnce(config, { mode: "login", homeUrl, timing: { ...FAST_TIMING, loginTimeoutMs: 30000 } });
+          assert.strictEqual(result.status, "success", logs.join("\n"));
+          return logs.join("\n");
+        } catch (error) {
+          error.capturedLogs = logs;
+          throw error;
+        } finally {
+          Object.assign(console, original);
+        }
+      };
+      const storageVisits = () => mock.events(name).filter((event) => event.type === "storage").map((event) => Number(event.visits));
+
+      // 第 1 次：扫码登录，新建资料目录（0700），浏览器写入 Last Version
+      const first = await runLogin();
+      assert.match(first, /新建浏览器资料目录/);
+      assert.strictEqual(fs.statSync(profile).mode & 0o777, 0o700);
+      assert.ok(fs.existsSync(path.join(profile, "Last Version")), "浏览器应在资料目录中写入 Last Version");
+
+      // 第 2 次：残留的锁文件不影响启动；删掉 cookies.json 后仍是登录状态（来自资料目录），本地存储保留
+      fs.symlinkSync("other-host-99999", path.join(profile, "SingletonLock"));
+      fs.rmSync(path.join(dataDir, "cookies.json"));
+      const second = await runLogin();
+      assert.match(second, /浏览器资料中已是登录状态，不再注入 cookies/);
+      assert.doesNotMatch(second, /正在查找二维码登录元素/, "第 2 次不应打开登录弹窗");
+      assert.ok(storageVisits().some((visits) => visits >= 1), `第 2 次应读到第 1 次写入的本地存储：${storageVisits().join(",")}`);
+      assert.ok(fs.existsSync(path.join(dataDir, "cookies.json")), "登录后仍导出 cookies.json 作为备份");
+
+      // 第 3 次：资料由更高版本的浏览器写入时先重置，登录状态从 cookies.json 恢复
+      fs.writeFileSync(path.join(profile, "Last Version"), "999.0.0.0");
+      const third = await runLogin();
+      assert.match(third, /浏览器资料目录已重置/);
+      assert.match(third, /Cookies loaded successfully/);
+      assert.ok(fs.existsSync(`${profile}.broken`), "重置前的资料目录保留为 profile.broken");
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      const title = "浏览器资料目录：第 2 次运行沿用登录状态与本地存储，残留的锁文件不影响启动；版本更高时重置并从 cookies.json 恢复";
+      results.push(title);
+      console.log(`✅ ${title}（${Math.round((Date.now() - startedAt) / 1000)} 秒）`);
+    }
 
     // 以下两个场景以子进程方式运行，不经过 runOnce 的场景封装
     const workerScenario = async (title, { name, site, values = () => ({}), mode = "read", timing, run, screenshotDir }) => {

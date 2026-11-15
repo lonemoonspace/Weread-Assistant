@@ -8,6 +8,7 @@ const {
   normalizeSeleniumUrl,
 } = require("../shared/selenium");
 const { browserPath, checkLocalBrowser, chromedriverPath, majorVersion } = require("../shared/local-browser");
+const { DISK_CACHE_BYTES, prepareProfile, resetProfile } = require("./profile");
 
 // chromedriver 开始监听端口的时限。selenium-webdriver 默认 30 秒，这里写明：树莓派负载高时启动较慢
 const LOCAL_DRIVER_START_TIMEOUT_MS = 30000;
@@ -50,25 +51,50 @@ async function collectDiagnostics(config, reason, { browserStatus = null } = {})
 }
 
 // 在本机启动 chromedriver 并以无界面模式运行 Chromium；关闭浏览器时一并结束 chromedriver。
-// status 为连接前 checkLocalBrowser 的结果：找不到、无法运行或版本不一致时直接报错，不启动
-async function createLocalDriver(capabilities, options, status) {
+// status 为连接前 checkLocalBrowser 的结果：找不到、无法运行或版本不一致时直接报错，不启动。
+// profileDataDir 不为空时使用该账号数据目录下的浏览器资料目录（见 profile.js）：用它启动失败时重置后再试一次
+async function createLocalDriver(capabilities, makeOptions, status, profileDataDir) {
   if (!status.ready) {
     throw new Error(
       `内置浏览器不可用：${status.error}。请使用 Docker 镜像部署；不使用镜像时安装 Chromium 与同一版本的 chromedriver，或在设置中填写 Selenium 地址`
     );
   }
-  const driverPath = chromedriverPath();
-  options.setChromeBinaryPath(browserPath());
-  options.addArguments("--headless=new");
-  // 无界面模式的 UA 带有 HeadlessChrome，改为与有界面时相同。Chrome 精简后的 UA 在 Linux 上
-  // 不区分架构，arm64 上也是 "X11; Linux x86_64"
   const major = majorVersion(status.message);
-  if (major) {
-    options.addArguments(
-      `--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`
-    );
+  const localOptions = (profile) => {
+    const options = makeOptions();
+    options.setChromeBinaryPath(browserPath());
+    options.addArguments("--headless=new");
+    // 无界面模式的 UA 带有 HeadlessChrome，改为与有界面时相同。Chrome 精简后的 UA 在 Linux 上
+    // 不区分架构，arm64 上也是 "X11; Linux x86_64"
+    if (major) {
+      options.addArguments(
+        `--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`
+      );
+    }
+    if (profile) {
+      options.addArguments(`--user-data-dir=${profile}`, `--disk-cache-size=${DISK_CACHE_BYTES}`);
+    }
+    return options;
+  };
+  const profile = profileDataDir ? prepareProfile(profileDataDir, major) : "";
+  try {
+    const driver = await startLocalDriver(capabilities, localOptions(profile));
+    driver.usesProfile = Boolean(profile);
+    return driver;
+  } catch (e) {
+    if (!profile) {
+      throw e;
+    }
+    console.warn("用浏览器资料目录启动失败，重置后再试一次:", e.message);
+    resetProfile(profile, "用它启动浏览器失败");
+    const driver = await startLocalDriver(capabilities, localOptions(profile));
+    driver.usesProfile = true;
+    return driver;
   }
+}
 
+async function startLocalDriver(capabilities, options) {
+  const driverPath = chromedriverPath();
   const service = new chrome.ServiceBuilder(driverPath).build();
   let serverUrl;
   try {
@@ -112,18 +138,11 @@ async function connectRemoteDriver(config, capabilities, options) {
   }
 }
 
-// options.browserStatus：见 logSeleniumStatus
-async function createDriver(config, { browserStatus = null } = {}) {
-  const capabilities = {
-    browserName: Browser.CHROME,
-    pageLoadStrategy: "eager",
-  };
-
+function baseOptions() {
   const options = new chrome.Options();
   options.addArguments("--no-sandbox");
   options.addArguments("--disable-gpu");
   options.addArguments("--disable-dev-shm-usage");
-  options.addArguments("--profile-directory=" + config.profileName);
   options.addArguments("--disable-infobars");
   options.addArguments("--disable-extensions");
   options.addArguments("--disable-notifications");
@@ -133,12 +152,23 @@ async function createDriver(config, { browserStatus = null } = {}) {
   options.addArguments("--lang=zh-CN");
   options.addArguments("--accept-lang=zh-CN,zh");
   options.setUserPreferences({ intl: { accept_languages: "zh-CN,zh" } });
+  return options;
+}
+
+// options.browserStatus：见 logSeleniumStatus。
+// 返回的 driver 带 usesProfile：是否使用了按账号保留的浏览器资料目录（只有内置浏览器且开启 persistProfile 时）
+async function createDriver(config, { browserStatus = null } = {}) {
+  const capabilities = {
+    browserName: Browser.CHROME,
+    pageLoadStrategy: "eager",
+  };
 
   // 连接前查询一次 Selenium 状态；地址中可能带有用户名与密码，日志中只显示去掉它们的地址
   const status = await logSeleniumStatus(config.seleniumUrl, browserStatus);
+  // 连接远程 Selenium 时资料目录在那台机器上，面板管不到，仍然每次注入 cookies
   const driver = config.seleniumUrl
-    ? await connectRemoteDriver(config, capabilities, options)
-    : await createLocalDriver(capabilities, options, status);
+    ? await connectRemoteDriver(config, capabilities, baseOptions())
+    : await createLocalDriver(capabilities, baseOptions, status, config.persistProfile ? config.dataDir : "");
 
   // 连接后的设置失败时关闭浏览器，避免留下会话（内置浏览器时还有 chromedriver 与浏览器进程）
   try {

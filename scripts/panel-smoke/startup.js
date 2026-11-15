@@ -53,7 +53,7 @@ module.exports = async function startupScenarios({ scenario, start, login, start
         ["plain", undefined],
       ]
     );
-    assert.deepStrictEqual(migrated.migrations, ["legacy-selenium-url"]);
+    assert.deepStrictEqual([...migrated.migrations].sort(), ["drop-profile-name", "legacy-selenium-url"]);
     await panel.close();
 
     // 迁移只做一次：之后在面板中主动填写的同一地址重启后保留
