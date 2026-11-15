@@ -4,6 +4,7 @@ const { CHANNELS, activeChannels, isChannelActive } = require("./channels");
 const { sendBark } = require("./channels/bark");
 const { sendNtfy } = require("./channels/ntfy");
 const { telegramChannel } = require("./channels/telegram");
+const { redact } = require("./channels/common");
 const { buildLoginLinkEmailHtml, canSendEmail, deliverMail, missingEmailFields, sendMail } = require("./email");
 
 const BRAND = "WeReadAssistant";
@@ -41,7 +42,8 @@ async function sendToChannels(config, channels, message) {
     if (outcome.status === "fulfilled" && outcome.value && outcome.value.ok) {
       return { channel: channel.id, ok: true, error: "" };
     }
-    const error = outcome.status === "rejected" ? `发送出错：${outcome.reason?.message || outcome.reason}` : outcome.value?.error;
+    const error =
+      outcome.status === "rejected" ? redact(config, `发送出错：${outcome.reason?.message || outcome.reason}`) : outcome.value?.error;
     return { channel: channel.id, ok: false, error: error || "发送失败" };
   });
 }
@@ -215,7 +217,10 @@ async function sendTestNotification(config) {
     tasks.push(
       missing.length
         ? Promise.resolve({ ok: false, error: `缺少配置：${missing.join("、")}` })
-        : deliverMail(config, `${title} · 测试通知`, body, [], { heading: title })
+        : // 邮件在发送前出错（例如构造 SMTP 连接时抛出）也只记为这一项失败，不让整个测试通知报错
+          Promise.resolve()
+            .then(() => deliverMail(config, `${title} · 测试通知`, body, [], { heading: title }))
+            .catch((e) => ({ ok: false, error: redact(config, `发送出错：${e?.message || e}`) }))
     );
   }
   const [channelResults, mail] = await Promise.all(tasks);

@@ -10,6 +10,9 @@ const { lastRun } = require("../../history");
 const { accountStreak, calendar, challengeProgress, todayStats } = require("../../stats");
 const { nextRunInfo, normalizeSchedules, publicSchedule } = require("../../schedules");
 
+// 浏览器资料目录大小缓存的最长时间
+const PROFILE_SIZE_CACHE_MS = 5 * 60000;
+
 // 账号的增删改查、调度规则、每日目标、打卡日历与等待扫码时的二维码截图
 function accountRoutes({ dataDir, store, runner, planner }) {
   // 计划器中该账号的待办（重试、随机延后的定时运行）与今天的补跑次数
@@ -47,7 +50,8 @@ function accountRoutes({ dataDir, store, runner, planner }) {
   };
   const profileDirOf = (accountId) => path.join(accountDataDir(dataDir, accountId), "profile");
   // 浏览器资料目录是否存在与占用的大小（含重置时留下的 profile.broken）。统计大小要遍历整个目录，结果按
-  // 目录、Default 子目录与 profile.broken 的修改时间缓存：浏览器每次运行都会改写其中的文件，目录变了就重新统计
+  // 目录、Default 子目录与 profile.broken 的修改时间缓存，目录变了就重新统计；浏览器也可能只改写深层子目录中
+  // 已有的文件，这些目录的修改时间不变，所以缓存最多保留 PROFILE_SIZE_CACHE_MS
   const sizeCache = new Map();
   const mtimeOf = (file) => {
     try {
@@ -59,11 +63,11 @@ function accountRoutes({ dataDir, store, runner, planner }) {
   const cachedSize = (dir) => {
     const stamp = [dir, path.join(dir, "Default"), `${dir}.broken`].map(mtimeOf).join("/");
     const hit = sizeCache.get(dir);
-    if (hit && hit.stamp === stamp) {
+    if (hit && hit.stamp === stamp && Date.now() - hit.at < PROFILE_SIZE_CACHE_MS) {
       return hit.bytes;
     }
     const bytes = dirSize(dir) + dirSize(`${dir}.broken`);
-    sizeCache.set(dir, { stamp, bytes });
+    sizeCache.set(dir, { stamp, at: Date.now(), bytes });
     return bytes;
   };
   const profileView = (accountId) => {

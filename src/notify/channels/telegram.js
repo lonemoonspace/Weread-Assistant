@@ -12,7 +12,8 @@ function isTelegramConfigured(config) {
 }
 
 function apiBase(config) {
-  return String(config.telegramApiBase || DEFAULT_API_BASE).trim().replace(/\/+$/, "");
+  // 留空（含只有空白）时用默认地址
+  return (String(config.telegramApiBase || "").trim() || DEFAULT_API_BASE).replace(/\/+$/, "");
 }
 
 function limit(text, max) {
@@ -29,6 +30,9 @@ function inlineKeyboard(actions = []) {
 
 // 调用 Bot API；令牌在请求路径中，返回的错误信息一律去掉令牌，日志中也不记录请求地址
 async function callApi(config, method, body, timeoutMs) {
+  if (timeoutMs <= 0) {
+    return { ok: false, network: true, error: "超过发送时限，不再重试" };
+  }
   const url = `${apiBase(config)}/bot${config.telegramBotToken}/${method}`;
   const isForm = body instanceof FormData;
   let response;
@@ -53,8 +57,9 @@ async function callApi(config, method, body, timeoutMs) {
   if (response.ok && data && data.ok === true) {
     return { ok: true, error: "" };
   }
-  const detail = data && data.description ? data.description : truncate(text);
-  return { ok: false, network: false, error: redact(config, `HTTP ${response.status}${detail ? `：${detail}` : ""}`) };
+  // 先脱敏再截断，见 redact
+  const detail = truncate(redact(config, data && data.description ? data.description : text));
+  return { ok: false, network: false, error: `HTTP ${response.status}${detail ? `：${detail}` : ""}` };
 }
 
 async function sendText(config, text, keyboard, remaining) {
@@ -92,9 +97,9 @@ async function pushTelegram(config, message, { timeoutMs = CHANNEL_TIMEOUT_MS } 
     console.error("Telegram 接口地址无效（需以 http:// 或 https:// 开头）");
     return failure("Telegram 接口地址无效（需以 http:// 或 https:// 开头）");
   }
-  // 去掉按钮或改发文字的重试也在同一个时限内
+  // 去掉按钮或改发文字的重试也在同一个时限内，时限已到就不再发
   const deadline = Date.now() + timeoutMs;
-  const remaining = () => Math.max(1000, deadline - Date.now());
+  const remaining = () => deadline - Date.now();
   const text = plainText(message);
   const keyboard = inlineKeyboard(message.actions);
   console.info(message.photo ? "发送 Telegram 推送（附二维码图片）" : "发送 Telegram 推送");
@@ -125,6 +130,7 @@ const telegramChannel = {
 };
 
 module.exports = {
+  apiBase,
   inlineKeyboard,
   isTelegramConfigured,
   pushTelegram,

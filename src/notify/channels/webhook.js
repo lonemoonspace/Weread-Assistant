@@ -65,8 +65,12 @@ function checkResponse(format, body) {
   } catch (_) {
     return `响应不是 JSON：${truncate(body)}`;
   }
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return `响应不是对象：${truncate(body)}`;
+  }
   const code = format === "feishu" ? (data.code ?? data.StatusCode) : data.errcode;
-  if (code === 0) {
+  // 错误码有时是字符串 "0"
+  if (code !== null && code !== "" && Number(code) === 0) {
     return "";
   }
   const detail = format === "feishu" ? data.msg || data.StatusMessage : data.errmsg;
@@ -96,9 +100,10 @@ async function pushWebhook(config, message, { timeoutMs = CHANNEL_TIMEOUT_MS } =
     console.error("Webhook 推送失败:", reason);
     return failure(reason);
   }
-  const problem = checkResponse(format, result.body);
+  // 先脱敏再截断，见 redact
+  const problem = checkResponse(format, redact(config, result.body || ""));
   if (problem) {
-    const reason = redact(config, problem);
+    const reason = problem;
     console.error("Webhook 推送失败:", reason);
     return failure(reason);
   }
@@ -116,6 +121,8 @@ const webhookChannel = {
 
 module.exports = {
   FORMAT_LABELS,
+  RESERVED_HEADERS,
+  checkResponse,
   isWebhookConfigured,
   parseWebhookHeader,
   pushWebhook,
