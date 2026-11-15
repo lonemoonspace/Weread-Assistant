@@ -81,7 +81,7 @@ docker compose up -d --remove-orphans
 
 ### 备份与迁移
 
-备份整个 `data/` 目录即可（停止后复制最稳妥：`docker compose stop`）。其中 `accounts/<账号 ID>/cookies.json` 等同于微信读书的登录状态，`panel.json` 含通知渠道的密钥，请妥善保管，不要分享。`accounts/<账号 ID>/profile/` 是内置浏览器的资料目录（缓存与登录状态），备份时可以排除，缺失时从 `cookies.json` 恢复登录。
+备份整个 `data/` 目录即可（停止后复制最稳妥：`docker compose stop`）。其中 `accounts/<账号 ID>/cookies.json` 等同于微信读书的登录状态，`panel.json` 含通知渠道的密钥，请妥善保管，不要分享。`accounts/<账号 ID>/profile/` 是内置浏览器的资料目录（缓存与登录状态），备份时可以排除，缺失时从 `cookies.json` 恢复登录。`sessions.json` 保存面板的登录会话（只有哈希），备份时建议排除：还原备份会让备份那一刻仍有效的会话重新生效。
 
 ### 常见问题
 

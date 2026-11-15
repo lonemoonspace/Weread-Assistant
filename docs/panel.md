@@ -53,7 +53,7 @@ docker compose logs app | grep 面板初始密码
 | `src/shared/selenium.js` | 查询 Selenium 的 `/status`：是否就绪、已用/总会话数；面板总览与阅读子进程的运行日志共用 | 先 `/status`，不是 Selenium 状态时再试 `/wd/hub/status`；3 秒超时（整个请求的时限，含读取响应体，响应体不超过 1 MB）；展示的地址去掉其中的用户名与密码 |
 | `src/reader/worker.js` | 阅读子进程入口：经 IPC 接收配置、上报事件，收到 SIGTERM 时关闭浏览器后退出 | 只由面板启动，见 `docs/reader.md` |
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入、先写临时文件并刷到磁盘再重命名、权限 0600；每次修改前把上一版保存为 `panel.json.bak`；启动时把已有文件的权限收紧为 0600，改不了时拒绝启动；文件无法解析或结构不对（例如 `accounts` 不是数组、`settings` 不是对象）时视为损坏，另存为 `panel.json.corrupt-<时间>`（只保留最近 3 份）并从上一版恢复，`panel.json` 不见了而上一版还在时同样从上一版恢复，上一版也不可用时拒绝启动（重置面板需同时删除 `panel.json` 与 `panel.json.bak`）；补齐缺少的部分（旧文件自动升级） |
-| `src/panel/auth.js` | 密码哈希、会话、登录限速、修改密码、二次验证 | 密码以 scrypt 哈希保存；会话只在内存中保存令牌哈希，面板重启后需重新登录；passkey 登录与二次验证的失败同样计入登录限速 |
+| `src/panel/auth.js` | 密码哈希、会话、登录限速、修改密码、二次验证 | 密码以 scrypt 哈希保存；会话只保存令牌哈希，写入 `sessions.json`（`src/panel/session-file.js`），面板重启后恢复，见“安全”中的“会话持久化”；passkey 登录与二次验证的失败同样计入登录限速 |
 | `src/panel/passkeys.js` | passkey（WebAuthn）的添加、登录与二次验证校验、改名、删除（@simplewebauthn/server） | 域名与地址只取自 `PANEL_PUBLIC_URL`，不信任请求的 Host；challenge 一次有效（登录用的自带过期时间与 HMAC，不在服务端保存）；`panel.json` 中只保存公钥；密码登录关闭时不能删除最后一个可用的 passkey |
 | `src/panel/server.js` | 组装 Express 应用（中间件与各组接口的挂载顺序）、启动与停止面板 | 挂载顺序决定哪些接口需要登录：页面 → 不需要登录的认证接口 → 要求登录 → 其余接口 → 404 |
 | `src/panel/http/security.js` | 安全响应头与 CSP、`csrfGuard`、会话 cookie 的读写与 HTTPS 判断 | 统一安全响应头；修改类请求校验自定义请求头 |
@@ -74,7 +74,7 @@ docker compose logs app | grep 面板初始密码
 | `GET api/auth/methods` | 否 | 登录页可用的登录方式：`{ password, passkey: { available, origin? } }`，`password` 为实际是否允许密码登录；不透露添加了哪些 passkey |
 | `POST api/auth/passkey/options` | 登录：否；二次验证：是 | `{ purpose: "login" \| "reauth" }`：passkey 登录或二次验证的参数（含 challenge）；登录被限速时 429，passkey 不可用时 409 `passkey_unavailable` |
 | `POST api/auth/passkey/login` | 否 | `{ response }`：浏览器返回的 passkey 结果；成功 204 并下发会话 cookie，校验失败 401 `passkey_failed`（计入登录限速；不是当前域名下已添加的 passkey 时不计入，日志每分钟最多记一条），被限速 429 |
-| `GET api/auth/session` | 是 | 返回版本号、密码是否来自环境变量、最短密码长度、passkey 是否可用及其地址 `passkey`、当前会话的登录方式 `method`（`password` 或 `passkey`）、二次验证的有效期 `verifiedUntil` 与所用方式 `verifiedBy`（已过期都为 null），以及密码登录的状态 `passwordLogin`：`{ enabled, active, forced, reason }`，见下文“关闭密码登录” |
+| `GET api/auth/session` | 是 | 返回版本号、密码是否来自环境变量、最短密码长度、passkey 是否可用及其地址 `passkey`、当前会话的登录方式 `method`（`password` 或 `passkey`）、二次验证的有效期 `verifiedUntil` 与所用方式 `verifiedBy`（已过期都为 null），以及密码登录的状态 `passwordLogin`：`{ enabled, active, forced, reason }`（见下文“关闭密码登录”）与当前会话以外仍然有效的会话数 `otherSessions` |
 | `POST api/auth/reauth` | 是 | 二次验证：`{ password }` 或 `{ passkey }`（浏览器返回的 passkey 结果）；成功 204，之后 5 分钟内可以添加、删除 passkey 与切换密码登录；失败 400 `wrong_password` / `passkey_failed`（计入登录限速，这次失败触发锁定时带 `retryAfter`），被限速 429；密码登录关闭时只接受 passkey，提交密码返回 403 `password_login_disabled` |
 | `GET api/auth/passkeys` | 是 | `{ passkey, passkeys }`：每个 passkey 的 ID、名称、添加与最近使用时间、是否已同步备份 `backedUp`、在当前域名下是否可用 `usable`；不返回公钥 |
 | `POST api/auth/passkeys/options` | 是，需二次验证 | 添加 passkey 的参数；最多 20 个，已满 409 `too_many_passkeys`；5 分钟内没有登录或二次验证过时 403 `reauth_required` |
@@ -83,6 +83,7 @@ docker compose logs app | grep 面板初始密码
 | `DELETE api/auth/passkeys/:id` | 是，需二次验证 | 删除 passkey，用它登录的其他会话立即失效（当前会话保留）；不存在 404；密码登录在设置中关闭时，不能删除当前域名下最后一个可用的 passkey，返回 409 `last_passkey` |
 | `PATCH api/auth/password-login` | 是，需二次验证 | `{ enabled }`：在设置中打开或关闭密码登录，返回 `{ passwordLogin }`。关闭要求当前域名下有可用的 passkey（否则 409 `no_usable_passkey`），并且 5 分钟内用 passkey 验证过（否则 403 `reauth_required`，带 `method: "passkey"`）；关闭后其他用密码登录的会话立即失效（当前会话保留）。打开只要求 5 分钟内验证过 |
 | `POST api/auth/logout` | 是 | 注销当前会话 |
+| `POST api/auth/logout-others` | 是，需二次验证 | 退出其他设备：结束当前会话以外的所有会话（含实时推送连接），返回 `{ ended }`；5 分钟内没有登录或二次验证过时 403 `reauth_required` |
 | `POST api/auth/password` | 是 | `{ current, next }`；成功后所有会话失效，并为当前请求下发新会话；密码来自环境变量或密码登录关闭时返回 409（`password_from_env` / `password_login_disabled`）。多个请求依次处理，后到的请求按新密码校验 |
 | `GET api/schema` | 是 | 表单清单：配置分组、运行配置字段（类型、可选值、范围、是否密钥）、面板设置字段 |
 | `GET api/settings` | 是 | `{ settings, defaults }`：面板设置与全局默认运行配置（密钥为掩码） |
@@ -332,6 +333,7 @@ data/
   panel.json.bak          # 上一版 panel.json，损坏时自动恢复（0600）
   panel.log               # 面板日志；启动时上一次的日志改名为 panel.log.1
   panel.lock              # 面板运行期间存在，防止同一数据目录启动多个面板
+  sessions.json           # 已登录的会话（只有令牌哈希，0600），见“安全”；备份时建议排除
   accounts/<id>/          # 账号数据（0700）：cookies.json、login.png、login-qr.png（0600；命令行运行时的截图也在这里）
   accounts/<id>/profile/  # 内置浏览器的资料目录（0700）：缓存、本地存储与登录状态，备份时可以排除；profile.broken/ 为最近一次重置前的目录
   planner.json            # 计划器的待办与当天的补跑次数（0600），见“重试、补跑与恢复”
@@ -449,6 +451,8 @@ data/
 | --- | --- |
 | 密码 | scrypt（N=16384, r=8, p=1）加盐哈希，比较使用定长时间比较；新密码至少 8 位 |
 | 会话 | 32 字节随机令牌；cookie `wa_session` 为 `HttpOnly`、`SameSite=Strict`，经 HTTPS 访问或在 https 的 `PANEL_PUBLIC_URL` 的域名下访问时加 `Secure`（不依赖 `PANEL_TRUST_PROXY`，代理需转发 `Host`），`Path` 为面板子路径；请求带多个同名 cookie 时取第一个有效的，同主机其他应用设置的同名 cookie 顶不掉真实会话；7 天滑动过期，从登录起最长 30 天，cookie 最多每小时重新下发一次 |
+| 会话持久化 | 会话写入 `sessions.json`（0600，原子写入），面板重启或升级后已登录的设备不必重新登录。文件中只有令牌的 SHA-256 哈希、创建与过期时间、登录方式与所用 passkey 的 ID，拿到文件也得不到可用的 cookie。登录后合并 1 秒内的变化再写入；退出与会话被撤销（退出其他设备、删除 passkey、关闭密码登录、修改密码）时立即写入，面板随后崩溃也不会让已退出的会话复活；续期只在过期时间比文件中的推后超过 1 小时时才写；面板停止时再写一次。启动时不恢复：已过期的、所用 passkey 已删除的、密码在停机期间变了（改了 `PANEL_PASSWORD` 或从备份恢复了 `panel.json`，按文件中的密码指纹判断）或密码登录已关闭时用密码登录的。恢复的会话需要重新验证（二次验证）才能进行敏感操作。文件不存在、损坏时当作没有保存的会话；写不进去（例如数据目录只读）时改为只在内存中保存并记录警告。登录失败计数、全局暂停与最近登录成功的 IP 仍只在内存中 |
+| 退出其他设备 | 会话跨重启保留，重启面板不再能让其他设备退出：在“设置 → 登录方式 → 已登录的设备”中点“退出其他设备”（需要二次验证），或修改面板密码（所有会话失效） |
 | passkey | 公钥签名验证，域名与 origin 只取自 `PANEL_PUBLIC_URL`，要求用户验证；见上文“passkey” |
 | 二次验证 | 添加、改名、删除 passkey 与切换密码登录要求 5 分钟内登录或二次验证过，防止被他人借用已登录的浏览器添加自己的 passkey、打开密码登录或改名误导；关闭密码登录要求用 passkey 验证 |
 | 关闭密码登录 | 可选，见上文“关闭密码登录”；关闭后密码泄露也不能用来登录 |

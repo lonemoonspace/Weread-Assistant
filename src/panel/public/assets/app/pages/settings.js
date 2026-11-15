@@ -214,6 +214,26 @@ export const SettingsPage = {
       }
     }
 
+    // 退出其他设备：会话跨重启保留，需要主动让其他设备退出时使用
+    const loggingOutOthers = ref(false);
+    async function logoutOthers() {
+      if (loggingOutOthers.value || !window.confirm("确定让其他设备退出登录？当前设备保持登录。")) {
+        return;
+      }
+      loggingOutOthers.value = true;
+      try {
+        const result = await withReauth(() => api("auth/logout-others", { method: "POST" }));
+        await loadPasskeys();
+        notify(result.ended > 0 ? `已退出 ${result.ended} 个其他设备` : "没有其他已登录的设备");
+      } catch (error) {
+        if (!(error instanceof ReauthCancelled)) {
+          notify(error.message, "error");
+        }
+      } finally {
+        loggingOutOthers.value = false;
+      }
+    }
+
     return {
       state,
       panel,
@@ -244,6 +264,8 @@ export const SettingsPage = {
       canDisablePassword,
       savingPasswordLogin,
       setPasswordLogin,
+      loggingOutOthers,
+      logoutOthers,
       formatDateTime,
       timezone,
     };
@@ -347,6 +369,17 @@ export const SettingsPage = {
         <p v-if="passwordError" class="error-text">{{ passwordError }}</p>
         <button type="submit" :aria-busy="savingPassword" :disabled="savingPassword">修改密码</button>
       </form>
+
+      <h4>已登录的设备</h4>
+      <p class="muted">登录状态在面板重启或升级后保留。怀疑有不认识的设备登录时，让其他设备退出，必要时再修改密码。</p>
+      <p>除当前设备外，还有 {{ state.session.otherSessions || 0 }} 个已登录的设备或浏览器。</p>
+      <button
+        type="button"
+        class="secondary"
+        :aria-busy="loggingOutOthers"
+        :disabled="loggingOutOthers || !state.session.otherSessions"
+        @click="logoutOthers"
+      >退出其他设备</button>
     </section>
 
     <section>
