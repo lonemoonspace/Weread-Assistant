@@ -27,10 +27,14 @@ const MAX_COOKIES_BYTES = 256 * 1024;
 // 导入前另存的 panel.json 份数
 const PRE_IMPORT_COPIES = 3;
 const KDF = { N: 32768, r: 8, p: 1 };
-// 读取文件中的 scrypt 参数时的上限，防止被构造的文件拖慢面板
-const KDF_LIMITS = { N: 1 << 17, r: 16, p: 4 };
-const SCRYPT_MAXMEM = 256 * 1024 * 1024;
-const AAD = Buffer.from(`${FORMAT}:${FORMAT_VERSION}`);
+// 读取文件中的 scrypt 参数时的上限，防止被构造的文件拖慢面板：单项上限之外，内存（128·N·r 字节）
+// 与计算量（N·r·p）不超过默认参数的 2 倍
+const KDF_LIMITS = { N: 1 << 16, r: 16, p: 4 };
+const KDF_MAX_MEMORY = 2 * 128 * KDF.N * KDF.r;
+const KDF_MAX_COST = 2 * KDF.N * KDF.r * KDF.p;
+const SCRYPT_MAXMEM = 2 * KDF_MAX_MEMORY;
+// 认证数据绑定格式与文件自己的格式版本：以后升级格式版本时，旧文件仍按它写入时的版本解密
+const aadFor = (version) => Buffer.from(`${FORMAT}:${version}`);
 
 const scrypt = promisify(crypto.scrypt);
 const isPlainObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -50,7 +54,7 @@ async function seal(payload, passphrase) {
   const iv = crypto.randomBytes(12);
   const key = await deriveKey(passphrase, salt, KDF);
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-  cipher.setAAD(AAD);
+  cipher.setAAD(aadFor(FORMAT_VERSION));
   const data = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
   return {
     cipher: "aes-256-gcm",
@@ -63,7 +67,7 @@ async function seal(payload, passphrase) {
   };
 }
 
-async function unseal(sealed, passphrase) {
+async function unseal(sealed, passphrase, version) {
   const failed = () => new PanelError(400, "backup_decrypt_failed", "无法解密备份中的密钥与登录状态：备份密码错误，或文件被改动过");
   if (!isPlainObject(sealed) || sealed.cipher !== "aes-256-gcm" || sealed.kdf !== "scrypt") {
     throw badRequest("备份文件中的加密部分格式不对");
@@ -72,7 +76,12 @@ async function unseal(sealed, passphrase) {
   const valid = Object.entries(params).every(
     ([name, value]) => Number.isSafeInteger(value) && value > 0 && value <= KDF_LIMITS[name]
   );
-  if (!valid || (params.N & (params.N - 1)) !== 0) {
+  if (
+    !valid ||
+    (params.N & (params.N - 1)) !== 0 ||
+    128 * params.N * params.r > KDF_MAX_MEMORY ||
+    params.N * params.r * params.p > KDF_MAX_COST
+  ) {
     throw badRequest("备份文件中的加密参数不对");
   }
   checkPassphrase(passphrase);
@@ -80,7 +89,7 @@ async function unseal(sealed, passphrase) {
   try {
     const key = await deriveKey(passphrase, Buffer.from(String(sealed.salt), "base64"), params);
     const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(String(sealed.iv), "base64"));
-    decipher.setAAD(AAD);
+    decipher.setAAD(aadFor(version));
     decipher.setAuthTag(Buffer.from(String(sealed.tag), "base64"));
     const text = Buffer.concat([decipher.update(Buffer.from(String(sealed.data), "base64")), decipher.final()]).toString("utf8");
     payload = JSON.parse(text);
@@ -138,8 +147,12 @@ async function buildBackup(data, { dataDir, includeSecrets = false, includeCooki
   if (includeSecrets || includeCookies) {
     checkPassphrase(passphrase);
   }
+  if (data.accounts.length > MAX_ACCOUNTS) {
+    throw badRequest(`账号超过 ${MAX_ACCOUNTS} 个，备份无法导入，没有导出`);
+  }
   const omittedSecrets = [];
-  const sealedPayload = { defaults: {}, accounts: {} };
+  // secretsIncluded 放在加密部分里，导入时以它为准：文件外层的同名字段可以被随意改动
+  const sealedPayload = { secretsIncluded: Boolean(includeSecrets), defaults: {}, accounts: {} };
   const defaults = splitSensitive(data.defaults);
   if (includeSecrets) {
     sealedPayload.defaults = defaults.sensitive;
@@ -212,7 +225,18 @@ async function openBackup(raw, passphrase = "") {
   if (!Array.isArray(raw.accounts) || raw.accounts.length > MAX_ACCOUNTS) {
     throw new PanelError(400, "backup_invalid", `备份文件中的 accounts 必须是数组，最多 ${MAX_ACCOUNTS} 个账号`);
   }
-  const sealed = raw.sealed ? await unseal(raw.sealed, passphrase) : { defaults: {}, accounts: {} };
+  // 密钥只能来自加密部分：明文部分出现密钥（被改动或构造的文件，例如把推送地址换成别人的）时整个文件无效。
+  // 预览中密钥显示为掩码，导入者看不出来，所以不能逐项跳过了事
+  const plainSecret = (values) => Object.entries(isPlainObject(values) ? values : {}).find(([key, value]) => isSensitiveValue(key, value));
+  const plainSecrets = [
+    ["全局默认配置", plainSecret(raw.defaults)],
+    ...raw.accounts.map((item) => [`账号 ${isPlainObject(item) ? String(item.id) : ""}`, isPlainObject(item) ? plainSecret(item.overrides) : null]),
+  ].filter(([, found]) => found);
+  if (plainSecrets.length > 0) {
+    const [scope, [key]] = plainSecrets[0];
+    throw new PanelError(400, "backup_invalid", `备份文件无效：${scope}的 ${key} 是密钥，却出现在未加密的部分（文件可能被改动过），没有导入任何内容`);
+  }
+  const sealed = raw.sealed ? await unseal(raw.sealed, passphrase, raw.formatVersion) : { defaults: {}, accounts: {} };
   const sealedAccounts = isPlainObject(sealed.accounts) ? sealed.accounts : {};
   const accounts = raw.accounts.map((item) => {
     if (!isPlainObject(item)) {
@@ -228,7 +252,8 @@ async function openBackup(raw, passphrase = "") {
   return {
     exportedAt: typeof raw.exportedAt === "string" ? raw.exportedAt : "",
     appVersion: typeof raw.appVersion === "string" ? raw.appVersion : "",
-    secretsIncluded: raw.secretsIncluded === true,
+    // 以解开的加密部分为准：外层写着包含密钥、却没有能解开的加密部分时，按不含密钥处理，保留现有的密钥
+    secretsIncluded: sealed.secretsIncluded === true,
     cookiesIncluded: raw.cookiesIncluded === true,
     omittedSecrets: Array.isArray(raw.omittedSecrets) ? raw.omittedSecrets.filter(isPlainObject).slice(0, 1000) : [],
     settings: raw.settings || null,
@@ -374,6 +399,9 @@ function planImport(data, backup, rawOptions = {}, { isBusy = () => false, now =
     }
     if (item.cookies !== null && item.cookies !== undefined && !hasCookies) {
       invalid.push({ item: `账号 ${account.id} 的登录状态`, reason: "cookies 格式不对，没有导入" });
+    }
+    if (entry.action === "skip") {
+      entry.cookies = false;
     }
     preview.accounts.push(entry);
     if (entry.action === "skip") {
