@@ -78,7 +78,7 @@ jobs:
         run: |
           SELENIUM_IMAGE="$(sed -n 's/^FROM //p' ci/selenium.Dockerfile)"
           docker run -d --name selenium --network host --shm-size 2g "$SELENIUM_IMAGE"
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl -sf http://localhost:4444/status | grep -q '"ready": *true'; then
               exit 0
             fi
