@@ -2,10 +2,10 @@
 
 ## 项目结构与模块组织
 - 整体设计与开发计划见 `docs/design.md`，改动前先确认属于计划中的哪一步。
-- `src/cli.js` 是唯一入口；`src/config/` 定义配置项清单与解析，`src/reader/` 是自动阅读流程（浏览器、登录、选书、阅读循环），`src/notify/` 是 Bark / ntfy / 邮件通知，`src/panel/` 是 Web 面板（服务端、鉴权与 passkey、存储、运行队列与页面），`src/shared/` 放日志、HTTP 等公共工具。
+- `src/cli.js` 是唯一入口；`src/config/` 定义配置项清单与解析，`src/reader/` 是自动阅读流程（浏览器、登录、选书、阅读循环），`src/notify/` 是 Bark / ntfy / 邮件通知，`src/panel/` 是 Web 面板（`server.js` 组装应用与启停，`http/` 是安全中间件与按功能分组的接口，`runner/` 是运行队列，另有鉴权与 passkey、存储与页面），`src/shared/` 放日志、HTTP 等公共工具。
 - 新增运行配置项时只改 `src/config/schema.js`，面板表单与校验都由它生成，不新增对应的环境变量；整数项用 `min` / `max` 限定范围，枚举项用 `options` 列出可选值，解析时会据此校验。
 - 页面定位器与关键文案集中在 `src/reader/selectors.js`；浏览器隐式等待为 0，需要等元素出现时使用 `src/reader/dom.js` 中的显式等待。
-- 面板中的每次运行由 `src/panel/runner.js` fork 阅读子进程 `src/reader/worker.js` 执行：配置经 IPC 下发，不放进环境变量；子进程经 IPC 上报事件，新增事件时同步更新 `docs/reader.md` 与 `docs/panel.md`。阅读流程中较长的等待要传入 `ctx.signal`，保证停止时能立即结束。
+- 面板中的每次运行由 `src/panel/runner/`（`process.js`）fork 阅读子进程 `src/reader/worker.js` 执行：配置经 IPC 下发，不放进环境变量；子进程经 IPC 上报事件，新增事件时同步更新 `docs/reader.md` 与 `docs/panel.md`。阅读流程中较长的等待要传入 `ctx.signal`，保证停止时能立即结束。
 - 运行产物写入数据目录（默认 `data/`）：账号的 cookies.json、login.png 在 `accounts/<id>/`，每次运行的 meta.json、output.log、阅读截图在 `runs/<id>/<运行 ID>/`。该目录已在 `.gitignore` 与 `.dockerignore` 中排除。按天统计以 meta.json 中的 `minuteMarks` 为准，改动运行记录格式时保持兼容旧记录。
 
 ## 构建、测试与开发命令
@@ -22,7 +22,7 @@
 - 日志通过 `console.info|warn|error` 输出，由 `src/shared/log.js` 统一加前缀并写入日志文件。
 
 ## 测试指南
-- 提交前至少执行 `npm run check`、`npm run lint`、`npm run test:unit`、`npm run test:notify`、`npm run test:panel` 与 `npm run test:config`；改动阅读流程或阅读子进程时执行 `SELENIUM_URL=... npm run test:reader`（本地模拟页面；`SELENIUM_URL=` 为空时用内置浏览器）；改动镜像时执行 `npm run test:runtime`。
+- 提交前至少执行 `npm run check`、`npm run lint`、`npm run test:unit`、`npm run test:notify`、`npm run test:panel`（场景按功能分组在 `scripts/panel-smoke/` 下，`npm run test:panel -- --only runs` 只跑一组）与 `npm run test:config`；改动阅读流程或阅读子进程时执行 `SELENIUM_URL=... npm run test:reader`（本地模拟页面；`SELENIUM_URL=` 为空时用内置浏览器）；改动镜像时执行 `npm run test:runtime`。
 - 改动阅读流程或定位器时，再连接 Selenium 对真实站点运行一次，确认登录、翻页链路；验收用例见 `cases/`。
 - 单元测试放在 `test/unit/`，用 Node 自带的 `node:test` 与 `node:assert`，不引入测试框架；纯函数（调度、统计、配置校验、通知请求体等）的修复与新增功能附带单元测试，需要时间的逻辑用 `mock.timers` 或注入时钟，不真的等待。`npm run test:unit:coverage` 输出覆盖率。
 
