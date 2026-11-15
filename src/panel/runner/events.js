@@ -22,7 +22,8 @@ function toCount(value) {
 }
 
 // 按子进程上报的事件更新运行状态。返回 null 表示忽略这个事件；
-// 返回 { result } 时 result 为本次运行的结果（{ status, error }），由调用方记录
+// 返回 { result } 时 result 为本次运行的结果（{ status, error, errorKind }），由调用方记录。
+// errorKind 为失败类别：login-timeout、error（阅读流程报错）、timeout（超时被结束）、crash（子进程异常退出）、config（配置无效）、account（账号已删除）
 function applyWorkerEvent(run, message) {
   const data = message.data && typeof message.data === "object" ? message.data : {};
   switch (message.event) {
@@ -56,11 +57,11 @@ function applyWorkerEvent(run, message) {
       // 以较大者为准：最后一分钟的进度可能没来得及上报
       run.minutes = Math.min(Math.max(run.minutes, toCount(data.minutes)), run.maxMinutes);
       fillMinuteMarks(run, run.minutes);
-      return { result: { status: "success", error: "" } };
+      return { result: { status: "success", error: "", errorKind: "" } };
     case "login-timeout":
-      return { result: { status: "failed", error: "等待扫码超时" } };
+      return { result: { status: "failed", error: "等待扫码超时", errorKind: "login-timeout" } };
     case "error":
-      return { result: { status: "failed", error: run.redact(data.message || "未知错误") } };
+      return { result: { status: "failed", error: run.redact(data.message || "未知错误"), errorKind: "error" } };
     default:
       return null;
   }
@@ -72,15 +73,15 @@ function exitOutcome(run, exitText) {
     return run.result;
   }
   if (run.timedOut) {
-    return { status: "failed", error: "运行超时，已强制结束" };
+    return { status: "failed", error: "运行超时，已强制结束", errorKind: "timeout" };
   }
   if (run.shutdown) {
-    return { status: "interrupted", error: "面板停止时运行被中断" };
+    return { status: "interrupted", error: "面板停止时运行被中断", errorKind: "" };
   }
   if (run.stopRequested) {
-    return { status: "stopped", error: "" };
+    return { status: "stopped", error: "", errorKind: "" };
   }
-  return { status: "failed", error: `阅读子进程异常退出（${exitText}）` };
+  return { status: "failed", error: `阅读子进程异常退出（${exitText}）`, errorKind: "crash" };
 }
 
 module.exports = {

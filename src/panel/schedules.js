@@ -6,11 +6,13 @@ const { badRequest } = require("./errors");
 //   { id, type: "daily", times: ["06:00", "18:30"], enabled }      每天固定时间
 //   { id, type: "interval", hours: 6, minute: 0, enabled }         每 N 小时（N 为 24 的约数，从 0 点起算）
 //   { id, type: "cron", expression: "30 6 * * 1-5", enabled }      5 段 cron 表达式（分 时 日 月 周）
+// 各类规则都可以带 jitterMinutes（1–30）：到点后随机延后 0 到该值分钟再加入队列，只往后不提前；为 0 时不保存这个字段
 const SCHEDULE_TYPES = ["daily", "interval", "cron"];
 const INTERVAL_HOURS = [1, 2, 3, 4, 6, 8, 12];
 const MAX_SCHEDULES = 10;
 const MAX_DAILY_TIMES = 24;
 const PREVIEW_COUNT = 5;
+const MAX_JITTER_MINUTES = 30;
 const SCHEDULE_ID_PATTERN = /^[a-z0-9]{1,16}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
@@ -38,7 +40,7 @@ function normalizeSchedule(raw, prefix) {
   if (!SCHEDULE_TYPES.includes(raw.type)) {
     throw badRequest(`${prefix}的类型只能是 ${SCHEDULE_TYPES.join("、")}：${raw.type}`);
   }
-  const allowed = new Set(["id", "type", "enabled", ...FIELDS_BY_TYPE[raw.type]]);
+  const allowed = new Set(["id", "type", "enabled", "jitterMinutes", ...FIELDS_BY_TYPE[raw.type]]);
   const unknown = Object.keys(raw).filter((key) => !allowed.has(key));
   if (unknown.length > 0) {
     throw badRequest(`${prefix}包含不支持的字段：${unknown.join(", ")}`);
@@ -88,6 +90,14 @@ function normalizeSchedule(raw, prefix) {
     rule.expression = expression;
   }
 
+  const jitter = raw.jitterMinutes === undefined || raw.jitterMinutes === null ? 0 : raw.jitterMinutes;
+  if (!isIntegerIn(jitter, 0, MAX_JITTER_MINUTES)) {
+    throw badRequest(`${prefix}的随机延后分钟数必须是 0–${MAX_JITTER_MINUTES} 的整数：${raw.jitterMinutes}`);
+  }
+  if (jitter > 0) {
+    rule.jitterMinutes = jitter;
+  }
+
   rule.enabled = raw.enabled !== false;
   return rule;
 }
@@ -127,14 +137,20 @@ function schedulePatterns(rule) {
   return [rule.expression];
 }
 
+// 规则的随机延后分钟数，手工写入的无效值按 0 处理
+function jitterOf(rule) {
+  return isIntegerIn(rule.jitterMinutes, 0, MAX_JITTER_MINUTES) ? rule.jitterMinutes : 0;
+}
+
 function describeSchedule(rule) {
+  const jitter = jitterOf(rule) > 0 ? `，随机延后 0–${rule.jitterMinutes} 分钟` : "";
   if (rule.type === "daily") {
-    return `每天 ${rule.times.join("、")}`;
+    return `每天 ${rule.times.join("、")}${jitter}`;
   }
   if (rule.type === "interval") {
-    return `每 ${rule.hours} 小时（从 00:${pad2(rule.minute)} 起）`;
+    return `每 ${rule.hours} 小时（从 00:${pad2(rule.minute)} 起）${jitter}`;
   }
-  return `cron ${rule.expression}`;
+  return `cron ${rule.expression}${jitter}`;
 }
 
 // 规则接下来的触发时间（ISO 字符串，升序）；规则无效时返回空数组
@@ -152,17 +168,34 @@ function nextRuns(rule, { timezone, from = new Date(), count = PREVIEW_COUNT } =
   return [...times].sort().slice(0, count);
 }
 
-// 账号下一次定时运行的时间；账号停用或没有启用的规则时为 null
-function nextRunAt(account, timezone, from = new Date()) {
+// 账号下一次定时运行：{ at, jitterMinutes }，at 为规则到点的时间，实际加入队列的时间在 at 之后 0 到 jitterMinutes 分钟内
+// （同一时刻有多条规则时取最大的随机延后）。账号停用或没有启用的规则时为 null
+function nextRunInfo(account, timezone, from = new Date()) {
   if (!account.enabled) {
     return null;
   }
-  const candidates = (account.schedules || [])
-    .filter((rule) => rule.enabled)
-    .map((rule) => nextRuns(rule, { timezone, from, count: 1 })[0])
-    .filter(Boolean)
-    .sort();
-  return candidates[0] || null;
+  let next = null;
+  for (const rule of account.schedules || []) {
+    if (!rule.enabled) {
+      continue;
+    }
+    const at = nextRuns(rule, { timezone, from, count: 1 })[0];
+    if (!at) {
+      continue;
+    }
+    if (!next || at < next.at) {
+      next = { at, jitterMinutes: jitterOf(rule) };
+    } else if (at === next.at) {
+      next.jitterMinutes = Math.max(next.jitterMinutes, jitterOf(rule));
+    }
+  }
+  return next;
+}
+
+// 账号下一次定时运行的时间；账号停用或没有启用的规则时为 null
+function nextRunAt(account, timezone, from = new Date()) {
+  const next = nextRunInfo(account, timezone, from);
+  return next ? next.at : null;
 }
 
 // 接口中返回的规则：附带说明与接下来的触发时间。手工写入 panel.json 的无效规则（调度器会跳过）
@@ -183,9 +216,13 @@ function publicSchedule(rule, timezone, from = new Date()) {
 
 module.exports = {
   INTERVAL_HOURS,
+  MAX_JITTER_MINUTES,
   MAX_SCHEDULES,
+  TIME_PATTERN,
   describeSchedule,
+  jitterOf,
   nextRunAt,
+  nextRunInfo,
   nextRuns,
   normalizeSchedules,
   publicSchedule,

@@ -51,6 +51,8 @@ async function startSeededPanel() {
     dataDir,
     seleniumUrl: selenium.url,
     runner: { workerPath: STUB_WORKER, killTimeoutMs: 500 },
+    // 计划器不在测试期间自动补跑，页面上的运行只来自测试步骤
+    planner: { startupDelayMs: 60 * 60 * 1000 },
   });
   const base = `http://127.0.0.1:${panel.port}/`;
   let cookie = "";
@@ -391,6 +393,20 @@ async function desktop(env, h, driver, results) {
   }
   assert.deepStrictEqual((await call("GET", "api/accounts/ok-1/schedules")).schedules[2].times, ["07:30"]);
   step("调度：添加规则、预览接下来的运行时间、保存后立即生效");
+
+  await h.go("#/accounts/ok-1/schedules");
+  await h.waitText(".goal-card", "每日目标");
+  const goalCard = await driver.findElement(By.css(".goal-card"));
+  await h.type(await goalCard.findElement(By.css("input[type=number]")), "45");
+  await h.click(await goalCard.findElement(By.css("input[role=switch]")));
+  await h.clickButton("保存目标", goalCard);
+  await h.waitText(".notice", "每日目标已保存");
+  assert.deepStrictEqual((await call("GET", "api/accounts/ok-1/goal")).goal, { enabled: true, minutes: 45, checkAt: "22:00" });
+  await h.waitText(".goal-card", "今天已读");
+  await h.shot("10b-goal");
+  await h.go("#/");
+  await h.waitText(".account-card", "/45 分钟，22:00 检查");
+  step("每日目标：在调度页设置目标与检查时间，总览卡片显示今天的进度与检查时间");
 
   await h.go("#/accounts/ok-1/config");
   const duration = await h.field("阅读时长（分钟）");

@@ -43,7 +43,9 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/accounts.js` | 账号增删改查 | 账号 ID 创建后不可修改；删除时默认保留数据目录；运行或排队中的账号不能删除 |
 | `src/panel/runner/` | 运行队列：`index.js` 排队、并发与对外方法；`process.js` fork 阅读子进程、环境变量白名单、结束进程组、删除 Selenium 会话；`events.js` 处理子进程事件与判定结果；`view.js` 对外的运行信息、运行记录与日志脱敏 | 同一账号同时只有一个运行；并发数取面板设置，修改后立即生效 |
 | `src/panel/schedules.js` | 调度规则的校验、换算为 cron 表达式、计算接下来的触发时间 | 时间按面板时区解释 |
-| `src/panel/scheduler.js` | 按调度规则定时把运行加入队列（croner） | 时区、账号启用状态或调度规则变化后重建定时任务；错过的时间不补跑 |
+| `src/panel/scheduler.js` | 按调度规则到点触发（croner），交给计划器加入队列 | 时区、账号启用状态或调度规则变化后重建定时任务 |
+| `src/panel/planner.js` | 计划器：失败重试、调度随机延后、每日目标补跑、启动时恢复被中断的运行与错过的调度，见下文“重试、补跑与恢复” | 待办保存在 `planner.json`，重启不丢；时钟经参数注入，单元测试不需要真的等待 |
+| `src/panel/retry.js`、`src/panel/goal.js` | 重试规则（哪些运行、哪些失败、间隔）；每日目标的校验、按挑战的建议值与检查时间太晚时的提示 | |
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
 | `src/panel/history.js` | 运行历史、按天统计、打卡日历与挑战进度、按保留策略清理 | 按面板时区统计；口径为本工具的运行记录，非微信读书官方数据 |
 | `src/panel/challenge.js` | 阅读挑战（月卡、年卡）的规则与设置校验 | |
@@ -89,8 +91,10 @@ docker compose logs app | grep 面板初始密码
 | `POST api/accounts` | 是 | `{ id, name? }`；成功 201，ID 已存在 409，ID 或名称非法 400；同时创建账号数据目录 |
 | `GET api/accounts/:id` | 是 | `{ account, challengeProgress, effective }`：账号、本轮挑战进度（未设置挑战时为 null）与实际生效的运行配置 |
 | `PATCH api/accounts/:id` | 是 | `{ name?, enabled?, overrides?, challenge? }`；ID 不可修改；`challenge` 为 `{ type: "month" \| "year", startDate: "YYYY-MM-DD" }` 或 null |
-| `GET api/accounts/:id/schedules` | 是 | `{ timezone, enabled, nextRunAt, schedules }`：每条规则带 `description` 与接下来 5 次触发时间 `nextRuns` |
+| `GET api/accounts/:id/schedules` | 是 | `{ timezone, enabled, nextRunAt, nextRunJitterMinutes, schedules }`：每条规则带 `description` 与接下来 5 次触发时间 `nextRuns`；`nextRunJitterMinutes` 为下次运行那条规则的随机延后分钟数 |
 | `PUT api/accounts/:id/schedules` | 是 | `{ schedules: [...] }`：整体替换账号的调度规则，保存后立即生效；任一条非法时返回 400，`message` 指出第几条规则与原因，整个请求不生效 |
+| `GET api/accounts/:id/goal` | 是 | 每日目标：`{ timezone, goal, suggestedMinutes, warning, today, planned }`。`goal` 为 `{ enabled, minutes, checkAt }` 或 null；`suggestedMinutes` 为按挑战折算的每天分钟数（没有挑战时为 null）；`warning` 为检查时间太晚、补不满目标时的提示；`today` 同账号列表；`planned` 为计划器中的待办与今天的补跑次数 `{ pending, catchups: { count, max, blocked } }` |
+| `PUT api/accounts/:id/goal` | 是 | `{ goal: { enabled?, minutes, checkAt } \| null }`：保存每日目标，`minutes` 为 1–1440，`checkAt` 为 `HH:MM`（面板时区），null 表示不设置；返回同上 |
 | `POST api/schedules/preview` | 是 | `{ schedules: [...] }`：校验并返回每条规则接下来的触发时间，不保存，供填写表单时预览 |
 | `DELETE api/accounts/:id` | 是 | `{ deleteData? }`，可以不带请求体；默认只从面板移除，`deleteData: true` 时同时删除账号数据目录与运行记录（先把两个目录移开，保存成功后再删除；移开失败时返回 500 `delete_data_failed`，账号与数据保持原样）；账号正在运行或排队时返回 409 `account_busy` |
 | `POST api/accounts/:id/runs` | 是 | `{ mode? }`，`read`（默认）或 `login`（仅登录），可以不带请求体；加入队列后返回 202 与运行状态；账号不存在 404，已停用 409 `account_disabled`，已在运行或排队 409 `run_active` |
@@ -100,7 +104,7 @@ docker compose logs app | grep 面板初始密码
 | `GET api/selenium/status` | 是 | 全局默认配置与各账号实际使用的内置浏览器或每个 Selenium 地址的状态与会话数，见下文“Selenium 状态与 noVNC” |
 | `GET api/accounts/:id/runs` | 是 | 运行历史，最新的在前：`{ runs, nextBefore }`；`?limit=`（1–100，默认 20）、`?before=<nextBefore>` 翻页；后面没有记录或只剩读不出来的记录时 `nextBefore` 为 null。每条为运行记录加 `hasLog` 与截图文件名 `screenshots` |
 | `GET api/accounts/:id/runs/:runId` | 是 | `{ run }`：运行记录、截图文件名与按天拆分的阅读分钟数 `minutesByDate` |
-| `GET api/accounts/:id/runs/:runId/screenshots/:name` | 是 | 截图（`image/png`），运行中也可读取最新的截图；文件名只接受 `screenshot-<分钟>.png`（0.1.0 的旧记录中还可能有发邮件时留下的 `screenshot.png`，同样可读取） |
+| `GET api/accounts/:id/runs/:runId/screenshots/:name` | 是 | 截图（`image/png`），运行中也可读取最新的截图；文件名只接受 `screenshot-<分钟>.png` 与出错时的 `error.png`（0.1.0 的旧记录中还可能有发邮件时留下的 `screenshot.png`，同样可读取） |
 | `GET api/accounts/:id/login-qr` | 是 | 账号正在等待扫码时，这次运行保存的二维码截图（`image/png`，只含二维码的 `login-qr.png` 优先，没有或比整页截图旧时为整页 `login.png`）；没有等待扫码或截图早于这次运行时 404。二维码解析不出登录链接时页面用它代替本地生成的二维码 |
 | `GET api/accounts/:id/runs/:runId/log` | 是 | 运行日志（`text/plain`）；`?download=1` 时作为附件下载；超过保留天数被清理后返回 404 |
 | `GET api/accounts/:id/calendar` | 是 | 打卡日历，`?month=YYYY-MM`（默认本月）：每天的阅读分钟数与是否打卡、今天、本月合计与本轮挑战进度，见下文 |
@@ -168,8 +172,9 @@ docker compose logs app | grep 面板初始密码
 | 文件 | 内容 |
 | --- | --- |
 | `output.log` | 子进程的标准输出与标准错误，加上面板写入的 `[PANEL]` 行（加入队列、启动、停止请求、强制结束、退出码、运行结束）。写入与实时推送前，把本次运行配置中的密钥值（Bark Key、ntfy 主题、Token 与密码、SMTP 密码，4 个字符以上）以及微信读书登录链接中的 uid 替换为 `••••••`；子进程上报的错误信息同样处理 |
-| `meta.json` | `id`、`accountId`、`accountName`、`mode`、`trigger`（`manual` 或 `schedule`）、`scheduleId`、`status`、`queuedAt`、`startedAt`、`endedAt`、`book`、`readingStartedAt`、`minutes`、`plannedMinutes`、`screenshot`、`minuteMarks`（每一分钟阅读完成的时间，按天统计使用；接口中不返回）、`error`、`exitCode`、`exitSignal`；状态变化与每分钟进度都会更新；不保存登录链接 |
+| `meta.json` | `id`、`accountId`、`accountName`、`mode`、`trigger`（`manual`、`schedule`、`retry`、`catchup` 或 `resume`）、`scheduleId`、`errorKind`（失败类别：`login-timeout`、`error`、`timeout`、`crash`、`config`、`account`，其他状态为空）、`attempt`（第几次尝试，从 1 开始）、`originRunId`（重试或恢复对应的最初那次运行）、`delayedMinutes`（随机延后或补触发造成的延迟）、`status`、`queuedAt`、`startedAt`、`endedAt`、`book`、`readingStartedAt`、`minutes`、`plannedMinutes`、`screenshot`、`minuteMarks`（每一分钟阅读完成的时间，按天统计使用；接口中不返回）、`error`、`exitCode`、`exitSignal`；状态变化与每分钟进度都会更新；不保存登录链接 |
 | `screenshot-<分钟>.png` | 阅读截图，子进程直接写入运行目录（按保留策略清理） |
+| `error.png` | 阅读流程出错时的页面截图（浏览器还连着、不是手动停止时），同样按保留策略清理，历史页的截图中排在最后 |
 
 ### 运行历史与统计
 
@@ -218,7 +223,7 @@ docker compose logs app | grep 面板初始密码
 | 每 N 小时 | `hours`：1、2、3、4、6、8、12（24 的约数）；`minute`：0–59，默认 0 | `{ "type": "interval", "hours": 6, "minute": 30 }` | `30 */6 * * *`（00:30、06:30、12:30、18:30） |
 | cron | `expression`：5 段（分 时 日 月 周），不接受秒字段与 `@daily` 等别名，必须会触发 | `{ "type": "cron", "expression": "30 6 * * 1-5" }` | 原样使用 |
 
-每条规则还有 `id`（小写字母与数字，1–16 位；不提交或重复时自动生成 6 位 ID）与 `enabled`（默认 true）。每个账号最多 10 条规则。
+每条规则还有 `id`（小写字母与数字，1–16 位；不提交或重复时自动生成 6 位 ID）、`enabled`（默认 true）与 `jitterMinutes`（随机延后，0–30 分钟，为 0 时不保存）。每个账号最多 10 条规则。
 
 | 规则 | 说明 |
 | --- | --- |
@@ -226,8 +231,23 @@ docker compose logs app | grep 面板初始密码
 | 停用 | 停用的规则、停用账号的所有规则都不触发，接口中也没有触发时间 |
 | 重复触发 | 账号已在运行或排队时跳过本次触发，在 `panel.log` 中记录 `定时触发跳过：账号 <id>，规则 <规则 ID>（<说明>）：账号已在运行或排队：<id>` |
 | 运行记录 | 定时触发的运行 `trigger` 为 `schedule`，`scheduleId` 为规则 ID；运行日志第一行为 `加入队列：定时触发（规则 <规则 ID>），阅读` |
-| 错过的时间 | 面板停机期间错过的时间不补跑 |
+| 随机延后 | 规则带 `jitterMinutes` 时，到点后随机延后 0 到该值分钟再加入队列，只往后不提前；等待中的项目写入 `planner.json`，重启不丢。页面上的下次运行显示为“06:00 到 06:10 之间” |
+| 错过的时间 | 面板停机期间错过的时间，重启后在补触发宽限时间内的，每条规则补触发一次（见下文） |
 | 手工修改 | 手工写入 `panel.json` 的无效规则在启动时跳过并记录日志，不影响其他规则；接口中照常返回，说明为“无效规则（<类型>）”，没有触发时间 |
+
+### 重试、补跑与恢复
+
+计划器（`src/panel/planner.js`）负责调度器到点触发之外的自动运行。自动触发指定时（`schedule`）、补跑（`catchup`）、恢复（`resume`）与重试（`retry`）；手动启动的运行不重试、不恢复。
+
+| 项目 | 规则 |
+| --- | --- |
+| 失败重试 | 自动触发的运行因阅读流程报错（`error`）、超时被结束（`timeout`）或子进程异常退出（`crash`）而失败时重试，间隔依次为 5、15、30 分钟，之后每次 30 分钟；次数取面板设置 `retryCount`（0–5，默认 2，0 为关闭）。扫码超时、配置无效、手动停止、账号被停用或删除都不重试。重试只读剩余的分钟（这次计划的时长减去已读的分钟；没开始阅读时按配置的时长；已经读满时不重试），运行记录的 `attempt` 加 1，`originRunId` 指向最初那次运行。重试或随机延后的定时运行到期时账号正在运行或排队（例如手动运行），每 5 分钟再试一次，从原定时间起顺延超过 2 小时才放弃，并记录日志 |
+| 失败通知 | 面板随启动消息下发 `retry: { attempt, retriesLeft }`。还会重试时子进程不发失败通知；最后一次失败的通知写明“已重试 N 次”。不再重试时由面板按账号的通知配置代发失败通知的情况：子进程崩溃或超时被结束，来不及发；子进程启动时还有重试次数、出错时没有发通知，但结束时没有安排重试（运行中调小了重试次数、停用了账号、面板正在停止，或已经读满） |
+| 每日目标 | 账号的 `goal: { enabled, minutes, checkAt }`。每天到 `checkAt`（面板时区）之后，当天累计分钟数（与总览同一口径）低于目标时补跑差额：补跑时长不超过到当天 23:57 剩余的分钟数，每个账号每天最多 3 次（加入队列成功才计数）；账号正在运行或还有待办时等它们结束后再检查，之后该账号每有一次运行结束都会再检查。补跑需要扫码而超时、或手动停止了自动运行后，当天不再补跑；扫码超时的通知写明“今天还差 N 分钟，需要扫码后手动运行”。目标由用户填写，不随挑战变化；设置了挑战时页面给出建议值（月卡每天 60 分钟，年卡约 50 分钟） |
+| 启动恢复 | 面板启动 2 分钟后处理停机期间的遗留，只处理补触发宽限时间（面板设置 `catchupGraceMinutes`，0–720 分钟，默认 120；0 为不恢复也不补触发）以内的：① 被中断的自动运行（面板停止时由运行队列标记，或崩溃后启动时标记）以 `resume` 补读剩余分钟（排队时被中断的按配置的时长，已经读满的不恢复），每次被中断的运行只恢复一次，恢复出来的运行再被中断时不再恢复；② 停机期间错过的调度，在上次检查时间与宽限时间的起点之间找出每条规则最近错过的一次，补触发一次（启动恢复完成之前调度器照常触发，但不更新检查时间，这时再次崩溃也不会漏掉）（`delayedMinutes` 为晚了多少分钟），超过宽限时间的只记录日志；③ 停机期间到期的重试与随机延后的定时运行，超过宽限时间的丢弃；④ 停机跨过了每日目标的检查时间时补做一次检查 |
+| 时长随机增加 | 运行配置 `durationJitter`（0–30 分钟，默认 0）：普通运行的实际时长为设定时长加 0 到该值之间的随机分钟数，只增不减；重试、补跑与恢复按计划器给出的分钟数读，不再增加 |
+| 状态文件 | `planner.json`（0600，原子写入）：最近一次检查的时间 `lastCheckAt`、待办 `pending`（重试、随机延后的定时运行、待恢复的运行）与每个账号当天的补跑次数 `catchups`。文件丢失或损坏时当作没有待办，到期时间无效的待办丢弃，不影响启动 |
+| 面板停止 | 不再安排新的重试与补跑；已有待办留在文件里，下次启动时按上面的规则处理 |
 
 ### 实时推送
 
@@ -308,7 +328,8 @@ data/
   panel.log               # 面板日志；启动时上一次的日志改名为 panel.log.1
   panel.lock              # 面板运行期间存在，防止同一数据目录启动多个面板
   accounts/<id>/          # 账号数据（0700）：cookies.json、login.png、login-qr.png（0600；命令行运行时的截图也在这里）
-  runs/<id>/<runId>/      # 每次运行（目录 0700，启动时收紧旧目录）：meta.json、output.log、screenshot-*.png（0600）
+  planner.json            # 计划器的待办与当天的补跑次数（0600），见“重试、补跑与恢复”
+  runs/<id>/<runId>/      # 每次运行（目录 0700，启动时收紧旧目录）：meta.json、output.log、screenshot-*.png、error.png（0600）
 ```
 
 `panel.json` 的结构：

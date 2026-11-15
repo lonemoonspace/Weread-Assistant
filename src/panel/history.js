@@ -14,7 +14,8 @@ const CHECK_IN_MINUTES = 5;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // 运行 ID 是排队时间。按日期范围挑选运行时前后多取几天，覆盖时区差与跨天的长时间运行
 const RANGE_MARGIN_MS = 3 * DAY_MS;
-const SCREENSHOT_PATTERN = /^screenshot(-\d{1,5})?\.png$/;
+// 阅读截图 screenshot-<分钟>.png，以及出错时的页面截图 error.png（排在最后）
+const SCREENSHOT_PATTERN = /^(screenshot(-\d{1,5})?|error)\.png$/;
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 const MAX_PAGE_SIZE = 100;
 const QUARTER_HOUR_MS = 15 * 60 * 1000;
@@ -112,11 +113,15 @@ function listScreenshots(dir) {
   } catch (_) {
     return [];
   }
-  const minuteOf = (name) => {
+  // 按分钟排序，没有分钟的 screenshot.png 其次，error.png 最后
+  const rankOf = (name) => {
+    if (name === "error.png") {
+      return Number.MAX_SAFE_INTEGER;
+    }
     const m = name.match(/-(\d+)\.png$/);
-    return m ? Number(m[1]) : Infinity;
+    return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER - 1;
   };
-  return names.filter((name) => SCREENSHOT_PATTERN.test(name)).sort((a, b) => minuteOf(a) - minuteOf(b));
+  return names.filter((name) => SCREENSHOT_PATTERN.test(name)).sort((a, b) => rankOf(a) - rankOf(b));
 }
 
 // 每一分钟阅读完成的时间。第 7 步之前的记录没有逐分钟时间，按开始阅读后每分钟一条估算

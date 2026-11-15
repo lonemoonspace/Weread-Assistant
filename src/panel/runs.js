@@ -70,7 +70,8 @@ function restrictRunDirs(panelDataDir) {
   }
 }
 
-// 面板启动时调用：上次面板停止（或崩溃、断电）时仍在进行中的运行标为“中断”，结束时间取最后一次写入的时间
+// 面板启动时调用：上次面板停止（或崩溃、断电）时仍在进行中的运行标为“中断”，结束时间取最后一次写入的时间。
+// 返回 [{ accountId, runId, meta }]，meta 为标记后的运行记录，计划器据此恢复被中断的运行
 function markInterruptedRuns(panelDataDir) {
   const marked = [];
   const root = runsRoot(panelDataDir);
@@ -107,7 +108,7 @@ function markInterruptedRuns(panelDataDir) {
         `[PANEL][${formatLocalTimestamp()}]: 面板重新启动，上次未结束的运行标记为中断\n`,
         { mode: 0o600 }
       );
-      marked.push({ accountId, runId });
+      marked.push({ accountId, runId, meta });
     }
   }
   if (marked.length > 0) {

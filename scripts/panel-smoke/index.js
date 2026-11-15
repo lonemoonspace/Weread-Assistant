@@ -9,7 +9,7 @@
 
 const { createSuite } = require("./helpers");
 
-const GROUPS = ["auth", "security", "passkeys", "settings", "accounts", "startup", "runs", "schedules", "history"];
+const GROUPS = ["auth", "security", "passkeys", "settings", "accounts", "startup", "runs", "planner", "schedules", "history"];
 
 function selectedGroups(argv) {
   const index = argv.indexOf("--only");

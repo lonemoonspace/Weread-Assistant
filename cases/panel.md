@@ -4,7 +4,7 @@
 
 | 场景 | 前置条件 / 输入 | 预期结果 |
 | --- | --- | --- |
-| smoke 自查 | 执行 `npm run test:panel` | 80 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
+| smoke 自查 | 执行 `npm run test:panel` | 86 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
 | 首次启动生成密码 | 空数据目录、未设置 `PANEL_PASSWORD` | 生成 16 位密码；`panel.json` 只保存 scrypt 哈希且权限为 0600；再次启动不再生成，原密码可登录 |
 | 未登录访问 | 不带会话 | `healthz` 返回 `{"status":"ok"}`；`/` 302 到 `login`；登录页与静态资源可访问；`api/auth/session` 返回 401 |
 | 登录与退出 | 设置 `PANEL_PASSWORD` | 错误密码 401；正确密码 204，`Set-Cookie` 带 `HttpOnly`、`SameSite=Strict`、`Path=/`，HTTP 下不带 `Secure`；登录后可访问首页；退出后会话失效 |
@@ -65,5 +65,11 @@
 | Selenium 状态：分组与会话数 | 两个模拟 Selenium：Grid 格式（1 个会话）与 chromedriver 格式；全局默认为 Grid 地址（带末尾斜杠），`ok-2` 覆盖为不带协议、带用户名与密码的 chromedriver 地址；并发数 3；未登录访问；`slow-1` 阅读中且 Grid 的会话被占用；之后会话增加到 3 个、节点改为 DOWN；最后所有账号都改用其他地址 | 未登录 401；登录后返回 `checkedAt`、`maxConcurrentRuns` 与两个地址：Grid 为全局默认、账号 `slow-1`、`ok-1`，`ready`、已用 0/1、1 个节点；chromedriver 地址只有 `ok-2`，`ready`、会话数为 null；返回内容中没有用户名与密码，查询时带了对应的 Basic 认证；阅读中且会话占满时 Grid 为 `busy`、`ready` 为 false、已用 1/1、`panelRuns` 为 1，结束后 `panelRuns` 为 0；3 个会话时为 `ready`、已用 1/3；节点 DOWN 时为 `not-ready`、总数 0；所有账号改用其他地址后全局默认地址仍列出（`accounts` 为空），其他地址按账号顺序列出 |
 | Selenium 状态：内置浏览器 | 全局默认没有 Selenium 地址；`PATH` 中先没有 chromedriver 与 Chromium，再放入输出版本号的假 `chromedriver` 与 `chromium-browser`；再把假 `chromedriver` 改为 154 版；最后用 `CHROME_BIN` 指向不存在的文件 | 只有一项，`url` 为空、`builtin` 为 true、全局默认；先为 `unreachable`，原因为“找不到 chromedriver 与 Chromium”；之后为 `ready`，`message` 为浏览器版本，会话数为 null，列出使用它的账号；版本不一致时为 `unreachable`，原因为“chromedriver 与 Chromium 的主版本不一致（chromedriver 154，Chromium 155）”；最后为 `unreachable`，原因含“无法读取浏览器版本” |
 | Selenium 状态：故障 | 查询超时设为 0.3 秒；模拟 Selenium 停止、返回网页、不响应、返回响应头后每 50ms 发送一个字节且从不结束、返回一部分后断开连接、`/status` 返回 404 只有 `/wd/hub/status` 可用；同时发出 3 个查询（Selenium 延迟 0.2 秒响应） | 停止时为 `unreachable`，原因为“连接被拒绝（ECONNREFUSED）”；返回网页时原因含“返回的不是 Selenium 状态”；不响应时 3 秒内返回“0.3 秒内没有响应”，且只请求了 `/status`；持续缓慢发送数据时同样 3 秒内返回“0.3 秒内没有响应”；中途断开时原因为“连接被重置（ECONNRESET）”；`/status` 404 时再请求 `/wd/hub/status`，结果为 `ready`；同时的 3 个查询只向 Selenium 发出 1 个请求 |
+| 失败重试 | 计划器不等待启动、重试间隔缩短为 0.1/0.2/0.3 秒；`flaky-a`（时长 5 分钟）由定时触发，第 1 次读 1 分钟后出错；`fail-b` 手动运行出错；`timeout-c` 定时触发后扫码超时；重试次数改为 1 后 `fail-d` 定时触发两次都出错 | `flaky-a` 第 1 次 `errorKind` 为 `error`，随后以 `retry` 读剩余 4 分钟成功，`attempt` 为 2、`originRunId` 指向第 1 次；子进程收到的 `retry` 依次为 `{ attempt: 1, retriesLeft: 2 }` 与 `{ attempt: 2, retriesLeft: 1 }`；手动运行收到 `retriesLeft: 0` 且不重试；扫码超时不重试；`fail-d` 共两次运行，第 2 次 `retriesLeft` 为 0 |
+| 面板代发失败通知 | 全局默认配置模拟的 Bark 服务器；重试次数 0 时 `crash-e` 定时触发；之后重试次数改为 1 再触发一次 | 崩溃后面板代发一条“运行失败：阅读子进程异常退出（退出码 3）”；重试次数为 1 时第 1 次崩溃不发通知，重试后仍崩溃发一条，末尾为“（已重试 1 次）” |
+| 启动恢复 | `slow-f` 定时触发、`slow-m` 手动运行，读了 2 分钟后停止面板；再写入两条进行中的旧记录 `slow-g`（宽限内，计划 10 分钟已读 3 分钟）与 `slow-h`（最后写入在 5 小时前）后重新启动；再重启一次 | 停止后 `planner.json`（0600）中只有 `slow-f` 的待恢复项；重启后 `slow-f` 以 `resume` 补读剩余分钟、`originRunId` 指向被中断的运行，`slow-g` 以 `resume` 读 7 分钟，`slow-h` 记录“已超过补触发宽限时间，不恢复”，手动运行不恢复；再次重启不重复恢复 |
+| 错过的调度 | `planner.json` 的上次检查时间为 4 小时前；`slow-i` 的规则在 10 分钟前，`slow-j` 的在 3 小时前 | `slow-i` 补触发一次（`trigger` 为 `schedule`、`delayedMinutes` 约 10）；`slow-j` 只记录“已超过补触发宽限时间，不补触发” |
+| 随机延后 | 随机数固定为 0.99；`goal-k` 的规则随机延后 2 分钟、运行配置时长 2 分钟并随机增加 3 分钟；时钟往后拨 2 分钟 | 到点后不加入队列，待办（`schedule`）写入 `planner.json` 并出现在账号列表的 `planned` 中；时钟拨过后加入队列，`delayedMinutes` 为 2，计划时长在 2–5 分钟之间 |
+| 每日目标 | 时钟设为当天 12:00；`goal-l` 设置月卡挑战，目标 5 分钟、06:00 检查；`goal-m` 目标 20 分钟、23:50 检查，时钟设为 23:54；`timeout-n` 目标 30 分钟、06:00 检查；另外提交无效的目标 | 无效值 400；没有目标时建议值为 60；23:50 检查提示“最多还能补读 7 分钟”；`goal-l` 补跑 5 分钟（`catchup`，子进程收到 `goalDeficit` 5），读够后不再补跑，接口显示今天 5 分钟、补跑 1 次；`goal-m` 补跑 3 次、每次 2 分钟后停止；`timeout-n` 扫码超时后当天不再补跑，`catchups.blocked` 为 true |
 | 端口被占用 | 端口已被其他进程监听 | 报错 `端口 <端口> 已被占用，请通过 PANEL_PORT 更换端口` |
 | 镜像 | 执行 `npm run test:runtime` | 容器健康检查通过；面板进程以 `node` 用户运行；`panel.json` 属于 `node` 且权限 600；`docker logs` 中有初始密码；`docker stop` 在 5 秒内完成 |

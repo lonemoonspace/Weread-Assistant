@@ -1,12 +1,15 @@
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
 const { fork } = require("child_process");
+const { CONFIG_SCHEMA } = require("../../config/schema");
 const { formatLocalTimestamp } = require("../../shared/log");
 const { ensurePrivateDir } = require("../../shared/files");
 const { findAccount } = require("../accounts");
 const { accountDataDir, resolveAccountConfig } = require("../config");
 const { PanelError, badRequest } = require("../errors");
+const { retriesLeftFor } = require("../retry");
 const { newRunId, runDir, writeRunMeta } = require("../runs");
 const { applyWorkerEvent, exitOutcome, fillMinuteMarks } = require("./events");
 const {
@@ -25,6 +28,7 @@ const { MODE_LABELS, TRIGGER_LABELS, createRedactor, publicRun, runMeta } = requ
 const LOG_TAIL_LINES = 200;
 const MAX_LOG_LINE_LENGTH = 8000;
 const RUN_MODES = ["read", "login"];
+const MAX_DURATION = CONFIG_SCHEMA.find((field) => field.key === "duration").max;
 
 /**
  * 运行队列：每次运行 fork 一个阅读子进程（src/reader/worker.js），经 IPC 下发配置、接收事件，
@@ -33,6 +37,7 @@ const RUN_MODES = ["read", "login"];
  *
  * options.publicUrl：面板的外网地址（PANEL_PUBLIC_URL），用于扫码推送中的面板链接
  * options.localBrowserStatus()：已缓存的内置浏览器状态（见 createLocalBrowserChecker 的 cached），随运行配置下发
+ * options.onFinish(run, { config })：每次运行结束后调用，run 为对外的运行信息，config 为这次运行实际使用的配置（没能解析时为 null）
  * options.workerPath / killTimeoutMs / runTimeoutMs / startOptions 供测试替换子进程与缩短等待
  */
 function createRunner({
@@ -100,10 +105,11 @@ function createRunner({
   }
 
   // 结束一次运行：写入最终状态、关闭日志、释放账号，然后尝试启动排队中的运行
-  function finish(run, status, error = "") {
+  function finish(run, status, error = "", errorKind = "") {
     clearTimers(run);
     run.status = status;
     run.error = error;
+    run.errorKind = status === "failed" ? errorKind || "error" : "";
     run.loginUrl = "";
     run.loginQrAt = "";
     run.endedAt = new Date().toISOString();
@@ -122,7 +128,7 @@ function createRunner({
     running.delete(run);
     active.delete(run.accountId);
     try {
-      onFinish(publicRun(run));
+      onFinish(publicRun(run), { config: run.config || null });
     } catch (e) {
       console.error("处理运行结束失败:", e);
     }
@@ -143,11 +149,11 @@ function createRunner({
     }, killTimeoutMs);
   }
 
-  function setResult(run, status, error = "") {
+  function setResult(run, status, error = "", errorKind = "") {
     if (run.result) {
       return;
     }
-    run.result = { status, error };
+    run.result = { status, error, errorKind };
     run.status = status;
     run.error = error;
     run.loginUrl = "";
@@ -168,7 +174,7 @@ function createRunner({
       return;
     }
     if (outcome.result) {
-      setResult(run, outcome.result.status, outcome.result.error);
+      setResult(run, outcome.result.status, outcome.result.error, outcome.result.errorKind);
     }
     changed(run);
   }
@@ -201,14 +207,14 @@ function createRunner({
     }
 
     const outcome = exitOutcome(run, exitText);
-    finish(run, outcome.status, outcome.error);
+    finish(run, outcome.status, outcome.error, outcome.errorKind);
   }
 
   function start(run) {
     const data = store.get();
     const account = data.accounts.find((item) => item.id === run.accountId);
     if (!account) {
-      finish(run, "failed", "账号已删除");
+      finish(run, "failed", "账号已删除", "account");
       return;
     }
     if (!account.enabled) {
@@ -219,7 +225,7 @@ function createRunner({
     try {
       config = resolveAccountConfig(data, account, panelDataDir);
     } catch (e) {
-      finish(run, "failed", `配置无效：${e.message}`);
+      finish(run, "failed", `配置无效：${e.message}`, "config");
       return;
     }
     try {
@@ -229,6 +235,18 @@ function createRunner({
       return;
     }
 
+    // 重试、补跑与恢复按计划器给出的分钟数读；其他运行在设定时长之上随机多读 0 到 durationJitter 分钟
+    if (run.mode === "read") {
+      const override = run.minutesOverride != null;
+      const extra = !override && config.durationJitter > 0 ? crypto.randomInt(config.durationJitter + 1) : 0;
+      // 不超过配置允许的最大时长，子进程会再校验一次配置
+      config = Object.freeze({ ...config, duration: Math.min(override ? run.minutesOverride : config.duration + extra, MAX_DURATION) });
+      if (extra > 0) {
+        panelLog(run, `本次阅读时长随机增加 ${extra} 分钟，共 ${config.duration} 分钟`);
+      }
+    }
+    run.config = config;
+    run.retriesLeft = retriesLeftFor(run.trigger, run.attempt, data.settings.retryCount);
     run.accountName = account.name;
     run.redact = createRedactor(config);
     run.seleniumUrl = config.seleniumUrl;
@@ -249,7 +267,7 @@ function createRunner({
         serialization: "json",
       });
     } catch (e) {
-      finish(run, "failed", `无法启动阅读子进程：${e.message}`);
+      finish(run, "failed", `无法启动阅读子进程：${e.message}`, "crash");
       return;
     }
     run.child = child;
@@ -274,7 +292,19 @@ function createRunner({
     // 配置了面板外网地址时，扫码推送附带该账号实时页面的链接
     const panelLink = publicUrl ? `${publicUrl}#/accounts/${run.accountId}/live` : "";
     const browserStatus = config.seleniumUrl ? null : localBrowserStatus();
-    child.send({ type: "start", mode: run.mode, config, screenshotDir: run.dir, panelLink, browserStatus, ...startOptions });
+    // retry：子进程据此决定失败时是否发送通知（还会重试时不发）；goalDeficit：补跑时当天还差的分钟数，写进扫码超时的通知
+    const retry = { attempt: run.attempt, retriesLeft: run.retriesLeft };
+    child.send({
+      type: "start",
+      mode: run.mode,
+      config,
+      screenshotDir: run.dir,
+      panelLink,
+      browserStatus,
+      retry,
+      goalDeficit: run.goalDeficit,
+      ...startOptions,
+    });
 
     const limitMs =
       runTimeoutMs || (config.loginTimeout + (run.mode === "read" ? config.duration : 0)) * 60000 + RUN_TIMEOUT_MARGIN_MS;
@@ -302,10 +332,10 @@ function createRunner({
         // 启动过程中的意外错误也要结束这次运行，否则它会一直停在排队状态并占用账号
         console.error("启动运行失败:", run.accountId, run.id, e);
         if (run.child) {
-          setResult(run, "failed", `无法启动运行：${e.message}`);
+          setResult(run, "failed", `无法启动运行：${e.message}`, "crash");
           terminate(run);
         } else if (active.get(run.accountId) === run) {
-          finish(run, "failed", `无法启动运行：${e.message}`);
+          finish(run, "failed", `无法启动运行：${e.message}`, "crash");
         }
       }
     }
@@ -313,8 +343,13 @@ function createRunner({
 
   return {
     // 加入队列。账号不存在 404；已停用、已在运行或排队 409
-    // scheduleId：定时触发时为调度规则 ID
-    enqueue(accountId, { mode = "read", trigger = "manual", scheduleId = null } = {}) {
+    // scheduleId：定时触发时为调度规则 ID。以下由计划器使用：minutes 为本次阅读的分钟数（正整数，覆盖配置的时长，不再随机增加；null 为按配置）；
+    // attempt 与 originRunId 为第几次尝试与最初那次运行；delayedMinutes 为随机延后或补触发造成的延迟；
+    // goalDeficit 为补跑时当天还差的分钟数
+    enqueue(
+      accountId,
+      { mode = "read", trigger = "manual", scheduleId = null, minutes = null, attempt = 1, originRunId = null, delayedMinutes = 0, goalDeficit = 0 } = {}
+    ) {
       if (closing) {
         throw new PanelError(503, "panel_closing", "面板正在停止");
       }
@@ -355,6 +390,12 @@ function createRunner({
         loginUrl: "",
         loginQrAt: "",
         error: "",
+        errorKind: "",
+        attempt,
+        originRunId,
+        delayedMinutes,
+        minutesOverride: minutes,
+        goalDeficit,
         exitCode: null,
         exitSignal: null,
         dir: runDir(panelDataDir, accountId, id),
@@ -373,7 +414,13 @@ function createRunner({
       run.logStream.on("error", (e) => console.error("写入运行日志失败:", run.dir, e.message));
       active.set(accountId, run);
       queue.push(run);
-      const triggerText = `${TRIGGER_LABELS[trigger] || trigger}触发${scheduleId ? `（规则 ${scheduleId}）` : ""}`;
+      const details = [
+        scheduleId ? `规则 ${scheduleId}` : "",
+        attempt > 1 ? `第 ${attempt} 次尝试` : "",
+        delayedMinutes > 0 ? `延后 ${delayedMinutes} 分钟` : "",
+        minutes > 0 ? `读 ${minutes} 分钟` : "",
+      ].filter(Boolean);
+      const triggerText = `${TRIGGER_LABELS[trigger] || trigger}触发${details.length > 0 ? `（${details.join("，")}）` : ""}`;
       panelLog(run, `加入队列：${triggerText}，${MODE_LABELS[mode]}`);
       changed(run);
       pump();

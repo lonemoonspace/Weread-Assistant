@@ -16,6 +16,7 @@ const { settingsRoutes } = require("./http/routes/settings");
 const { acquirePanelLock } = require("./lock");
 const { passkeyRelyingParty } = require("./options");
 const { createPasskeys } = require("./passkeys");
+const { createPlanner } = require("./planner");
 const { createRunner } = require("./runner");
 const { markInterruptedRuns, restrictRunDirs } = require("./runs");
 const { createScheduler } = require("./scheduler");
@@ -28,10 +29,13 @@ const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const KEEP_ALIVE_TIMEOUT_MS = 95000;
 
 // 组装面板应用。各组接口见 http/routes/：中间件的先后决定哪些接口需要登录，挂载顺序不能随意调整
-function createPanelApp(options, { auth, store, runner, passkeys, checkLocalBrowser = createLocalBrowserChecker(process.env, { timeoutMs: options.browserVersionTimeoutMs }) }) {
+function createPanelApp(
+  options,
+  { auth, store, runner, passkeys, planner = null, checkLocalBrowser = createLocalBrowserChecker(process.env, { timeoutMs: options.browserVersionTimeoutMs }) }
+) {
   const cookies = createSessionCookies(options);
   // 各组接口共用的依赖
-  const ctx = { options, dataDir: path.resolve(options.dataDir), auth, store, runner, passkeys, checkLocalBrowser, cookies };
+  const ctx = { options, dataDir: path.resolve(options.dataDir), auth, store, runner, passkeys, planner, checkLocalBrowser, cookies };
 
   const app = express();
   app.disable("x-powered-by");
@@ -108,6 +112,7 @@ async function startPanel(options) {
   let server;
   let runner;
   let scheduler;
+  let planner;
   let cleanupTimer;
   try {
     const store = createStore(path.resolve(options.dataDir), {
@@ -122,7 +127,7 @@ async function startPanel(options) {
     warnUnusablePasskeys(store, passkeys);
     warnPasswordLogin(store, passkeys, options.forcePasswordLogin);
     restrictRunDirs(options.dataDir);
-    markInterruptedRuns(options.dataDir);
+    const interrupted = markInterruptedRuns(options.dataDir);
     // 按保留策略清理截图与日志；进行中的运行不清理
     const cleanup = () => {
       try {
@@ -140,9 +145,14 @@ async function startPanel(options) {
       store,
       publicUrl: options.publicUrl,
       localBrowserStatus: checkLocalBrowser.cached,
-      onFinish: () => setImmediate(cleanup),
+      onFinish: (run, extra) => {
+        setImmediate(cleanup);
+        planner.handleFinished(run, extra);
+      },
       ...options.runner,
     });
+    // options.planner：测试时缩短启动等待与重试间隔
+    planner = createPlanner({ dataDir: options.dataDir, store, runner, interrupted, ...options.planner });
     cleanup();
     cleanupTimer = setInterval(cleanup, CLEANUP_INTERVAL_MS);
     cleanupTimer.unref();
@@ -155,8 +165,8 @@ async function startPanel(options) {
         setImmediate(cleanup);
       }
     });
-    const app = createPanelApp(options, { auth, store, runner, passkeys, checkLocalBrowser });
-    scheduler = createScheduler({ store, runner });
+    const app = createPanelApp(options, { auth, store, runner, passkeys, planner, checkLocalBrowser });
+    scheduler = createScheduler({ store, runner, onFire: (accountId, rule) => planner.fireSchedule(accountId, rule) });
     server = http.createServer(app);
     // 面板通常在 cloudflared、nginx 等反向代理之后：空闲连接的保持时间要长于代理的（常见为 60–90 秒），
     // 否则代理复用一个刚被面板关闭的连接时会偶发 502。headersTimeout 须大于 keepAliveTimeout
@@ -175,6 +185,7 @@ async function startPanel(options) {
     });
     // 启动后在后台检查一次内置浏览器，之后的运行直接使用这次的结果
     checkLocalBrowser().catch(() => {});
+    planner.start();
 
     // 停止：不再接受新连接；结束进行中的运行（期间实时推送仍可送达）；断开剩余连接后释放锁
     let closing = null;
@@ -182,7 +193,10 @@ async function startPanel(options) {
       const serverClosed = new Promise((resolve) => server.close(resolve));
       clearInterval(cleanupTimer);
       scheduler.close();
+      // 先停止安排新的重试与补跑；运行队列结束进行中的运行时，计划器记下被中断的运行，下次启动时恢复
+      planner.beginClose();
       await runner.close();
+      planner.close();
       server.closeAllConnections();
       await serverClosed;
       lock.release();
@@ -192,6 +206,7 @@ async function startPanel(options) {
       server,
       runner,
       scheduler,
+      planner,
       port: server.address().port,
       generatedPassword,
       close: () => {
@@ -203,6 +218,9 @@ async function startPanel(options) {
     clearInterval(cleanupTimer);
     if (scheduler) {
       scheduler.close();
+    }
+    if (planner) {
+      planner.close();
     }
     lock.release();
     throw error;

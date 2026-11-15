@@ -21,7 +21,7 @@ function createRedactor(config = {}) {
 }
 
 const MODE_LABELS = { read: "阅读", login: "仅登录" };
-const TRIGGER_LABELS = { manual: "手动", schedule: "定时" };
+const TRIGGER_LABELS = { manual: "手动", schedule: "定时", retry: "重试", catchup: "补跑", resume: "恢复" };
 
 function publicRun(run, { withLog = false } = {}) {
   const view = {
@@ -45,6 +45,13 @@ function publicRun(run, { withLog = false } = {}) {
     // 最近一次出现二维码的时间：二维码解析不出登录链接时，页面据此加载二维码截图
     loginQrAt: run.loginQrAt,
     error: run.error,
+    // 失败类别，见 events.js；成功、停止与中断时为空
+    errorKind: run.errorKind,
+    // 第几次尝试（从 1 开始）与最初那次运行：重试与恢复时有值
+    attempt: run.attempt,
+    originRunId: run.originRunId,
+    // 随机延后或补触发造成的延迟（分钟）
+    delayedMinutes: run.delayedMinutes,
   };
   if (withLog) {
     view.log = [...run.logTail];

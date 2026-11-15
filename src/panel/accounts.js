@@ -3,7 +3,7 @@ const path = require("path");
 const { PanelError, badRequest, rejectUnsafeName } = require("./errors");
 const { normalizeChallenge } = require("./challenge");
 const { ACCOUNT_ID_PATTERN, accountDataDir, applyConfigPatch, maskValues } = require("./config");
-const { nextRunAt, publicSchedule } = require("./schedules");
+const { nextRunInfo, publicSchedule } = require("./schedules");
 const { ensurePrivateDir } = require("../shared/files");
 
 const MAX_NAME_LENGTH = 32;
@@ -28,6 +28,11 @@ function findAccount(data, id) {
   return account;
 }
 
+function nextRunView(account, timezone) {
+  const next = nextRunInfo(account, timezone);
+  return { nextRunAt: next ? next.at : null, nextRunJitterMinutes: next ? next.jitterMinutes : 0 };
+}
+
 // timezone 为面板设置中的时区，用于计算调度规则接下来的触发时间
 function publicAccount(account, panelDataDir, timezone) {
   return {
@@ -37,8 +42,9 @@ function publicAccount(account, panelDataDir, timezone) {
     createdAt: account.createdAt,
     overrides: maskValues(account.overrides),
     challenge: account.challenge,
+    goal: account.goal || null,
     schedules: account.schedules.map((rule) => publicSchedule(rule, timezone)),
-    nextRunAt: nextRunAt(account, timezone),
+    ...nextRunView(account, timezone),
     hasCookies: fs.existsSync(path.join(accountDataDir(panelDataDir, account.id), "cookies.json")),
   };
 }
@@ -78,6 +84,7 @@ async function createAccount(store, panelDataDir, body) {
       overrides: {},
       schedules: [],
       challenge: null,
+      goal: null,
     });
   });
   return findAccount(data, id);
