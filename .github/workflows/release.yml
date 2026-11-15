@@ -20,8 +20,11 @@ on:
 permissions:
   contents: read
 
+# main 分支发布、版本 tag 发布与每周重建（rebuild.yml）共用一个并发组，依次运行，不同时改动 latest。
+# GitHub 每个并发组只保留一个排队中的运行：排队时又来了新的运行，旧的排队运行会被取消
+# （main 上后来的提交会补上被取消的版本发布；被取消的 tag 发布或重建需要手动重新运行）
 concurrency:
-  group: release-${{ github.ref_type == 'tag' && github.ref || 'dev' }}
+  group: release-latest
   cancel-in-progress: false
 
 jobs:

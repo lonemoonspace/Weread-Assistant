@@ -76,7 +76,7 @@ jobs:
       # 使用主机网络，容器中的浏览器才能访问本机的模拟页面与面板
       - name: 启动 Selenium
         run: |
-          SELENIUM_IMAGE="$(sed -n 's/^FROM //p' ci/selenium.Dockerfile)"
+          SELENIUM_IMAGE="$(sed -n 's/^FROM //p' ci/selenium.Dockerfile | head -n 1)"
           docker run -d --name selenium --network host --shm-size 2g "$SELENIUM_IMAGE"
           for _ in $(seq 1 60); do
             if curl -sf http://localhost:4444/status | grep -q '"ready": *true'; then
