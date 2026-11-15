@@ -13,6 +13,7 @@ const {
   longestStreak,
   rebuildDays,
   statsReport,
+  todayStats,
 } = require("../../src/panel/stats");
 
 const tempDirs = [];
@@ -109,20 +110,21 @@ describe("统计页数据", () => {
     assert.equal(single.goalMinutes, 30);
   });
 
-  it("运行情况：各结果与触发方式的次数、重试救回、补跑与需要扫码的次数；范围外与进行中的不计", () => {
+  it("运行情况：各结果与触发方式的次数、重试救回（重启后恢复的不算）、补跑与需要扫码的次数；范围外与进行中的不计", () => {
     const dir = dataDir();
     readOn(dir, "2026-11-10", 5, { trigger: "schedule", status: "failed", errorKind: "error" });
     readOn(dir, "2026-11-10", 5, { trigger: "retry", status: "success" });
     readOn(dir, "2026-11-11", 5, { trigger: "catchup", status: "success" });
+    readOn(dir, "2026-11-11", 5, { trigger: "resume", status: "success" });
     readOn(dir, "2026-11-12", 0, { trigger: "manual", status: "failed", errorKind: "login-timeout", loginPrompted: true });
     readOn(dir, "2026-11-13", 2, { trigger: "manual", status: "stopped" });
     readOn(dir, "2026-11-14", 1, { trigger: "schedule", status: "reading" });
     readOn(dir, "2026-09-01", 30, { trigger: "manual", status: "success" });
     const { runs } = statsReport(dir, [{ id: "me" }], { timezone: TZ, now: new Date("2026-11-14T12:00:00Z") });
     assert.deepEqual(runs, {
-      total: 5,
-      byStatus: { success: 2, failed: 2, stopped: 1, interrupted: 0 },
-      byTrigger: { manual: 2, schedule: 1, retry: 1, catchup: 1, resume: 0 },
+      total: 6,
+      byStatus: { success: 3, failed: 2, stopped: 1, interrupted: 0 },
+      byTrigger: { manual: 2, schedule: 1, retry: 1, catchup: 1, resume: 1 },
       rescued: 1,
       catchups: 1,
       loginPrompted: 1,
@@ -176,5 +178,18 @@ describe("按天聚合的缓存", () => {
     assert.deepEqual(asObject(accountDays(dir, "me", TZ).totals), { "2026-11-14": 9, "2026-11-15": 11 });
     assert.deepEqual(asObject(accountDays(dir, "me", "UTC").totals), { "2026-11-14": 20 });
     assert.deepEqual(asObject(accountDays(dir, "me", TZ).totals), { "2026-11-14": 9, "2026-11-15": 11 });
+  });
+
+  it("总览不触发全量读取：今天的分钟数只读附近的运行；连续天数在后台建立缓存后才有", async () => {
+    const dir = dataDir();
+    readOn(dir, "2026-01-01", 30);
+    readOn(dir, "2026-11-14", 10);
+    readOn(dir, "2026-11-15", 7);
+    const now = new Date("2026-11-15T06:00:00Z");
+    assert.deepEqual(todayStats(dir, "me", { timezone: TZ, now }), { date: "2026-11-15", minutes: 7, checkedIn: true });
+    assert.equal(accountStreak(dir, "me", { timezone: TZ, now, lazy: true }), null, "缓存还没建立时不等全量读取");
+    await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+    assert.equal(accountStreak(dir, "me", { timezone: TZ, now, lazy: true }), 2, "后台建立缓存后返回连续天数");
+    assert.deepEqual(todayStats(dir, "me", { timezone: TZ, now }), { date: "2026-11-15", minutes: 7, checkedIn: true });
   });
 });

@@ -35,8 +35,9 @@ onRunMetaWritten((dir) => {
   }
 });
 
-// 时区偏移都是 15 分钟的整数倍，同一个 15 分钟区间内的时刻日期相同：按区间缓存，
-// 不必对每个分钟记录都调用一次 Intl（一年的记录有数万条）
+// 现行时区的偏移都是 15 分钟的整数倍，同一个 15 分钟区间内的时刻日期相同：按区间缓存，
+// 不必对每个分钟记录都调用一次 Intl（一年的记录有数万条）。偏移不是 15 分钟整数倍的历史时区
+// （例如 1970 年代以前的一些地方时）在区间内跨过午夜时可能把这一刻算到相邻的一天
 function dateLookup(timezone) {
   const dates = new Map();
   return (ms) => {
@@ -105,11 +106,9 @@ function accountDays(panelDataDir, accountId, timezone) {
     if (entry && entry.final && !cache.dirty.has(id)) {
       continue;
     }
+    // 新出现的、还没结束的与本进程刚写入过的运行重新读取
     cache.dirty.delete(id);
     const meta = readMeta(path.join(key, id));
-    if (entry && entry.meta === meta) {
-      continue;
-    }
     if (entry) {
       applyDays(cache.totals, entry.days, -1);
       cache.runs.delete(id);
@@ -136,6 +135,68 @@ function rebuildDays(panelDataDir, accountId, timezone) {
   return totals;
 }
 
+// 账号的缓存是否已经建立（同一时区）
+function hasAccountDays(panelDataDir, accountId, timezone) {
+  const cache = caches.get(path.join(runsRoot(panelDataDir), accountId));
+  return Boolean(cache) && cache.timezone === timezone;
+}
+
+// 在后台逐个账号建立缓存：总览不必等第一次全量读取（运行记录多时每个账号要一百多毫秒）。
+// 每个账号之间让出事件循环，同一账号只排一次
+const warming = new Set();
+let warmScheduled = false;
+function warmAccountDays(panelDataDir, accountId, timezone) {
+  warming.add(JSON.stringify([panelDataDir, accountId, timezone]));
+  if (warmScheduled) {
+    return;
+  }
+  warmScheduled = true;
+  const next = () => {
+    const [item] = warming;
+    if (!item) {
+      warmScheduled = false;
+      return;
+    }
+    warming.delete(item);
+    const [dir, id, zone] = JSON.parse(item);
+    try {
+      accountDays(dir, id, zone);
+    } catch (e) {
+      console.warn(`统计账号 ${id} 的运行记录失败:`, e.message);
+    }
+    setImmediate(next);
+  };
+  setImmediate(next);
+}
+
+// 不建立缓存、只读取日期范围附近的运行记录得到按天分钟数（缓存建立之前总览用）
+const RANGE_MARGIN_MS = 3 * 24 * 60 * 60 * 1000;
+function scanDays(panelDataDir, accountId, { timezone, from, to }) {
+  const [fy, fm, fd] = dateParts(from);
+  const [ty, tm, td] = dateParts(to);
+  const lower = Date.UTC(fy, fm - 1, fd) - RANGE_MARGIN_MS;
+  const upper = Date.UTC(ty, tm - 1, td) + RANGE_MARGIN_MS + 24 * 60 * 60 * 1000;
+  const dateOf = dateLookup(timezone);
+  const totals = new Map();
+  for (const id of accountRunIds(panelDataDir, accountId)) {
+    const queuedAt = runIdTime(id);
+    if (queuedAt < lower || queuedAt > upper) {
+      continue;
+    }
+    const meta = readMeta(path.join(runsRoot(panelDataDir), accountId, id));
+    if (meta) {
+      const days = runContribution(meta, id, dateOf).days;
+      applyDays(totals, Object.fromEntries(Object.entries(days).filter(([date]) => date >= from && date <= to)), 1);
+    }
+  }
+  return totals;
+}
+
+// 删除账号后丢掉它的缓存
+function dropAccountDays(panelDataDir, accountId) {
+  caches.delete(path.join(runsRoot(panelDataDir), accountId));
+}
+
 function clearStatsCache() {
   caches.clear();
 }
@@ -153,9 +214,13 @@ function dailyMinutes(panelDataDir, accountId, { timezone, from, to }) {
   return result;
 }
 
+// 今天的分钟数。缓存还没建立时只读取今天附近的运行记录，不触发全量读取（总览每个账号都要调用）
 function todayStats(panelDataDir, accountId, { timezone, now = new Date() }) {
   const date = dateInZone(now, timezone);
-  const minutes = accountDays(panelDataDir, accountId, timezone).totals.get(date) || 0;
+  const totals = hasAccountDays(panelDataDir, accountId, timezone)
+    ? accountDays(panelDataDir, accountId, timezone).totals
+    : scanDays(panelDataDir, accountId, { timezone, from: date, to: date });
+  const minutes = totals.get(date) || 0;
   return { date, minutes, checkedIn: minutes >= CHECK_IN_MINUTES };
 }
 
@@ -184,8 +249,13 @@ function longestStreak(dates) {
   return best;
 }
 
-// 账号的当前连续打卡天数（总览的账号卡片用）
-function accountStreak(panelDataDir, accountId, { timezone, now = new Date() }) {
+// 账号的当前连续打卡天数（总览的账号卡片用）。lazy 为 true 时缓存还没建立就返回 null，并在后台建立，
+// 下次刷新时显示，不让总览等全量读取
+function accountStreak(panelDataDir, accountId, { timezone, now = new Date(), lazy = false }) {
+  if (lazy && !hasAccountDays(panelDataDir, accountId, timezone)) {
+    warmAccountDays(panelDataDir, accountId, timezone);
+    return null;
+  }
   const { totals } = accountDays(panelDataDir, accountId, timezone);
   return currentStreak((date) => (totals.get(date) || 0) >= CHECK_IN_MINUTES, dateInZone(now, timezone));
 }
@@ -311,7 +381,8 @@ function runCounts(entries, from) {
     if (Object.hasOwn(counts.byTrigger, run.trigger)) {
       counts.byTrigger[run.trigger] += 1;
     }
-    if ((run.trigger === "retry" || run.trigger === "resume") && run.status === "success") {
+    // 只算失败重试救回的；重启后恢复的运行不是因为失败，不计入
+    if (run.trigger === "retry" && run.status === "success") {
       counts.rescued += 1;
     }
     if (run.trigger === "catchup") {
@@ -391,6 +462,7 @@ module.exports = {
   challengeProgress,
   clearStatsCache,
   currentStreak,
+  dropAccountDays,
   dailyMinutes,
   dateInZone,
   heatLevel,
@@ -398,4 +470,5 @@ module.exports = {
   rebuildDays,
   statsReport,
   todayStats,
+  warmAccountDays,
 };
