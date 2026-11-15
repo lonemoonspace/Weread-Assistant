@@ -30,3 +30,8 @@ updates:
     directory: /ci
     schedule:
       interval: monthly
+    # 镜像同时发布以 Selenium 版本（4.52.0-20261101）和以 Chromium 版本（156.0-20261101）命名的标签，
+    # 后者的数字更大，会被当成新版本。只跟踪 Selenium 版本的标签
+    ignore:
+      - dependency-name: selenium/standalone-chromium
+        versions: [">= 100"]
