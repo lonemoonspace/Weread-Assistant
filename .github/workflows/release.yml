@@ -1,8 +1,9 @@
-# 发布 linux/arm64 镜像到 Docker Hub（docker.io/lonemoonspace/weread-assistant）：
+# 发布 linux/amd64 与 linux/arm64 多架构镜像到 Docker Hub（docker.io/lonemoonspace/weread-assistant）：
 # - main 分支的 CI 通过后发布 dev；package.json 的版本还没有对应的 tag（如 v0.1.0）时，同时发布 0.1.0 与 latest，
 #   并在该提交上创建 tag 与 GitHub Release（合并改版本号的 Pull Request 即发布，不需要手动推送 tag）
 # - 推送版本 tag（须与 package.json 的 version 一致）时发布 0.1.0 与 latest，并创建 GitHub Release
-# 每次发布前先在 QEMU 模拟的 arm64 环境中构建并运行镜像检查。
+# - 在其他分支上手动触发（workflow_dispatch）时只发布 dev，用于验证发布流程本身
+# 两个架构在各自的原生 runner 上构建并检查，都通过后才合成清单、打标签（见 image.yml）；GitHub Release 最后创建。
 # 需要在仓库 Settings → Secrets and variables → Actions 中添加 DOCKERHUB_USERNAME 与 DOCKERHUB_TOKEN
 # （Docker Hub 的 Personal access token，权限 Read & Write）
 name: 发布镜像
@@ -19,13 +20,16 @@ on:
 permissions:
   contents: read
 
+# main 分支发布、版本 tag 发布与每周重建（rebuild.yml）共用一个并发组，依次运行，不同时改动 latest。
+# GitHub 每个并发组只保留一个排队中的运行：排队时又来了新的运行，旧的排队运行会被取消
+# （main 上后来的提交会补上被取消的版本发布；被取消的 tag 发布或重建需要手动重新运行）
 concurrency:
-  group: release-${{ github.ref_type == 'tag' && github.ref || 'dev' }}
+  group: release-latest
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: 构建、检查并推送 arm64 镜像
+  meta:
+    name: 确定版本与标签
     # 只处理本仓库 main 分支推送后通过的 CI；Pull Request 触发的 CI 不发布
     if: >-
       github.event_name != 'workflow_run' || (
@@ -34,20 +38,20 @@ jobs:
         github.event.workflow_run.head_repository.full_name == github.repository
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: write
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.meta.outputs.sha }}
+      version: ${{ steps.meta.outputs.version }}
+      tags: ${{ steps.meta.outputs.tags }}
+      release: ${{ steps.meta.outputs.release }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # CI 通过的那个提交
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "24"
 
-      - name: 确定镜像 tag
+      - name: 确定镜像标签
         id: meta
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,34 +64,43 @@ jobs:
               echo "::error::tag $GITHUB_REF_NAME 与 package.json 的版本 $version 不一致，应为 v$version"
               exit 1
             fi
-            tag="$version"
+            tags="$version,latest"
             release=true
           elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
             # 版本号还没有 tag：这个提交就是新版本，发布正式版本并创建 tag；dev 一并更新
             if out="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$version" 2>&1)"; then
-              tag="dev"
+              tags="dev"
             elif printf '%s' "$out" | grep -q "HTTP 404"; then
-              tag="$version"
+              tags="$version,latest,dev"
               release=true
             else
               echo "::error::无法查询 tag v$version：$out"
               exit 1
             fi
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            # 在其他分支上手动触发：只发布 dev，用于验证发布流程，不创建 tag 与 Release
+            tags="dev"
+            version="$version-dev"
+            echo "::notice::从分支 $GITHUB_REF_NAME 手动发布 dev，用于验证发布流程"
           else
             echo "::error::只从 main 分支发布 dev，或从版本 tag 发布正式版本（当前为 $GITHUB_REF）"
             exit 1
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "release=$release" >> "$GITHUB_OUTPUT"
-          echo "发布 docker.io/lonemoonspace/weread-assistant:$tag（提交 $HEAD_SHA）" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "sha=$HEAD_SHA"
+            echo "version=$version"
+            echo "tags=$tags"
+            echo "release=$release"
+          } >> "$GITHUB_OUTPUT"
+          echo "发布 docker.io/lonemoonspace/weread-assistant 的 $tags（提交 $HEAD_SHA）" >> "$GITHUB_STEP_SUMMARY"
 
       # 发布说明取 CHANGELOG.md 中该版本的一节；没有时在构建前失败，不推送镜像
-      - name: 读取发布说明
+      - name: 检查发布说明
         if: steps.meta.outputs.release == 'true'
         env:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
+          # shellcheck disable=SC2016 # awk 程序中的 $0 由 awk 解释
           awk -v version="$VERSION" '
             /^## / { if (found) exit; if (index($0, "## " version " ") == 1 || $0 == "## " version) { found = 1; next } }
             found { print }
@@ -107,39 +120,47 @@ jobs:
             exit 1
           fi
 
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+  image:
+    name: 镜像
+    needs: meta
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/image.yml
+    with:
+      ref: ${{ needs.meta.outputs.sha }}
+      version: ${{ needs.meta.outputs.version }}
+      tags: ${{ needs.meta.outputs.tags }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  # 从 main 发布时由 Release 在该提交上创建 tag。用 GITHUB_TOKEN 创建的 tag 不会再触发本工作流
+  release:
+    name: 创建 GitHub Release
+    needs: [meta, image]
+    if: needs.meta.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          platforms: arm64
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: 构建 arm64 镜像
-        run: node scripts/docker-image.js build --platform linux/arm64 --tag ci
-      - name: 检查 CLI、健康检查、运行用户、数据目录与停止
-        run: npm run test:runtime
-        env:
-          RUNTIME_SMOKE_IMAGE: docker.io/lonemoonspace/weread-assistant:ci
-          RUNTIME_SMOKE_ARCH: arm64
-
-      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      # 版本 tag 同时推送 latest（见 scripts/docker-image.js）；从 main 发布版本时 dev 也指向同一个镜像
-      - name: 推送镜像
-        env:
-          TAG: ${{ steps.meta.outputs.tag }}
-          DOCKER_EXTRA_TAGS: ${{ github.ref_type != 'tag' && steps.meta.outputs.release == 'true' && 'dev' || '' }}
-        run: node scripts/docker-image.js push --tag "$TAG"
-
-      # 从 main 发布时由 Release 在该提交上创建 tag。用 GITHUB_TOKEN 创建的 tag 不会再触发本工作流
+          persist-credentials: false
+          ref: ${{ needs.meta.outputs.sha }}
       - name: 创建 GitHub Release
-        if: steps.meta.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          HEAD_SHA: ${{ needs.meta.outputs.sha }}
         run: |
+          # shellcheck disable=SC2016 # awk 程序中的 $0 由 awk 解释
+          awk -v version="$VERSION" '
+            /^## / { if (found) exit; if (index($0, "## " version " ") == 1 || $0 == "## " version) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
           if gh release view "v$VERSION" > /dev/null 2>&1; then
             echo "GitHub Release v$VERSION 已存在，跳过"
           elif [ "$GITHUB_REF_TYPE" = "tag" ]; then

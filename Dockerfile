@@ -9,12 +9,15 @@ LABEL org.opencontainers.image.title="WeReadAssistant" \
 # su-exec：入口脚本修正数据目录属主后，以 node 用户运行
 # tini：作为 1 号进程转发信号、回收浏览器退出后留下的进程
 # chromium、chromium-chromedriver：内置浏览器，面板设置中的 Selenium 地址留空时使用；font-wqy-zenhei：中文字体
+# （Alpine 把 Chromium 的界面语言包拆在 chromium-lang 中，这里没有安装，不需要另外删除）
 RUN apk add --no-cache su-exec tini chromium chromium-chromedriver font-wqy-zenhei
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-# 生产依赖都不需要安装脚本：不运行，避免以 root 执行依赖中的代码
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+# 生产依赖都不需要安装脚本：不运行，避免以 root 执行依赖中的代码。
+# selenium-webdriver 自带的 Selenium Manager（各平台的二进制）用不到：内置浏览器使用系统的 chromedriver
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force \
+  && rm -rf node_modules/selenium-webdriver/bin
 COPY src ./src
 COPY docker-entrypoint.sh /usr/local/bin/weread-entrypoint.sh
 RUN chmod 755 /usr/local/bin/weread-entrypoint.sh

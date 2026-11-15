@@ -1,0 +1,205 @@
+# 可复用的镜像构建与发布流程（release.yml 与 rebuild.yml 调用）：
+# 1. amd64 与 arm64 在各自的原生 runner 上并行构建，跑镜像检查（test:runtime）与内置浏览器的阅读流程 smoke，
+#    通过后按摘要推送（不带标签）
+# 2. 两个架构都通过后，由汇总任务用 docker buildx imagetools create 合成多架构清单并打上全部标签；
+#    任何一个架构失败，标签都不动
+name: 镜像构建与发布
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 构建的提交或 tag
+        required: true
+        type: string
+      version:
+        description: 写入镜像标签 org.opencontainers.image.version 的版本号
+        required: true
+        type: string
+      tags:
+        description: 要打的标签，英文逗号分隔（如 0.4.0,latest,dev）
+        required: true
+        type: string
+      keep-newer-latest:
+        description: 为 true 时，latest 当前指向的不是这个版本就不改动 latest（每周重建旧版本时使用）
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: docker.io/lonemoonspace/weread-assistant
+  NODE_VERSION: "24"
+
+jobs:
+  build:
+    name: 构建、检查并按摘要推送（${{ matrix.arch }}）
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: 构建镜像
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ inputs.version }}
+        run: node scripts/docker-image.js build --platform "linux/$ARCH" --tag "$VERSION" --extra-tags ci
+      - name: 镜像体积
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          size="$(docker image inspect -f '{{.Size}}' "$IMAGE:ci")"
+          echo "linux/$ARCH 镜像解压后 $((size / 1024 / 1024)) MB" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: 检查 CLI、健康检查、运行用户、数据目录与停止
+        run: npm run test:runtime
+        env:
+          RUNTIME_SMOKE_IMAGE: ${{ env.IMAGE }}:ci
+          RUNTIME_SMOKE_ARCH: ${{ matrix.arch }}
+      # 测试脚本不在镜像中，只读挂载；以 node 用户运行，tini 回收浏览器进程
+      - name: 阅读流程 smoke（内置浏览器）
+        run: >-
+          docker run --rm --user node --entrypoint /sbin/tini
+          -v "$PWD/scripts:/app/scripts:ro" -e SELENIUM_URL=
+          "$IMAGE:ci" -- node scripts/reader-smoke.js
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # 与检查过的镜像使用同一个构建器，层都已缓存，这一步只是推送
+      - name: 按摘要推送
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          node scripts/docker-image.js push --platform "linux/$ARCH" --tag "$VERSION" --digest-file "$RUNNER_TEMP/digests/$ARCH"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: 合成多架构清单并打标签
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      # 只用到读取镜像版本的脚本；使用工作流所在的提交（重建旧版本时 inputs.ref 中可能还没有这个脚本）
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/image-version.js
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # 本次运行中两个架构上传的摘要
+      - name: 下载各架构的镜像摘要
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          for arch in amd64 arm64; do
+            gh run download "$GITHUB_RUN_ID" --name "digest-$arch" --dir "$RUNNER_TEMP/digests"
+          done
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: 合成清单并推送标签
+        env:
+          TAGS: ${{ inputs.tags }}
+          VERSION: ${{ inputs.version }}
+          KEEP_NEWER_LATEST: ${{ inputs.keep-newer-latest }}
+        run: |
+          refs=()
+          for arch in amd64 arm64; do
+            digest="$(tr -d '[:space:]' < "$RUNNER_TEMP/digests/$arch")"
+            case "$digest" in
+              sha256:*) refs+=("$IMAGE@$digest") ;;
+              *) echo "::error::缺少 $arch 的镜像摘要"; exit 1 ;;
+            esac
+          done
+          args=()
+          IFS=',' read -ra tags <<< "$TAGS"
+          for tag in "${tags[@]}"; do
+            tag="$(echo "$tag" | tr -d '[:space:]')"
+            [ -n "$tag" ] || continue
+            if [ "$tag" = "latest" ] && [ "$KEEP_NEWER_LATEST" = "true" ]; then
+              # 重建旧版本时，latest 已经指向更新的版本（例如期间发布了新版本）就不改动它。
+              # 多架构清单的 .Image 是“平台 → 镜像配置”，读不到时改为单独读取清单中第一个平台的镜像
+              current="$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{json .Image}}' 2> /dev/null \
+                | node scripts/image-version.js version || true)"
+              if [ -z "$current" ]; then
+                child="$(docker buildx imagetools inspect "$IMAGE:latest" --raw 2> /dev/null \
+                  | node scripts/image-version.js child || true)"
+                if [ -n "$child" ]; then
+                  current="$(docker buildx imagetools inspect "$IMAGE@$child" --format '{{json .Image}}' 2> /dev/null \
+                    | node scripts/image-version.js version || true)"
+                fi
+              fi
+              case "$(node scripts/image-version.js compare "$current" "$VERSION")" in
+                same | older) ;;
+                newer)
+                  echo "latest 当前为 $current 版本，比 $VERSION 新，保持不变" | tee -a "$GITHUB_STEP_SUMMARY"
+                  continue
+                  ;;
+                *)
+                  echo "::warning::读不到 latest 的版本（${current:-空}），保持不变"
+                  echo "读不到 latest 的版本（${current:-空}），保持不变" >> "$GITHUB_STEP_SUMMARY"
+                  continue
+                  ;;
+              esac
+            fi
+            args+=(-t "$IMAGE:$tag")
+          done
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "::error::没有要推送的标签"
+            exit 1
+          fi
+          docker buildx imagetools create "${args[@]}" "${refs[@]}"
+          for ((i = 1; i < ${#args[@]}; i += 2)); do
+            echo "已推送 ${args[$i]}（linux/amd64、linux/arm64）" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+      - name: 确认两个架构都在清单中
+        env:
+          TAGS: ${{ inputs.tags }}
+        run: |
+          first="$(echo "$TAGS" | cut -d, -f1 | tr -d '[:space:]')"
+          platforms="$(docker buildx imagetools inspect "$IMAGE:$first" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}')"
+          echo "$IMAGE:$first → $platforms"
+          for platform in linux/amd64 linux/arm64; do
+            case " $platforms " in
+              *" $platform "*) ;;
+              *) echo "::error::$IMAGE:$first 中没有 $platform"; exit 1 ;;
+            esac
+          done
