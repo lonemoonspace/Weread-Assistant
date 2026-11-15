@@ -90,7 +90,7 @@ docker compose logs app | grep 面板初始密码
 | `PATCH api/settings` | 是 | `{ settings?, defaults? }`：只修改提交的项；任一项非法时返回 400 且整个请求不生效 |
 | `GET api/accounts` | 是 | 账号列表，含是否已有 cookies、调度规则（带接下来的触发时间）、下一次定时运行时间 `nextRunAt`、挑战设置 `challenge`、今天的阅读分钟数 `today`（`{ date, minutes, checkedIn }`）与最近一次运行 `lastRun` |
 | `POST api/accounts` | 是 | `{ id, name? }`；成功 201，ID 已存在 409，ID 或名称非法 400；同时创建账号数据目录 |
-| `GET api/accounts/:id` | 是 | `{ account, challengeProgress, effective, profile }`：账号、本轮挑战进度（未设置挑战时为 null）、实际生效的运行配置与浏览器资料目录 `{ exists, broken, bytes }`（`broken` 为是否有重置时留下的 `profile.broken`，`bytes` 含它；大小统计要遍历目录，结果缓存 1 分钟，手动重置后立即更新） |
+| `GET api/accounts/:id` | 是 | `{ account, challengeProgress, effective, profile }`：账号、本轮挑战进度（未设置挑战时为 null）、实际生效的运行配置与浏览器资料目录 `{ exists, broken, bytes }`（`broken` 为是否有重置时留下的 `profile.broken`，`bytes` 含它；大小统计要遍历目录，结果按资料目录、`Default/` 与 `profile.broken` 的修改时间缓存，浏览器运行或重置后重新统计） |
 | `PATCH api/accounts/:id` | 是 | `{ name?, enabled?, overrides?, challenge? }`；ID 不可修改；`challenge` 为 `{ type: "month" \| "year", startDate: "YYYY-MM-DD" }` 或 null |
 | `GET api/accounts/:id/schedules` | 是 | `{ timezone, enabled, nextRunAt, nextRunJitterMinutes, schedules }`：每条规则带 `description` 与接下来 5 次触发时间 `nextRuns`；`nextRunJitterMinutes` 为下次运行那条规则的随机延后分钟数 |
 | `PUT api/accounts/:id/schedules` | 是 | `{ schedules: [...] }`：整体替换账号的调度规则，保存后立即生效；任一条非法时返回 400，`message` 指出第几条规则与原因，整个请求不生效 |
