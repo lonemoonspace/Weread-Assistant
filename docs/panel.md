@@ -90,7 +90,7 @@ docker compose logs app | grep 面板初始密码
 | `PATCH api/settings` | 是 | `{ settings?, defaults? }`：只修改提交的项；任一项非法时返回 400 且整个请求不生效 |
 | `GET api/accounts` | 是 | 账号列表，含是否已有 cookies、调度规则（带接下来的触发时间）、下一次定时运行时间 `nextRunAt`、挑战设置 `challenge`、今天的阅读分钟数 `today`（`{ date, minutes, checkedIn }`）与最近一次运行 `lastRun` |
 | `POST api/accounts` | 是 | `{ id, name? }`；成功 201，ID 已存在 409，ID 或名称非法 400；同时创建账号数据目录 |
-| `GET api/accounts/:id` | 是 | `{ account, challengeProgress, effective, profile }`：账号、本轮挑战进度（未设置挑战时为 null）、实际生效的运行配置与浏览器资料目录 `{ exists, bytes }`（`bytes` 含重置时留下的 `profile.broken`） |
+| `GET api/accounts/:id` | 是 | `{ account, challengeProgress, effective, profile }`：账号、本轮挑战进度（未设置挑战时为 null）、实际生效的运行配置与浏览器资料目录 `{ exists, broken, bytes }`（`broken` 为是否有重置时留下的 `profile.broken`，`bytes` 含它；大小统计要遍历目录，结果缓存 1 分钟，手动重置后立即更新） |
 | `PATCH api/accounts/:id` | 是 | `{ name?, enabled?, overrides?, challenge? }`；ID 不可修改；`challenge` 为 `{ type: "month" \| "year", startDate: "YYYY-MM-DD" }` 或 null |
 | `GET api/accounts/:id/schedules` | 是 | `{ timezone, enabled, nextRunAt, nextRunJitterMinutes, schedules }`：每条规则带 `description` 与接下来 5 次触发时间 `nextRuns`；`nextRunJitterMinutes` 为下次运行那条规则的随机延后分钟数 |
 | `PUT api/accounts/:id/schedules` | 是 | `{ schedules: [...] }`：整体替换账号的调度规则，保存后立即生效；任一条非法时返回 400，`message` 指出第几条规则与原因，整个请求不生效 |
@@ -275,7 +275,7 @@ docker compose logs app | grep 面板初始密码
 
 | 项目 | 规则 |
 | --- | --- |
-| 失败重试 | 自动触发的运行因阅读流程报错（`error`）、超时被结束（`timeout`）或子进程异常退出（`crash`）而失败时重试，间隔依次为 5、15、30 分钟，之后每次 30 分钟；次数取面板设置 `retryCount`（0–5，默认 2，0 为关闭）。扫码超时、配置无效、手动停止、账号被停用或删除都不重试。重试只读剩余的分钟（这次计划的时长减去已读的分钟；没开始阅读时按配置的时长；已经读满时不重试），运行记录的 `attempt` 加 1，`originRunId` 指向最初那次运行。重试或随机延后的定时运行到期时账号正在运行或排队（例如手动运行），每 5 分钟再试一次，从原定时间起顺延超过 2 小时才放弃，并记录日志 |
+| 失败重试 | 自动触发的运行因阅读流程报错（`error`）、超时被结束（`timeout`）或子进程异常退出（`crash`）而失败时重试，间隔依次为 5、15、30 分钟，之后每次 30 分钟；次数取面板设置 `retryCount`（0–5，默认 2，0 为关闭）。扫码超时、配置无效、手动停止、账号被停用或删除都不重试。重试只读剩余的分钟（这次计划的时长减去已读的分钟；没开始阅读时按配置的时长；已经读满时不重试），运行记录的 `attempt` 加 1，`originRunId` 指向最初那次运行。重试或随机延后的定时运行到期时账号正在运行或排队（例如手动运行），每 5 分钟再试一次，从原定时间起顺延超过 2 小时才放弃，并记录日志；定时运行记录的 `delayedMinutes` 包括顺延的时间 |
 | 失败通知 | 面板随启动消息下发 `retry: { attempt, retriesLeft }`。还会重试时子进程不发失败通知；最后一次失败的通知写明“已重试 N 次”。不再重试时由面板按账号的通知配置代发失败通知的情况：子进程崩溃或超时被结束，来不及发；子进程启动时还有重试次数、出错时没有发通知，但结束时没有安排重试（运行中调小了重试次数、停用了账号、面板正在停止，或已经读满） |
 | 每日目标 | 账号的 `goal: { enabled, minutes, checkAt }`。每天到 `checkAt`（面板时区）之后，当天累计分钟数（与总览同一口径）低于目标时补跑差额：补跑时长不超过到当天 23:57 剩余的分钟数，每个账号每天最多 3 次（加入队列成功才计数）；账号正在运行或还有待办时等它们结束后再检查，之后该账号每有一次运行结束都会再检查。补跑需要扫码而超时、或手动停止了自动运行后，当天不再补跑；扫码超时的通知写明“今天还差 N 分钟，需要扫码后手动运行”。目标由用户填写，不随挑战变化；设置了挑战时页面给出建议值（月卡每天 60 分钟，年卡约 50 分钟） |
 | 启动恢复 | 面板启动 2 分钟后处理停机期间的遗留，只处理补触发宽限时间（面板设置 `catchupGraceMinutes`，0–720 分钟，默认 120；0 为不恢复也不补触发）以内的：① 被中断的自动运行（面板停止时由运行队列标记，或崩溃后启动时标记）以 `resume` 补读剩余分钟（排队时被中断的按配置的时长，已经读满的不恢复），每次被中断的运行只恢复一次，恢复出来的运行再被中断时不再恢复；② 停机期间错过的调度，在上次检查时间与宽限时间的起点之间找出每条规则最近错过的一次，补触发一次（启动恢复完成之前调度器照常触发，但不更新检查时间，这时再次崩溃也不会漏掉）（`delayedMinutes` 为晚了多少分钟），超过宽限时间的只记录日志；③ 停机期间到期的重试与随机延后的定时运行，超过宽限时间的丢弃；④ 停机跨过了每日目标的检查时间时补做一次检查 |

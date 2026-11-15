@@ -94,13 +94,13 @@ flowchart TD
 
 | 规则 | 说明 |
 | --- | --- |
-| 位置与权限 | `accounts/<id>/profile/`，0700；面板保证同一账号同时只有一个运行，不会两个浏览器共用同一目录 |
+| 位置与权限 | `accounts/<id>/profile/`，0700（属主变化等原因改不了权限时只记录警告，继续启动）；面板保证同一账号同时只有一个运行 |
 | 登录 | 打开首页后先看是否已经登录（出现书架）：已登录时记录“浏览器资料中已是登录状态，不再注入 cookies”；否则照旧加载 `cookies.json`。登录成功后仍然导出 cookies 到 `cookies.json`，作为资料目录重置后的备份 |
-| 锁文件 | 启动前删除残留的 `SingletonLock`、`SingletonSocket`、`SingletonCookie`（进程被强制结束或容器重建后会留下，浏览器会以为目录被占用） |
+| 锁文件 | `SingletonLock` 指向“主机名-进程号”。锁属于本机仍在运行的浏览器进程时（例如同一账号同时在面板与命令行中运行）拒绝启动、不删除锁；其余情况（主机名不同、进程已退出、进程号已被别的程序使用）启动前删除残留的 `SingletonLock`、`SingletonSocket`、`SingletonCookie`（进程被强制结束或容器重建后会留下，浏览器会以为目录被占用） |
 | 版本回退 | 资料目录中 `Last Version` 记录的主版本高于当前浏览器时（例如退回旧镜像），旧版本可能打不开，启动前重置 |
-| 启动失败 | 带资料目录启动浏览器失败时重置资料目录后再试一次 |
+| 启动失败 | 带资料目录启动浏览器失败时重置资料目录后再试一次；换成空目录仍然失败时说明问题不在资料目录，换回原来的目录（保留登录状态）后报错。chromedriver 本身没能启动时与资料目录无关，不重置 |
 | 重置 | 原目录改名为 `profile.broken`（只保留最近一份，便于排查），新建空目录，登录从 `cookies.json` 恢复；也可以在面板账号“配置”页手动重置（删除 `profile/` 与 `profile.broken/`） |
-| 大小 | HTTP 缓存限制为 50 MB（`--disk-cache-size`）；运行开始前整个目录超过 300 MB 时清空其中的缓存子目录（Cache、Code Cache、GPUCache、Service Worker 缓存等），不影响登录状态 |
+| 大小 | HTTP 缓存限制为 50 MB（`--disk-cache-size`）；运行开始前整个目录超过 300 MB 时清空其中的缓存子目录（Cache、Code Cache、GPUCache、Service Worker 缓存等），不影响登录状态；清空后仍然超过（本地存储等无法单独清理的数据过大）时重置，避免每次运行都要清理 |
 | 临时文件 | 由面板运行时，chromedriver 与 Chromium 的临时文件写在面板为这次运行新建的 `TMPDIR` 中，结束后删除，见 `docs/panel.md`“运行队列” |
 
 ### 关键约束

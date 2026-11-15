@@ -39,7 +39,8 @@ const MAX_DURATION = CONFIG_SCHEMA.find((field) => field.key === "duration").max
  *
  * options.publicUrl：面板的外网地址（PANEL_PUBLIC_URL），用于扫码推送中的面板链接
  * options.localBrowserStatus()：已缓存的内置浏览器状态（见 createLocalBrowserChecker 的 cached），随运行配置下发
- * options.onFinish(run, { config })：每次运行结束后调用，run 为对外的运行信息，config 为这次运行实际使用的配置（没能解析时为 null）
+ * options.onFinish(run, { config, retriesLeft })：每次运行结束后调用，run 为对外的运行信息，config 为这次运行实际使用的配置（没能解析时为 null），
+ * retriesLeft 为启动时下发给子进程的剩余重试次数（没有启动时为 0）
  * options.workerPath / killTimeoutMs / runTimeoutMs / startOptions 供测试替换子进程与缩短等待
  */
 function createRunner({
@@ -130,7 +131,7 @@ function createRunner({
     running.delete(run);
     active.delete(run.accountId);
     try {
-      onFinish(publicRun(run), { config: run.config || null });
+      onFinish(publicRun(run), { config: run.config || null, retriesLeft: run.retriesLeft || 0 });
     } catch (e) {
       console.error("处理运行结束失败:", e);
     }

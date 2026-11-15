@@ -134,6 +134,9 @@ export function durationBetween(start, end) {
 
 // 字节数显示为 KB / MB
 export function formatBytes(bytes) {
+  if (!bytes) {
+    return "0 KB";
+  }
   if (bytes < 1024 * 1024) {
     return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   }

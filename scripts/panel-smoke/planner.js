@@ -143,6 +143,16 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
       assert.match(bark.pushes[1].body, /（已重试 1 次）$/);
       await new Promise((resolve) => setTimeout(resolve, 200));
       assert.strictEqual(bark.pushes.length, 2, "还会重试的那次失败不应发通知");
+
+      // 子进程启动时还有重试次数（出错时不发通知），但已经读满计划的分钟数、不再重试：由面板补发
+      await panel.call("POST", "api/accounts", { id: "flaky-p" });
+      await panel.call("PATCH", "api/accounts/flaky-p", { overrides: { duration: 1 } });
+      panel.planner.fireSchedule("flaky-p", RULE);
+      const [silent] = await settle(panel, "flaky-p", 1);
+      assert.deepStrictEqual([silent.status, silent.errorKind, silent.minutes], ["failed", "error", 1]);
+      assert.match(runLog(panel, silent), /retry=\{"attempt":1,"retriesLeft":1\}/);
+      await until(() => bark.pushes.length === 3, { message: "没有重试的失败应由面板补发通知" });
+      assert.match(bark.pushes[2].body, /运行失败：模拟的阅读中途出错$/);
     } finally {
       await bark.close();
     }
