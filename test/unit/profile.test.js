@@ -1,9 +1,10 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
+const { spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { dirSize, lastVersionMajor, prepareProfile } = require("../../src/reader/profile");
+const { ProfileInUseError, dirSize, lastVersionMajor, prepareProfile, resetProfile, restoreProfile } = require("../../src/reader/profile");
 
 function quietly(fn) {
   const saved = { info: console.info, warn: console.warn };
@@ -59,6 +60,31 @@ describe("prepareProfile", () => {
     assert.ok(fs.existsSync(path.join(profile, "Last Version")));
   });
 
+  it("锁属于本机仍在运行的浏览器时拒绝启动；进程号被别的进程重新使用或进程已退出时删除锁", { skip: !fs.existsSync("/proc/self") }, async () => {
+    const dir = dataDir();
+    const profile = path.join(dir, "profile");
+    fs.mkdirSync(profile);
+    // 以 chromium-test 为进程名的 sleep，模拟仍在运行的浏览器
+    const fake = path.join(dir, "chromium-test");
+    fs.symlinkSync(fs.realpathSync("/bin/sleep"), fake);
+    const browser = spawn(fake, ["30"], { stdio: "ignore" });
+    const other = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      fs.symlinkSync(`${os.hostname()}-${browser.pid}`, path.join(profile, "SingletonLock"));
+      assert.throws(() => quietly(() => prepareProfile(dir, 153)), ProfileInUseError);
+      assert.ok(fs.lstatSync(path.join(profile, "SingletonLock")).isSymbolicLink(), "拒绝时不删除锁");
+
+      fs.rmSync(path.join(profile, "SingletonLock"));
+      fs.symlinkSync(`${os.hostname()}-${other.pid}`, path.join(profile, "SingletonLock"));
+      quietly(() => prepareProfile(dir, 153));
+      assert.equal(fs.existsSync(path.join(profile, "SingletonLock")), false, "进程不是浏览器时视为残留");
+    } finally {
+      browser.kill();
+      other.kill();
+    }
+  });
+
   it("超过大小上限时清空缓存子目录", () => {
     const dir = dataDir();
     const profile = path.join(dir, "profile");
@@ -69,5 +95,28 @@ describe("prepareProfile", () => {
     quietly(() => prepareProfile(dir, 153, { maxBytes: 1000 }));
     assert.equal(fs.existsSync(path.join(profile, "Default", "Cache")), false);
     assert.ok(fs.existsSync(path.join(profile, "Default", "Cookies")));
+  });
+
+  it("清空缓存后仍然超过上限时重置", () => {
+    const dir = dataDir();
+    const profile = path.join(dir, "profile");
+    fs.mkdirSync(path.join(profile, "Default", "Local Storage"), { recursive: true });
+    fs.writeFileSync(path.join(profile, "Default", "Local Storage", "big"), Buffer.alloc(4096));
+    const { logs } = quietly(() => prepareProfile(dir, 153, { maxBytes: 1000 }));
+    assert.deepEqual(fs.readdirSync(profile), []);
+    assert.ok(fs.existsSync(`${profile}.broken`));
+    assert.ok(logs.some((line) => line.includes("清空缓存后仍有")));
+  });
+
+  it("restoreProfile 撤销重置，换回原来的资料目录", () => {
+    const dir = dataDir();
+    const profile = path.join(dir, "profile");
+    fs.mkdirSync(profile);
+    fs.writeFileSync(path.join(profile, "Cookies"), "x");
+    quietly(() => resetProfile(profile, "测试"));
+    fs.writeFileSync(path.join(profile, "new"), "y");
+    quietly(() => restoreProfile(profile));
+    assert.deepEqual(fs.readdirSync(profile), ["Cookies"]);
+    assert.equal(fs.existsSync(`${profile}.broken`), false);
   });
 });

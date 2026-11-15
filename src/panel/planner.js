@@ -230,7 +230,8 @@ function createPlanner({
   }
 
   // 运行队列每次运行结束后调用
-  function handleFinished(run, { config = null } = {}) {
+  // config 为这次运行实际使用的配置；retriesLeft 为启动时下发给子进程的剩余重试次数（还有时子进程出错不发通知）
+  function handleFinished(run, { config = null, retriesLeft = 0 } = {}) {
     if (run.mode !== "read") {
       return;
     }
@@ -258,7 +259,7 @@ function createPlanner({
       return;
     }
     if (run.status === "failed") {
-      handleFailure(run, config);
+      handleFailure(run, config, retriesLeft);
     }
     if (run.status === "stopped" && AUTO_TRIGGERS.includes(run.trigger)) {
       // 手动停止了自动运行：当天不再补跑，避免刚停下又被补跑拉起来
@@ -270,7 +271,7 @@ function createPlanner({
     }
   }
 
-  function handleFailure(run, config) {
+  function handleFailure(run, config, childRetriesLeft) {
     const data = store.get();
     const account = findAccount(data, run.accountId);
     const attempt = run.attempt || 1;
@@ -299,7 +300,7 @@ function createPlanner({
     }
     // 不再重试时由面板代发失败通知的情况：子进程崩溃或超时被结束，来不及发；
     // 或者子进程启动时还有重试次数，出错时没有发通知，但结束时没有安排重试（重试次数调小、账号停用、面板正在停止、已经读满）
-    const childSilent = run.errorKind === "error" && run.retriesLeft > 0;
+    const childSilent = run.errorKind === "error" && childRetriesLeft > 0;
     if ((run.errorKind === "timeout" || run.errorKind === "crash" || childSilent) && config) {
       notify(config, failureNotice(run)).catch((e) => console.warn("发送失败通知出错:", e.message));
     }
@@ -390,7 +391,8 @@ function createPlanner({
         `失败重试（第 ${item.attempt} 次尝试，最初运行 ${item.originRunId}）`
       );
     } else if (item.kind === "schedule") {
-      const late = minutesBetween(Date.parse(item.dueAt), clock.now());
+      // 因账号忙而顺延过时从第一次到期算起，记录的延后包括顺延的时间
+      const late = minutesBetween(Date.parse(item.firstDueAt || item.dueAt), clock.now());
       enqueue(
         item.accountId,
         { trigger: "schedule", scheduleId: item.scheduleId, delayedMinutes: item.delayedMinutes + late },
