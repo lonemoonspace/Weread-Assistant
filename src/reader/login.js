@@ -283,6 +283,10 @@ async function login(driver, ctx) {
   const loggedIn = driver.usesProfile && (await waitForAnyXpath(driver, [XPATH.loginLink, XPATH.shelfLink], timing.pageWaitMs)) === 1;
   if (loggedIn) {
     console.info("浏览器资料中已是登录状态，不再注入 cookies");
+    // cookies.json 仍是登录状态的备份：损坏时先改名保留，登录完成后写入新的
+    if (fs.existsSync(paths.cookies)) {
+      readCookiesFile(paths.cookies);
+    }
   } else if (await loadCookies(driver, paths.cookies)) {
     await driver.navigate().refresh(); // Refresh to apply cookies
   }
