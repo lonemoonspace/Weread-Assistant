@@ -70,7 +70,7 @@
 
 - 接入 ESLint 与 `node:test` 单元测试，CI 中检查；镜像在 amd64 与 arm64 的原生 runner 上分别构建，镜像检查与内置浏览器的阅读流程两个架构都运行
 - 发布流程不再使用 QEMU：两个架构在原生 runner 上构建、检查后按摘要推送，都通过才合成多架构清单并打标签
-- 镜像去掉用不到的 Selenium Manager 二进制与 Chromium 中文、英文以外的界面语言包
+- 镜像去掉用不到的 Selenium Manager 二进制（约 11 MB）
 - 工作流用 actionlint 检查；CI 使用的 Selenium 镜像版本移到 `ci/selenium.Dockerfile`，由 Dependabot 跟踪
 
 依赖：
