@@ -2,9 +2,32 @@
 
 版本号与 `package.json` 一致；推送 `v<版本号>` tag 时，发布流程把对应一节作为 GitHub Release 的说明。
 
-## 未发布
+## 0.4.0
 
-计划作为 0.4.0 发布，以下为已合并到 `main` 的改动（`dev` 镜像）。
+失败自动重试与每日目标补跑、重启后恢复、按账号保留浏览器资料、Webhook 与 Telegram 通知、面板重启后保持登录、配置备份、统计页，镜像同时发布 amd64 与 arm64 并每周按系统包更新重建。
+
+升级说明：
+
+- 执行 `docker compose pull && docker compose up -d` 即可，数据目录无需改动；以前只有 arm64，现在 amd64 的机器也能直接使用
+- 建议在 `docker-compose.yml` 的 `app` 中加上下面几行（新的示例文件中已有；不加也能正常运行）：
+
+  ```yaml
+      security_opt:
+        - no-new-privileges:true
+      logging:
+        driver: json-file
+        options:
+          max-size: 10m
+          max-file: "3"
+  ```
+
+- 数据目录中新增的文件：`sessions.json`（已登录的会话，只有令牌的哈希，备份时可以排除）、`planner.json`（待执行的重试与补跑）、`accounts/<id>/profile/`（内置浏览器的资料目录，每个账号约几十到几百 MB，备份时可以排除）、导入配置前另存的 `panel.json.pre-import-*`
+- 行为变化：
+  - 面板重启或升级后，已登录的设备不需要重新登录；修改密码、管理 passkey、导出导入配置之前需要再验证一次
+  - 版本号标签（如 `0.4.0`）与 `latest` 会被每周重建覆盖（源码不变，只更新系统包与 Chromium）。WUD、Watchtower 等工具会检测到变化并自动升级，被打断的阅读会在面板重启后恢复
+  - 非 465 端口的 SMTP（如 587）现在要求 STARTTLS；服务器确实不支持加密时，开启配置项「允许不加密的 SMTP 连接」
+  - 内置浏览器第一次使用资料目录时仍从 `cookies.json` 恢复登录，不需要重新扫码
+- 降级到 0.3.x：建议升级前先备份数据目录（或在新版本中导出配置）。降级时停止容器，换回旧镜像；已登录的设备需要重新登录，0.4.0 新增的文件（`sessions.json`、`planner.json`、`profile/`）旧版本不会读取。旧版本保存调度规则时不认识「随机延后」字段，降级前请先把各规则的随机延后设为 0，或恢复升级前备份的 `panel.json`
 
 新增：
 
