@@ -127,11 +127,10 @@ module.exports = async function runsScenarios({ scenario, start, login, startAut
     assert.strictEqual((await panel.request("api/accounts/slow-c/runs", { method: "POST", cookie: panel.cookie })).status, 403);
 
     const listed = (await panel.call("GET", "api/runs")).json.runs;
-    assert.deepStrictEqual(listed.map((run) => [run.accountId, run.status]), [
-      ["slow-a", "starting"],
-      ["slow-b", "queued"],
-      ["slow-c", "queued"],
-    ]);
+    assert.deepStrictEqual(listed.map((run) => run.accountId), ["slow-a", "slow-b", "slow-c"]);
+    // slow-a 的子进程随时可能上报打开了书，此时已从 starting 变为 reading
+    assert.ok(["starting", "reading"].includes(listed[0].status), `slow-a 应在运行中，实际为 ${listed[0].status}`);
+    assert.deepStrictEqual(listed.slice(1).map((run) => run.status), ["queued", "queued"]);
     assert.ok(listed[1].log.some((line) => line.includes("加入队列")));
 
     const cancelled = await panel.call("POST", "api/accounts/slow-c/stop");
