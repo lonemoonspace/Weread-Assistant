@@ -473,8 +473,10 @@ module.exports = async function runsScenarios({ scenario, start, login, startAut
     const profile = path.join(dataDir, "accounts", "slow-p", "profile");
     fs.mkdirSync(path.join(profile, "Default"), { recursive: true });
     fs.writeFileSync(path.join(profile, "Default", "Cookies"), Buffer.alloc(2048));
+    fs.mkdirSync(`${profile}.broken`);
+    fs.writeFileSync(path.join(`${profile}.broken`, "Cookies"), Buffer.alloc(1024));
     const detail = (await panel.call("GET", "api/accounts/slow-p")).json;
-    assert.deepStrictEqual(detail.profile, { exists: true, bytes: 2048 });
+    assert.deepStrictEqual(detail.profile, { exists: true, broken: true, bytes: 3072 }, "大小含重置时留下的 profile.broken");
 
     const reading = nextRun(panel, (run) => run.accountId === "slow-p" && run.status === "reading");
     const { run } = (await panel.call("POST", "api/accounts/slow-p/runs")).json;
@@ -494,8 +496,9 @@ module.exports = async function runsScenarios({ scenario, start, login, startAut
     await stopped;
     await until(() => !fs.existsSync(tmpDir), { message: "运行结束后应删除临时目录" });
     const reset = await panel.call("DELETE", "api/accounts/slow-p/profile");
-    assert.deepStrictEqual([reset.status, reset.json.profile], [200, { exists: false, bytes: 0 }]);
+    assert.deepStrictEqual([reset.status, reset.json.profile], [200, { exists: false, broken: false, bytes: 0 }]);
     assert.ok(!fs.existsSync(profile));
+    assert.ok(!fs.existsSync(`${profile}.broken`));
     assert.ok(fs.existsSync(path.join(dataDir, "accounts", "slow-p")), "只删除资料目录，账号数据目录保留");
     assert.strictEqual((await panel.call("DELETE", "api/accounts/nobody/profile")).status, 404);
   });
