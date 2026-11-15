@@ -195,7 +195,11 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
     await until(() => accountRuns(second, "slow-f").length === 2, { message: "slow-f 应恢复一次" });
     await until(() => accountRuns(second, "slow-g").length === 2, { message: "slow-g 应恢复一次" });
     const resumedG = accountRuns(second, "slow-g")[1];
-    assert.match(runLog(second, resumedG), /加入队列：恢复触发（读 7 分钟）/);
+    // 日志异步写入，运行记录出现时日志可能还没写到文件
+    const readLog = (run) => (fs.existsSync(path.join(second.options.dataDir, "runs", run.accountId, run.id, "output.log")) ? runLog(second, run) : "");
+    await until(() => /加入队列：恢复触发（读 7 分钟）/.test(readLog(resumedG)), {
+      message: "slow-g 的恢复运行日志应写明读 7 分钟",
+    });
     const resumed = accountRuns(second, "slow-f")[1];
     assert.deepStrictEqual([resumed.trigger, resumed.originRunId, resumed.attempt], ["resume", interrupted.id, 1]);
     assert.ok(logs.some((line) => line.includes(`恢复被中断的运行 ${interrupted.id}（补读剩余 ${remaining} 分钟）`)));
