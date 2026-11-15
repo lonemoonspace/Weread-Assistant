@@ -1,10 +1,10 @@
 ## Web 面板验收用例
 
-`scripts/panel-smoke.js` 在本机启动面板，用 HTTP 请求验证以下场景，不需要浏览器与 Selenium。运行队列的场景使用桩子进程 `scripts/fixtures/stub-worker.js`（与阅读子进程协议相同，按账号 ID 前缀决定行为），停止的等待时间缩短为 0.5 秒。执行方式：`npm run test:panel`。
+`scripts/panel-smoke/`（`index.js` 按顺序执行各组场景，`helpers.js` 为公用部分，其余每个文件一组）在本机启动面板，用 HTTP 请求验证以下场景，不需要浏览器与 Selenium。运行队列的场景使用桩子进程 `scripts/fixtures/stub-worker.js`（与阅读子进程协议相同，按账号 ID 前缀决定行为），停止的等待时间缩短为 0.5 秒。执行方式：`npm run test:panel`；只跑某几组时加 `-- --only runs,schedules`。
 
 | 场景 | 前置条件 / 输入 | 预期结果 |
 | --- | --- | --- |
-| smoke 自查 | 执行 `npm run test:panel` | 69 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
+| smoke 自查 | 执行 `npm run test:panel` | 80 个场景全部通过并退出码 0；结束后删除测试创建的临时目录 |
 | 首次启动生成密码 | 空数据目录、未设置 `PANEL_PASSWORD` | 生成 16 位密码；`panel.json` 只保存 scrypt 哈希且权限为 0600；再次启动不再生成，原密码可登录 |
 | 未登录访问 | 不带会话 | `healthz` 返回 `{"status":"ok"}`；`/` 302 到 `login`；登录页与静态资源可访问；`api/auth/session` 返回 401 |
 | 登录与退出 | 设置 `PANEL_PASSWORD` | 错误密码 401；正确密码 204，`Set-Cookie` 带 `HttpOnly`、`SameSite=Strict`、`Path=/`，HTTP 下不带 `Secure`；登录后可访问首页；退出后会话失效 |

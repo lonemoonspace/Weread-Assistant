@@ -2,156 +2,29 @@ const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
 const { fork } = require("child_process");
-const { CONFIG_SCHEMA } = require("../config/schema");
-const { formatLocalTimestamp } = require("../shared/log");
-const { ensurePrivateDir } = require("../shared/files");
-const { normalizeSeleniumUrl } = require("../shared/selenium");
-const { findAccount } = require("./accounts");
-const { SECRET_MASK, accountDataDir, resolveAccountConfig } = require("./config");
-const { PanelError, badRequest } = require("./errors");
-const { newRunId, runDir, writeRunMeta } = require("./runs");
+const { formatLocalTimestamp } = require("../../shared/log");
+const { ensurePrivateDir } = require("../../shared/files");
+const { findAccount } = require("../accounts");
+const { accountDataDir, resolveAccountConfig } = require("../config");
+const { PanelError, badRequest } = require("../errors");
+const { newRunId, runDir, writeRunMeta } = require("../runs");
+const { applyWorkerEvent, exitOutcome, fillMinuteMarks } = require("./events");
+const {
+  CHILD_ENV_KEYS,
+  EXIT_AFTER_RESULT_MS,
+  KILL_TIMEOUT_MS,
+  RUN_TIMEOUT_MARGIN_MS,
+  WORKER_PATH,
+  childEnv,
+  deleteSeleniumSession,
+  killProcessGroup,
+} = require("./process");
+const { MODE_LABELS, TRIGGER_LABELS, createRedactor, publicRun, runMeta } = require("./view");
 
-const WORKER_PATH = path.resolve(__dirname, "..", "reader", "worker.js");
-// 停止时先发 SIGTERM，子进程在这段时间内没有退出就强制结束
-const KILL_TIMEOUT_MS = 15000;
-// 子进程上报结果后应很快退出（关闭浏览器、发送通知）；超过这段时间仍未退出就结束它
-const EXIT_AFTER_RESULT_MS = 3 * 60000;
-// 运行时长上限 = 等待扫码时长 + 阅读时长 + 余量；Selenium 卡住时防止一直占用并发槽位
-const RUN_TIMEOUT_MARGIN_MS = 30 * 60000;
-const SESSION_DELETE_TIMEOUT_MS = 5000;
 // 实时推送时附带的最近日志行数，供中途打开页面时显示
 const LOG_TAIL_LINES = 200;
 const MAX_LOG_LINE_LENGTH = 8000;
-
-// 写入运行日志、推送日志与错误信息之前替换为掩码：配置中的密钥值，以及微信读书扫码登录链接中的 uid
-// （有效期内可用于完成这次登录）。阅读流程本身不打印这些内容，这里是兜底
-const SECRET_KEYS = CONFIG_SCHEMA.filter((field) => field.secret).map((field) => field.key);
-const MIN_SECRET_LENGTH = 4;
-const LOGIN_URL_UID = /(weread\.qq\.com\/web\/confirm\?[^\s"'<>]*?\buid=)[^&\s"'<>]+/g;
-
-function createRedactor(config = {}) {
-  const secrets = SECRET_KEYS.map((key) => config[key])
-    .filter((value) => typeof value === "string" && value.length >= MIN_SECRET_LENGTH)
-    .sort((a, b) => b.length - a.length);
-  return (text) => {
-    let result = String(text).replace(LOGIN_URL_UID, `$1${SECRET_MASK}`);
-    for (const secret of secrets) {
-      result = result.split(secret).join(SECRET_MASK);
-    }
-    return result;
-  };
-}
-
 const RUN_MODES = ["read", "login"];
-const MODE_LABELS = { read: "阅读", login: "仅登录" };
-const TRIGGER_LABELS = { manual: "手动", schedule: "定时" };
-
-// 子进程只继承运行 Node 与联网所需的环境变量（白名单，另加 LC_*）。运行配置与密钥经 IPC 下发，
-// 面板所在环境中的 PANEL_PASSWORD、BARK_KEY、EMAIL_PASS 等变量都不会传给子进程
-const CHILD_ENV_KEYS = new Set([
-  "PATH",
-  "HOME",
-  "USER",
-  "TZ",
-  "TMPDIR",
-  "LANG",
-  "LANGUAGE",
-  "NODE_OPTIONS",
-  "NODE_EXTRA_CA_CERTS",
-  "NODE_USE_ENV_PROXY",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "NO_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "no_proxy",
-  // 内置浏览器的路径
-  "CHROME_BIN",
-  "CHROMEDRIVER_PATH",
-]);
-
-function childEnv() {
-  return Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => CHILD_ENV_KEYS.has(key) || key.startsWith("LC_"))
-  );
-}
-
-function publicRun(run, { withLog = false } = {}) {
-  const view = {
-    id: run.id,
-    accountId: run.accountId,
-    accountName: run.accountName,
-    mode: run.mode,
-    trigger: run.trigger,
-    scheduleId: run.scheduleId,
-    status: run.status,
-    stopRequested: run.stopRequested,
-    queuedAt: run.queuedAt,
-    startedAt: run.startedAt,
-    endedAt: run.endedAt,
-    book: run.book,
-    readingStartedAt: run.readingStartedAt,
-    minutes: run.minutes,
-    plannedMinutes: run.plannedMinutes,
-    screenshot: run.screenshot,
-    loginUrl: run.loginUrl,
-    // 最近一次出现二维码的时间：二维码解析不出登录链接时，页面据此加载二维码截图
-    loginQrAt: run.loginQrAt,
-    error: run.error,
-  };
-  if (withLog) {
-    view.log = [...run.logTail];
-  }
-  return view;
-}
-
-// 写入 meta.json 的运行记录：不含登录链接（一次性且很快过期）。
-// minuteMarks 为每一分钟阅读完成的时间，按天统计时用它把跨天的运行拆到各自的日期
-function runMeta(run) {
-  const { loginUrl, loginQrAt, stopRequested, ...meta } = publicRun(run);
-  return { ...meta, minuteMarks: run.minuteMarks, exitCode: run.exitCode, exitSignal: run.exitSignal };
-}
-
-// 补齐到 count 个分钟记录（进度事件跳过了某些分钟，或最后一分钟没来得及上报）。补记的分钟在上一条记录
-// （没有时为开始阅读的时间）与现在之间均匀分布，最后一条为现在：跨午夜时仍能大致归到各自的日期
-function fillMinuteMarks(run, count) {
-  const missing = count - run.minuteMarks.length;
-  if (missing <= 0) {
-    return;
-  }
-  const now = Date.now();
-  const last = Date.parse(run.minuteMarks.at(-1) || run.readingStartedAt || "");
-  const from = Number.isNaN(last) || last > now ? now : last;
-  const step = (now - from) / missing;
-  for (let i = 1; i <= missing; i += 1) {
-    run.minuteMarks.push(new Date(from + step * i).toISOString());
-  }
-}
-
-// fetch 不接受带用户名与密码的地址：从地址中取出，改用 Authorization 请求头（与连接浏览器时一致）
-async function deleteSeleniumSession(seleniumUrl, sessionId) {
-  const url = new URL(`${normalizeSeleniumUrl(seleniumUrl)}/session/${encodeURIComponent(sessionId)}`);
-  const headers = {};
-  if (url.username || url.password) {
-    const credentials = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`;
-    headers.Authorization = `Basic ${Buffer.from(credentials).toString("base64")}`;
-    url.username = "";
-    url.password = "";
-  }
-  const res = await fetch(url, { method: "DELETE", headers, signal: AbortSignal.timeout(SESSION_DELETE_TIMEOUT_MS) });
-  return res.status;
-}
-
-function killProcessGroup(child) {
-  if (!child || !child.pid) {
-    return;
-  }
-  try {
-    process.kill(-child.pid, "SIGKILL");
-  } catch (_) {
-    // 组内已没有进程
-  }
-}
 
 /**
  * 运行队列：每次运行 fork 一个阅读子进程（src/reader/worker.js），经 IPC 下发配置、接收事件，
@@ -286,57 +159,16 @@ function createRunner({
     }, exitAfterResultMs);
   }
 
-  function toCount(value) {
-    const number = Number(value);
-    return Number.isSafeInteger(number) && number >= 0 ? number : 0;
-  }
-
   function handleEvent(run, message) {
     if (!message || typeof message.event !== "string" || run.result || run.exited) {
       return;
     }
-    const data = message.data && typeof message.data === "object" ? message.data : {};
-    switch (message.event) {
-      case "started":
-        break;
-      case "session":
-        run.sessionId = String(data.sessionId || "");
-        break;
-      case "login-required":
-        run.status = "waiting-login";
-        run.loginUrl = String(data.url || "");
-        run.loginQrAt = new Date().toISOString();
-        break;
-      case "login-ok":
-        run.status = "starting";
-        run.loginUrl = "";
-        run.loginQrAt = "";
-        break;
-      case "book-opened":
-        run.status = "reading";
-        run.book = String(data.title || "");
-        run.readingStartedAt = new Date().toISOString();
-        break;
-      case "reading-minute":
-        run.minutes = Math.min(toCount(data.minute), run.maxMinutes);
-        fillMinuteMarks(run, run.minutes);
-        run.plannedMinutes = toCount(data.total) || run.plannedMinutes;
-        run.screenshot = path.basename(String(data.screenshot || ""));
-        break;
-      case "done":
-        // 以较大者为准：最后一分钟的进度可能没来得及上报
-        run.minutes = Math.min(Math.max(run.minutes, toCount(data.minutes)), run.maxMinutes);
-        fillMinuteMarks(run, run.minutes);
-        setResult(run, "success");
-        break;
-      case "login-timeout":
-        setResult(run, "failed", "等待扫码超时");
-        break;
-      case "error":
-        setResult(run, "failed", run.redact(data.message || "未知错误"));
-        break;
-      default:
-        return;
+    const outcome = applyWorkerEvent(run, message);
+    if (!outcome) {
+      return;
+    }
+    if (outcome.result) {
+      setResult(run, outcome.result.status, outcome.result.error);
     }
     changed(run);
   }
@@ -368,17 +200,8 @@ function createRunner({
       }
     }
 
-    if (run.result) {
-      finish(run, run.result.status, run.result.error);
-    } else if (run.timedOut) {
-      finish(run, "failed", "运行超时，已强制结束");
-    } else if (run.shutdown) {
-      finish(run, "interrupted", "面板停止时运行被中断");
-    } else if (run.stopRequested) {
-      finish(run, "stopped");
-    } else {
-      finish(run, "failed", `阅读子进程异常退出（${exitText}）`);
-    }
+    const outcome = exitOutcome(run, exitText);
+    finish(run, outcome.status, outcome.error);
   }
 
   function start(run) {

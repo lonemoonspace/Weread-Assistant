@@ -70,7 +70,7 @@ flowchart LR
 | `src/panel/auth.js` | 面板密码、会话、登录限速、二次验证 | 未登录时除登录接口与静态资源外一律 401 |
 | `src/panel/passkeys.js` | passkey（WebAuthn）的添加与校验（@simplewebauthn/server） | 域名只取自 `PANEL_PUBLIC_URL`；只保存公钥 |
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入，先写临时文件再 `rename`，文件权限 `0600` |
-| `src/panel/runner.js` | 运行队列、fork、事件处理、停止、日志落盘 | 同一账号不重复排队；并发数可配 |
+| `src/panel/runner/` | 运行队列、fork、事件处理、停止、日志落盘 | 同一账号不重复排队；并发数可配 |
 | `src/panel/scheduler.js` | 按账号调度规则触发运行 | 显式使用面板时区 |
 | `src/panel/history.js` | 运行记录、每日统计、数据清理 | 统计口径为本工具运行记录，非官方数据 |
 | `src/panel/public/` | 前端页面 | 免构建；二维码在浏览器本地生成 |
@@ -352,7 +352,7 @@ services:
 | 方式 | 说明 |
 | --- | --- |
 | `scripts/notify-smoke.js` | 保留并适配新的通知模块，本地 mock 服务校验负载 |
-| `scripts/panel-smoke.js` | 用桩子进程按顺序发送事件，不需要浏览器即可验证鉴权、配置、队列、停止、调度、历史与统计 |
+| `scripts/panel-smoke/` | 按功能分组，用桩子进程按顺序发送事件，不需要浏览器即可验证鉴权、配置、队列、停止、调度、历史与统计 |
 | `scripts/reader-smoke.js` | 用本地模拟页面验证登录跳过、翻页、读完回到目录等分支和每轮耗时，不访问微信读书；Selenium 地址可指向 selenium 容器，也可直接指向 chromedriver，为空时使用内置浏览器 |
 | CI | 现行的检查与发布流程见 `cases/ci.md` 与 `docs/docker-image-publish.md`（本行描述的是 0.1.0 时的做法，已过时） |
 | 真机验收 | 需要在你的树莓派上执行：以 compose 部署，经反向代理访问，完成扫码、阅读、停止、调度触发各一次，见 `cases/deploy.md` |

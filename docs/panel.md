@@ -41,7 +41,7 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/settings.js` | 面板设置（时区、并发数、保留策略、noVNC 地址）的清单与校验 | 值为 null 时恢复默认 |
 | `src/panel/config.js` | 运行配置的表单清单、全局默认与账号覆盖的修改、合并与密钥掩码 | 面板管理的配置项不出现在接口中 |
 | `src/panel/accounts.js` | 账号增删改查 | 账号 ID 创建后不可修改；删除时默认保留数据目录；运行或排队中的账号不能删除 |
-| `src/panel/runner.js` | 运行队列：fork 阅读子进程、下发配置、处理事件、停止、保存日志 | 同一账号同时只有一个运行；并发数取面板设置，修改后立即生效 |
+| `src/panel/runner/` | 运行队列：`index.js` 排队、并发与对外方法；`process.js` fork 阅读子进程、环境变量白名单、结束进程组、删除 Selenium 会话；`events.js` 处理子进程事件与判定结果；`view.js` 对外的运行信息、运行记录与日志脱敏 | 同一账号同时只有一个运行；并发数取面板设置，修改后立即生效 |
 | `src/panel/schedules.js` | 调度规则的校验、换算为 cron 表达式、计算接下来的触发时间 | 时间按面板时区解释 |
 | `src/panel/scheduler.js` | 按调度规则定时把运行加入队列（croner） | 时区、账号启用状态或调度规则变化后重建定时任务；错过的时间不补跑 |
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
@@ -53,7 +53,11 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入、先写临时文件并刷到磁盘再重命名、权限 0600；每次修改前把上一版保存为 `panel.json.bak`；启动时把已有文件的权限收紧为 0600，改不了时拒绝启动；文件无法解析或结构不对（例如 `accounts` 不是数组、`settings` 不是对象）时视为损坏，另存为 `panel.json.corrupt-<时间>`（只保留最近 3 份）并从上一版恢复，`panel.json` 不见了而上一版还在时同样从上一版恢复，上一版也不可用时拒绝启动（重置面板需同时删除 `panel.json` 与 `panel.json.bak`）；补齐缺少的部分（旧文件自动升级） |
 | `src/panel/auth.js` | 密码哈希、会话、登录限速、修改密码、二次验证 | 密码以 scrypt 哈希保存；会话只在内存中保存令牌哈希，面板重启后需重新登录；passkey 登录与二次验证的失败同样计入登录限速 |
 | `src/panel/passkeys.js` | passkey（WebAuthn）的添加、登录与二次验证校验、改名、删除（@simplewebauthn/server） | 域名与地址只取自 `PANEL_PUBLIC_URL`，不信任请求的 Host；challenge 一次有效（登录用的自带过期时间与 HMAC，不在服务端保存）；`panel.json` 中只保存公钥；密码登录关闭时不能删除最后一个可用的 passkey |
-| `src/panel/server.js` | Express 应用、页面与接口 | 统一安全响应头；修改类请求校验自定义请求头 |
+| `src/panel/server.js` | 组装 Express 应用（中间件与各组接口的挂载顺序）、启动与停止面板 | 挂载顺序决定哪些接口需要登录：页面 → 不需要登录的认证接口 → 要求登录 → 其余接口 → 404 |
+| `src/panel/http/security.js` | 安全响应头与 CSP、`csrfGuard`、会话 cookie 的读写与 HTTPS 判断 | 统一安全响应头；修改类请求校验自定义请求头 |
+| `src/panel/http/session.js` | 识别会话、要求登录、二次验证、认证失败的统一响应、密码登录状态 | |
+| `src/panel/http/routes/` | 按功能分组的接口：`pages`（健康检查、静态资源与页面）、`auth`、`settings`、`accounts`、`runs`、`events`，每个文件返回一个 Express Router | 接口列表见下文 |
+| `src/panel/startup.js` | 启动时的迁移与提示：旧 Selenium 地址迁移、passkey 与密码登录的可用性提示 | |
 | `src/panel/healthcheck.js` | 镜像 `HEALTHCHECK` 使用 | 请求 `<子路径>healthz` |
 | `src/panel/public/` | 登录页与面板页面（`index.html` + `assets/app/`），见下文“页面” | 不使用内联脚本与样式；第三方文件在 `assets/vendor/`，版本与校验值见其中的 README |
 

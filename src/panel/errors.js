@@ -22,8 +22,17 @@ function rejectUnsafeName(name, what) {
   }
 }
 
+// 请求体必须是 JSON 对象，否则抛出 400
+function requireObject(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw badRequest("请求体必须是 JSON 对象");
+  }
+  return body;
+}
+
 module.exports = {
   PanelError,
   badRequest,
   rejectUnsafeName,
+  requireObject,
 };
