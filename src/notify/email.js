@@ -35,9 +35,20 @@ function resolveEmailAttachments(filePaths = []) {
     });
 }
 
-// 邮件中的时间固定用中文格式；时区取进程的 TZ（容器中默认 Asia/Shanghai）
+// 邮件中的时间固定用中文格式；时区取进程的 TZ（容器中默认 Asia/Shanghai），并注明与 UTC 的偏移：
+// 面板按设置中的时区显示，容器的 TZ 与之不同时也能对上
 function formatEmailTime(date = new Date()) {
-  return date.toLocaleString("zh-CN", { hour12: false });
+  const offset = new Intl.DateTimeFormat("en-US", { timeZoneName: "longOffset" })
+    .formatToParts(date)
+    .find((part) => part.type === "timeZoneName")?.value;
+  const zone = !offset || offset === "GMT" ? "UTC" : offset.replace("GMT", "UTC");
+  return `${date.toLocaleString("zh-CN", { hour12: false })}（${zone}）`;
+}
+
+// 附件的 MIME 类型：只为认识的图片扩展名填写，其余交给 nodemailer 按文件名推断
+const IMAGE_TYPES = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
+function imageContentType(filename) {
+  return IMAGE_TYPES[path.extname(filename).toLowerCase()];
 }
 
 function wrapEmailHtml(heading, innerHtml) {
@@ -147,12 +158,17 @@ function toMailAttachments(items = []) {
     if (typeof item === "string") {
       return resolveEmailAttachments([item]).map((filePath) => {
         const filename = path.basename(filePath);
-        return { filename, path: filePath, cid: filename, contentType: `image/${path.extname(filePath).substring(1)}` };
+        return withContentType({ filename, path: filePath, cid: filename });
       });
     }
     const filename = item.filename;
-    return [{ filename, content: item.content, cid: filename, contentType: `image/${path.extname(filename).substring(1)}` }];
+    return [withContentType({ filename, content: item.content, cid: filename })];
   });
+}
+
+function withContentType(attachment) {
+  const contentType = imageContentType(attachment.filename);
+  return contentType ? { ...attachment, contentType } : attachment;
 }
 
 // filePaths：附件（见 toMailAttachments）；options.heading：邮件正文标题；options.html：完整的自定义 HTML
