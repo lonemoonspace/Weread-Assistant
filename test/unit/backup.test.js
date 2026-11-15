@@ -90,4 +90,56 @@ describe("配置备份", () => {
     assert.deepEqual(preview.removed.map((item) => item.id), ["me"]);
     assert.equal(preview.invalid.filter((item) => item.item.startsWith("账号")).length, 2);
   });
+
+  it("外层写着包含密钥、加密部分却被删掉时，按不含密钥处理，保留现有的密钥", async () => {
+    const backup = await buildBackup(data(), { dataDir: dir, includeSecrets: true, passphrase: "pass-phrase-1" });
+    const stripped = await openBackup({ ...backup, sealed: null, secretsIncluded: true });
+    assert.equal(stripped.secretsIncluded, false);
+    const { next } = planImport(data(), stripped, { overwrite: true });
+    assert.equal(next.defaults.barkKey, "bark-secret-123");
+    assert.equal(next.accounts[0].overrides.ntfyTopic, "topic_secret_123");
+
+    // 只含登录状态的备份，外层改成包含密钥也一样
+    const cookiesOnly = await buildBackup(data(), { dataDir: dir, includeCookies: true, passphrase: "pass-phrase-1" });
+    const flipped = await openBackup({ ...cookiesOnly, secretsIncluded: true }, "pass-phrase-1");
+    assert.equal(flipped.secretsIncluded, false);
+    assert.equal(planImport(data(), flipped, { overwrite: true }).next.defaults.barkKey, "bark-secret-123");
+  });
+
+  it("未加密的部分出现密钥（包括带密码的地址）时整个文件无效", async () => {
+    const plain = await buildBackup(data(), { dataDir: dir });
+    await assert.rejects(openBackup({ ...plain, defaults: { ...plain.defaults, webhookUrl: "https://evil.example/hook" } }), {
+      code: "backup_invalid",
+      message: /全局默认配置的 webhookUrl/,
+    });
+    const accounts = plain.accounts.map((account) => ({ ...account, overrides: { ...account.overrides, barkServer: "https://u:p@bark.example" } }));
+    await assert.rejects(openBackup({ ...plain, accounts }), { code: "backup_invalid", message: /账号 me的 barkServer/ });
+    // 不带密码的地址照常导入
+    const ok = plain.accounts.map((account) => ({ ...account, overrides: { ...account.overrides, barkServer: "https://bark.example" } }));
+    assert.equal((await openBackup({ ...plain, accounts: ok })).accounts[0].overrides.barkServer, "https://bark.example");
+  });
+
+  it("带密码的推送服务器地址导出时放进加密部分", async () => {
+    const current = data();
+    current.defaults.ntfyServer = "https://user:pw-123456@ntfy.example";
+    const plain = await buildBackup(current, { dataDir: dir });
+    assert.ok(!JSON.stringify(plain).includes("pw-123456"));
+    assert.deepEqual(plain.omittedSecrets.find((item) => item.key === "ntfyServer"), { scope: "defaults", key: "ntfyServer" });
+  });
+
+  it("跳过的账号不显示导入登录状态", async () => {
+    const backup = await openBackup(await buildBackup(data(), { dataDir: dir, includeCookies: true, passphrase: "pass-phrase-1" }), "pass-phrase-1");
+    const { preview, cookies } = planImport(data(), backup, {});
+    assert.deepEqual(preview.accounts.map((item) => [item.id, item.action, item.cookies]), [["me", "skip", false]]);
+    assert.deepEqual(cookies, []);
+  });
+
+  it("加密参数的内存与计算量不超过默认参数的 2 倍；账号超过上限时不导出", async () => {
+    const backup = await buildBackup(data(), { dataDir: dir, includeSecrets: true, passphrase: "pass-phrase-1" });
+    await assert.rejects(openBackup({ ...backup, sealed: { ...backup.sealed, N: 1 << 16, r: 16 } }, "pass-phrase-1"), /加密参数不对/);
+    await assert.rejects(openBackup({ ...backup, sealed: { ...backup.sealed, p: 4 } }, "pass-phrase-1"), /加密参数不对/);
+    const many = data();
+    many.accounts = Array.from({ length: 201 }, (_, index) => ({ ...many.accounts[0], id: `a${index}` }));
+    await assert.rejects(buildBackup(many, { dataDir: dir }), /账号超过 200 个/);
+  });
 });
