@@ -80,6 +80,7 @@ const AccountCard = {
         <span v-if="account.today.checkedIn" class="badge status-success">已打卡</span>
         <span v-else-if="pendingToday" class="badge status-stopped">待运行</span>
         <span v-else class="badge status-failed">未打卡</span>
+        <a v-if="account.streak" :href="'#/stats/' + account.id" class="badge streak-badge" :title="'连续打卡 ' + account.streak + ' 天'">连续 {{ account.streak }} 天</a>
       </p>
       <p class="muted">下次运行：{{ account.nextRunAt ? formatNextRun(account.nextRunAt, account.nextRunJitterMinutes, tz) : "未设置调度" }}</p>
       <p v-if="planned" class="muted">待办：{{ formatPlanned(planned, tz) }}</p>

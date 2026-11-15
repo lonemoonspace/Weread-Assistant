@@ -23,7 +23,7 @@ const chrome = require("selenium-webdriver/chrome");
 const { Protocol, Transport, VirtualAuthenticatorOptions } = require("selenium-webdriver/lib/virtual_authenticator");
 
 const { startPanel } = require(path.resolve(__dirname, "..", "src", "panel", "server"));
-const { dateInZone } = require(path.resolve(__dirname, "..", "src", "panel", "history"));
+const { dateInZone } = require(path.resolve(__dirname, "..", "src", "panel", "dates"));
 const { startMockSelenium } = require("./fixtures/mock-selenium");
 const { minutesFrom, writeRun } = require("./fixtures/run-records");
 
@@ -366,6 +366,19 @@ async function desktop(env, h, driver, results) {
   await h.shot("09-calendar");
   step("打卡日历：按月显示每天的分钟数与打卡状态，今天高亮，显示月卡进度");
 
+  await h.go("#/stats/ok-1");
+  await h.waitFor(".heatmap rect");
+  await h.waitText(".metrics-grid", "连续打卡");
+  assert.strictEqual((await driver.findElements(By.css(".heatmap rect"))).length, 365, "热力图为最近一年每天一格");
+  assert.strictEqual((await driver.findElements(By.css(".bar-chart rect.bar-checked, .bar-chart rect.bar-partial"))).length, 30);
+  await h.waitText(".chart-card", "运行情况");
+  await h.noHorizontalScroll("stats");
+  await h.shot("09b-stats");
+  await driver.executeScript("document.documentElement.dataset.theme = 'dark'");
+  await h.shot("09c-stats-dark");
+  await driver.executeScript("delete document.documentElement.dataset.theme");
+  step("统计：概览数字、近 30 天柱状图、年度热力图与运行情况，浅色与深色主题");
+
   await h.go("#/accounts/ok-1/schedules");
   await h.waitText(".schedule-rule", "每天 06:00、18:30");
   await h.clickButton("添加规则");
@@ -569,6 +582,7 @@ async function mobile(env, h, driver, results) {
     ["m05-schedules", "#/accounts/ok-1/schedules", ".schedule-rule"],
     ["m06-config", "#/accounts/ok-1/config", ".config-form"],
     ["m07-settings", "#/settings", ".settings-grid"],
+    ["m08-stats", "#/stats/ok-1", ".heatmap rect"],
   ];
   for (const [name, hash, css] of pages) {
     await h.go(hash);
@@ -586,6 +600,14 @@ async function mobile(env, h, driver, results) {
       assert.strictEqual(label, '"开始时间"');
     }
     await h.shot(name);
+    if (name === "m08-stats") {
+      // 手机宽度下热力图只显示最近半年，在卡片内横向滚动
+      assert.strictEqual((await driver.findElements(By.css(".heatmap rect"))).length, 182);
+      await driver.executeScript("document.documentElement.dataset.theme = 'dark'");
+      await h.noHorizontalScroll("m08-stats-dark");
+      await h.shot("m08-stats-dark");
+      await driver.executeScript("delete document.documentElement.dataset.theme");
+    }
   }
   await h.go("#/accounts/qr-1/live");
   await h.clickButton("停止");
@@ -593,7 +615,7 @@ async function mobile(env, h, driver, results) {
   const errors = await h.consoleErrors();
   assert.deepStrictEqual(errors, [], `浏览器控制台不应有错误或警告：\n${errors.join("\n")}`);
   results.push("手机");
-  console.log("✅ 手机宽度（390px）：总览、实时、历史、日历、调度、配置、设置都没有横向滚动，控制台没有错误");
+  console.log("✅ 手机宽度（390px）：总览、实时、历史、日历、调度、配置、设置、统计都没有横向滚动，控制台没有错误");
 }
 
 // ---------- passkey ----------

@@ -28,6 +28,13 @@
   --wa-red-strong: #dc2626;
   --wa-red-border: #fecaca;
 
+  /* 统计页热力图的 5 档颜色：没有阅读、不满打卡线、30 分钟、1 小时、2 小时以上 */
+  --wa-heat-0: rgba(100, 116, 139, 0.14);
+  --wa-heat-1: #bbf7d0;
+  --wa-heat-2: #4ade80;
+  --wa-heat-3: #16a34a;
+  --wa-heat-4: #166534;
+
   /* 阴影层级 */
   --wa-shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.05);
   --wa-shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.07), 0 2px 4px -2px rgba(15, 23, 42, 0.05);
@@ -53,6 +60,12 @@
     --wa-red-strong: #f87171;
     --wa-red-border: rgba(248, 113, 113, 0.3);
 
+    --wa-heat-0: rgba(148, 163, 184, 0.16);
+    --wa-heat-1: #14532d;
+    --wa-heat-2: #15803d;
+    --wa-heat-3: #22c55e;
+    --wa-heat-4: #86efac;
+
     --wa-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.25);
     --wa-shadow-md: 0 4px 8px -1px rgba(0, 0, 0, 0.35);
   }
@@ -74,6 +87,12 @@
   --wa-red: rgba(220, 38, 38, 0.18);
   --wa-red-strong: #f87171;
   --wa-red-border: rgba(248, 113, 113, 0.3);
+
+  --wa-heat-0: rgba(148, 163, 184, 0.16);
+  --wa-heat-1: #14532d;
+  --wa-heat-2: #15803d;
+  --wa-heat-3: #22c55e;
+  --wa-heat-4: #86efac;
 }
 
 /* 基础排版与辅助类 */
@@ -375,6 +394,246 @@ button.small,
   display: flex;
   align-items: center;
   gap: 0.35rem;
+}
+
+/* 统计页 */
+.stats-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.stats-head h2 {
+  margin: 0;
+}
+
+.stats-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.stats-controls select {
+  width: auto;
+  max-width: 100%;
+  margin: 0;
+  padding-top: 0.4rem;
+  padding-bottom: 0.4rem;
+}
+
+.segmented {
+  display: inline-flex;
+  width: auto;
+  margin: 0;
+}
+
+.segmented button {
+  margin: 0;
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--pico-primary-background);
+  border-color: var(--pico-primary-background);
+  color: var(--pico-primary-inverse);
+}
+
+.chart-card header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.chart-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+  font-size: 0.8em;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.swatch-checked {
+  background: var(--wa-green-strong);
+}
+
+.swatch-partial {
+  background: var(--wa-amber-strong);
+}
+
+.swatch-goal {
+  height: 2px;
+  background: var(--wa-blue-strong);
+}
+
+.bar-chart-wrap {
+  position: relative;
+}
+
+.bar-chart {
+  display: block;
+  width: 100%;
+}
+
+.bar-checked {
+  fill: var(--wa-green-strong);
+}
+
+.bar-partial {
+  fill: var(--wa-amber-strong);
+}
+
+.bar-missed {
+  fill: var(--wa-red-strong);
+}
+
+.chart-baseline {
+  stroke: var(--pico-muted-border-color);
+  stroke-width: 1;
+}
+
+.chart-goal {
+  stroke: var(--wa-blue-strong);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+
+.chart-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-axis-top {
+  display: block;
+  font-size: 0.75em;
+}
+
+.heatmap-scroll {
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.heatmap {
+  display: block;
+  max-width: none;
+}
+
+/* 宽屏时热力图随容器放大；手机宽度下保持原尺寸，横向滚动 */
+@media (min-width: 577px) {
+  .heatmap {
+    width: 100%;
+    height: auto;
+  }
+}
+
+.heat-label {
+  fill: var(--pico-muted-color);
+  font-size: 9px;
+}
+
+.heat-0 {
+  fill: var(--wa-heat-0);
+}
+
+.heat-1 {
+  fill: var(--wa-heat-1);
+}
+
+.heat-2 {
+  fill: var(--wa-heat-2);
+}
+
+.heat-3 {
+  fill: var(--wa-heat-3);
+}
+
+.heat-4 {
+  fill: var(--wa-heat-4);
+}
+
+.heatmap a:focus-visible rect,
+.heatmap a:hover rect {
+  stroke: var(--pico-color);
+  stroke-width: 1;
+}
+
+.legend-heat {
+  display: inline-block;
+}
+
+.run-bars {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.run-bar {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr) 5.5rem;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9em;
+}
+
+.run-bar progress {
+  margin: 0;
+}
+
+.run-count {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+progress.run-success::-webkit-progress-value {
+  background: var(--wa-green-strong);
+}
+
+progress.run-success::-moz-progress-bar {
+  background: var(--wa-green-strong);
+}
+
+progress.run-failed::-webkit-progress-value {
+  background: var(--wa-red-strong);
+}
+
+progress.run-failed::-moz-progress-bar {
+  background: var(--wa-red-strong);
+}
+
+progress.run-stopped::-webkit-progress-value,
+progress.run-interrupted::-webkit-progress-value {
+  background: var(--wa-amber-strong);
+}
+
+progress.run-stopped::-moz-progress-bar,
+progress.run-interrupted::-moz-progress-bar {
+  background: var(--wa-amber-strong);
+}
+
+.streak-badge {
+  background: var(--wa-green);
+  color: var(--wa-green-strong);
+  border: 1px solid var(--wa-green-border);
+  text-decoration: none;
 }
 
 /* 账号卡片 */
@@ -1227,6 +1486,16 @@ tr.expanded > td {
   .app-header nav ul:last-child li {
     padding-right: 0.15rem;
     padding-left: 0.15rem;
+  }
+
+  .app-header nav ul:last-child a {
+    padding: 0.3rem 0.45rem;
+    white-space: nowrap;
+  }
+
+  /* 导航项较多，手机宽度下品牌只显示图标 */
+  .app-header .brand-text {
+    display: none;
   }
 
   /* 手机宽度下历史表格改为卡片：每次运行一张卡片，单元格前显示列名 */

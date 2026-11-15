@@ -12,7 +12,7 @@ const TABS = ["live", "history", "calendar", "schedules", "config"].map((name) =
 
 export const AccountPage = {
   components: { CalendarTab, ConfigTab, HistoryTab, LiveTab, SchedulesTab, StatusBadge },
-  props: { id: String, tab: String },
+  props: { id: String, tab: String, date: String },
   setup(props) {
     const account = computed(() => state.accounts.find((item) => item.id === props.id));
     const run = computed(() => state.runs[props.id]);
@@ -32,7 +32,7 @@ export const AccountPage = {
         <a v-for="[name, label] in TABS" :key="name" :href="'#/accounts/' + account.id + '/' + name" :aria-current="tab === name ? 'page' : null">{{ label }}</a>
       </nav>
       <live-tab v-if="tab === 'live'" :account="account" />
-      <history-tab v-else-if="tab === 'history'" :key="'h-' + account.id" :account="account" />
+      <history-tab v-else-if="tab === 'history'" :key="'h-' + account.id + date" :account="account" :date="date" />
       <calendar-tab v-else-if="tab === 'calendar'" :key="'c-' + account.id" :account="account" />
       <schedules-tab v-else-if="tab === 'schedules'" :key="'s-' + account.id" :account="account" />
       <config-tab v-else-if="tab === 'config'" :key="'o-' + account.id" :account="account" />
