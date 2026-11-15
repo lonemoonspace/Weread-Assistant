@@ -297,7 +297,7 @@ module.exports = async function settingsScenarios({ scenario, startAuthed }) {
 
   await scenario("Selenium 状态：地址为空时检查内置浏览器，显示浏览器版本；找不到、无法运行或 chromedriver 与浏览器主版本不一致时为 unreachable 并附带原因", async () => {
     // 假的 chromedriver 与 Chromium 要能执行：放在 node_modules/.cache 下，不放系统临时目录（可能以 noexec 挂载）
-    const binDir = tempDir(path.join(__dirname, "..", "node_modules", ".cache"));
+    const binDir = tempDir(path.join(__dirname, "..", "..", "node_modules", ".cache"));
     const fake = (name, output) => {
       const file = path.join(binDir, name);
       fs.writeFileSync(file, `#!/bin/sh\necho "${output}"\n`, { mode: 0o755 });
@@ -363,7 +363,7 @@ module.exports = async function settingsScenarios({ scenario, startAuthed }) {
   });
 
   await scenario("内置浏览器：读取版本超时、出错退出时报出原因；读到的版本按文件缓存，文件不变时不再启动浏览器", async () => {
-    const binDir = tempDir(path.join(__dirname, "..", "node_modules", ".cache"));
+    const binDir = tempDir(path.join(__dirname, "..", "..", "node_modules", ".cache"));
     const script = (name, body) => {
       const file = path.join(binDir, name);
       fs.writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
