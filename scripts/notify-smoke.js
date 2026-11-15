@@ -2,7 +2,7 @@
 /**
  * 通知渠道 smoke 测试。
  *
- * 通过本地 mock HTTP 服务校验 Bark / ntfy 的实际请求负载，用本地 SMTP 服务校验邮件，不访问外网、不需要真实密钥。
+ * 通过本地 mock HTTP 服务校验 Bark / ntfy / Webhook / Telegram 的实际请求负载，用本地 SMTP 服务校验邮件，不访问外网、不需要真实密钥。
  * 用法: node scripts/notify-smoke.js
  */
 
@@ -18,20 +18,26 @@ const { createNotifier, notify, sendBark, sendNtfy, sendTestNotification } = req
 const { resolveConfig } = require(path.resolve(__dirname, "..", "src", "config", "resolve"));
 const { postJson } = require(path.resolve(__dirname, "..", "src", "shared", "http"));
 
+// 记录每个请求；respond(request) 返回 { status, body } 时按它响应（用于群机器人与 Telegram 的错误码），否则 200
 function startMockServer() {
   const requests = [];
+  const state = { respond: null };
   const server = http.createServer((req, res) => {
     let body = "";
+    req.setEncoding("latin1");
     req.on("data", (chunk) => { body += chunk; });
     req.on("end", () => {
-      requests.push({
+      const request = {
         method: req.method,
         url: req.url,
         headers: req.headers,
-        body,
-      });
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ id: "mock-message", event: "message" }));
+        body: Buffer.from(body, "latin1").toString("utf8"),
+        raw: Buffer.from(body, "latin1"),
+      };
+      requests.push(request);
+      const custom = state.respond ? state.respond(request) : null;
+      res.writeHead(custom ? custom.status : 200, { "Content-Type": "application/json" });
+      res.end(custom ? JSON.stringify(custom.body) : JSON.stringify({ id: "mock-message", event: "message" }));
     });
   });
 
@@ -41,6 +47,7 @@ function startMockServer() {
       resolve({
         server,
         requests,
+        state,
         baseUrl: `http://127.0.0.1:${port}`,
         close: () => new Promise((done) => server.close(done)),
       });
@@ -160,6 +167,7 @@ async function main() {
 
   const scenario = async (name, fn) => {
     mock.requests.length = 0;
+    mock.state.respond = null;
     await withQuietConsole((logs) => fn(logs));
     results.push(name);
     console.log(`✅ ${name}`);
@@ -334,8 +342,8 @@ async function main() {
       });
 
       assert.deepStrictEqual(sent, [
-        { channel: "bark", ok: true },
-        { channel: "ntfy", ok: true },
+        { channel: "bark", ok: true, error: "" },
+        { channel: "ntfy", ok: true, error: "" },
       ]);
       assert.strictEqual(mock.requests.length, 2);
       assert.deepStrictEqual(
@@ -363,10 +371,11 @@ async function main() {
       });
 
       const sent = await notify(config, "标题", "正文", { level: "critical", sound: "alarm" });
-      assert.deepStrictEqual(sent, [
+      assert.deepStrictEqual(sent.map(({ channel, ok }) => ({ channel, ok })), [
         { channel: "bark", ok: false },
         { channel: "ntfy", ok: true },
       ]);
+      assert.match(sent[0].error, /^请求出错：.*ECONNREFUSED/, "失败结果带原因");
     });
 
     await scenario("推送接口持续缓慢返回、响应中途断开或响应过大时按时返回失败", async () => {
@@ -503,6 +512,131 @@ async function main() {
       assert.strictEqual(parseBody(mock.requests[2]).title, "WeReadAssistant · 开始运行");
     });
 
+    await scenario("Webhook：通用 JSON 与三种群机器人的请求体、附加请求头；群机器人返回错误码时为失败；日志中不出现地址", async (logs) => {
+      const hookUrl = `${mock.baseUrl}/hook?key=hook-secret-123`;
+      config = resolveConfig({ webhookUrl: hookUrl, webhookHeader: "Authorization: Bearer tok-abc-123", accountName: "小明" });
+      await createNotifier(config).event("done", "阅读完成，共 68 分钟");
+      assert.strictEqual(mock.requests.length, 1);
+      const [json] = mock.requests;
+      assert.strictEqual(json.url, "/hook?key=hook-secret-123");
+      assert.strictEqual(json.headers.authorization, "Bearer tok-abc-123");
+      const payload = parseBody(json);
+      assert.strictEqual(payload.source, "WeReadAssistant");
+      assert.strictEqual(payload.event, "done");
+      assert.strictEqual(payload.account, "小明");
+      assert.strictEqual(payload.title, "WeReadAssistant · 小明");
+      assert.strictEqual(payload.subtitle, "阅读完成");
+      assert.strictEqual(payload.text, "阅读完成，共 68 分钟");
+      assert.strictEqual(payload.level, "active");
+      assert.match(payload.time, /^\d{4}-\d{2}-\d{2}T/);
+
+      const send = async (format, response) => {
+        mock.requests.length = 0;
+        mock.state.respond = () => ({ status: 200, body: response });
+        config = resolveConfig({ webhookUrl: hookUrl, webhookFormat: format });
+        const [result] = await notify(config, "WeReadAssistant", "阅读完成", { subtitle: "阅读完成", url: "https://example.com/x" });
+        return { result, body: parseBody(mock.requests[0]) };
+      };
+      const wecom = await send("wecom", { errcode: 0, errmsg: "ok" });
+      assert.deepStrictEqual(wecom.result, { channel: "webhook", ok: true, error: "" });
+      assert.strictEqual(wecom.body.msgtype, "text");
+      assert.strictEqual(wecom.body.text.content, "WeReadAssistant · 阅读完成\n\n阅读完成\n\nhttps://example.com/x");
+      const feishu = await send("feishu", { code: 0, msg: "success" });
+      assert.strictEqual(feishu.result.ok, true);
+      assert.strictEqual(feishu.body.msg_type, "text");
+      assert.match(feishu.body.content.text, /^WeReadAssistant · 阅读完成/);
+      const dingtalk = await send("dingtalk", { errcode: 310000, errmsg: "keywords not in content" });
+      assert.strictEqual(dingtalk.body.msgtype, "text");
+      assert.deepStrictEqual(dingtalk.result, { channel: "webhook", ok: false, error: "错误码 310000：keywords not in content" });
+      const feishuError = await send("feishu", { code: 19024, msg: "Key Words Not Found" });
+      assert.strictEqual(feishuError.result.error, "错误码 19024：Key Words Not Found");
+      const notJson = await send("wecom", "<html>");
+      assert.match(notJson.result.error, /^响应不是(对象| JSON)/, "群机器人返回的不是对象时给出原因");
+
+      // 不允许改写 Content-Type 等请求头：不发出请求
+      mock.requests.length = 0;
+      config = resolveConfig({ webhookUrl: hookUrl, webhookHeader: "Content-Type: text/plain" });
+      const [reserved] = await notify(config, "标题", "正文");
+      assert.match(reserved.error, /附加请求头格式不对/);
+      assert.strictEqual(mock.requests.length, 0);
+      assert.ok(!logs.some((line) => line.includes("hook-secret-123") || line.includes("tok-abc-123")), "日志中不应出现 Webhook 地址与请求头");
+    });
+
+    await scenario("Telegram：普通事件用 sendMessage；扫码时用 sendPhoto 发送二维码图片与按钮；按钮被拒绝时去掉按钮重试；原因与日志中不出现令牌", async (logs) => {
+      const token = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abc";
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "notify-smoke-tg-"));
+      try {
+        mock.state.respond = () => ({ status: 200, body: { ok: true, result: {} } });
+        config = resolveConfig({ telegramBotToken: token, telegramChatId: "-100123", telegramApiBase: `${mock.baseUrl}/`, accountName: "小明" });
+        const panelLink = "https://example.com/weread/#/accounts/me/live";
+        const notifier = createNotifier(config, { panelLink });
+        await notifier.event("done", "阅读完成，共 68 分钟");
+        assert.strictEqual(mock.requests[0].url, `/bot${token}/sendMessage`);
+        const message = parseBody(mock.requests[0]);
+        assert.strictEqual(message.chat_id, "-100123");
+        assert.strictEqual(message.text, "WeReadAssistant · 小明 · 阅读完成\n\n阅读完成，共 68 分钟");
+        assert.strictEqual(message.reply_markup, undefined);
+
+        const qr = path.join(dir, "login-qr.png");
+        fs.writeFileSync(qr, PNG.sync.write(new PNG({ width: 4, height: 4 })));
+        await notifier.loginLink("https://weread.qq.com/web/confirm?uid=tg", qr);
+        const photo = mock.requests[1];
+        assert.strictEqual(photo.url, `/bot${token}/sendPhoto`);
+        assert.match(photo.headers["content-type"], /^multipart\/form-data/);
+        assert.match(photo.body, /name="chat_id"\r\n\r\n-100123/);
+        assert.match(photo.body, /name="caption"\r\n\r\nWeReadAssistant · 小明 · 需要扫码/);
+        assert.match(photo.body, /name="photo"; filename="login-qr.png"/);
+        assert.ok(photo.raw.includes(Buffer.from([0x89, 0x50, 0x4e, 0x47])), "附带 PNG 图片");
+        const markup = JSON.parse(/name="reply_markup"\r\n\r\n(.*)\r\n/.exec(photo.body)[1]);
+        assert.deepStrictEqual(markup.inline_keyboard.map(([button]) => button.text), ["打开登录链接", "在面板中扫码"]);
+
+        // 按钮地址不被接受时去掉按钮再发一次
+        mock.requests.length = 0;
+        mock.state.respond = (request) =>
+          request.body.includes("reply_markup")
+            ? { status: 400, body: { ok: false, description: "Bad Request: wrong HTTP URL" } }
+            : { status: 200, body: { ok: true } };
+        const [retried] = await notify(config, "标题", "正文", { actions: [{ label: "在面板中扫码", url: "http://192.168.1.2/" }] });
+        assert.strictEqual(retried.ok, true);
+        assert.strictEqual(mock.requests.length, 2);
+        assert.strictEqual(parseBody(mock.requests[1]).reply_markup, undefined);
+
+        mock.state.respond = () => ({ status: 401, body: { ok: false, error_code: 401, description: "Unauthorized" } });
+        const [unauthorized] = await notify(config, "标题", "正文");
+        assert.deepStrictEqual(unauthorized, { channel: "telegram", ok: false, error: "HTTP 401：Unauthorized" });
+
+        config = resolveConfig({ telegramBotToken: token, telegramChatId: "-100123", telegramApiBase: "http://127.0.0.1:1" });
+        const [unreachable] = await notify(config, "标题", "正文");
+        assert.strictEqual(unreachable.ok, false);
+        assert.match(unreachable.error, /^请求出错/);
+        assert.ok(!unreachable.error.includes(token));
+        assert.ok(!logs.some((line) => line.includes(token) || line.includes("ABCDEFGHIJKLMNOP")), "日志中不应出现机器人令牌");
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    await scenario("按账号开关：关闭的渠道不发送；测试通知把关闭的渠道记为已关闭，其余带结果与原因", async () => {
+      config = resolveConfig({
+        barkKey: "bark-key-123",
+        barkServer: mock.baseUrl,
+        barkEnabled: "false",
+        ntfyTopic: "weread_smoke_topic",
+        ntfyServer: mock.baseUrl,
+        webhookUrl: "http://127.0.0.1:1/hook",
+      });
+      await createNotifier(config).event("done", "阅读完成");
+      assert.deepStrictEqual(mock.requests.map((request) => request.url), ["/"], "只发送 ntfy（Webhook 地址不可达）");
+      const results = await sendTestNotification(config);
+      assert.deepStrictEqual(results.map(({ channel, ok, disabled }) => ({ channel, ok, disabled: Boolean(disabled) })), [
+        { channel: "bark", ok: false, disabled: true },
+        { channel: "ntfy", ok: true, disabled: false },
+        { channel: "webhook", ok: false, disabled: false },
+      ]);
+      assert.match(results[2].error, /ECONNREFUSED/);
+      assert.ok(!mock.requests.some((request) => request.url === "/push"), "关闭的 Bark 不发送");
+    });
+
     await scenario("邮件：经 SMTP 认证后发送，主题带账号名与版本，截图作为内嵌附件；测试通知返回成功；认证失败、无法连接时返回失败，日志中不出现密码", async (logs) => {
       const smtp = await startMockSmtp();
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "notify-smoke-"));
@@ -540,13 +674,20 @@ async function main() {
         smtp.messages.splice(1, 1);
 
         const results = await sendTestNotification(config);
-        assert.deepStrictEqual(results, [{ channel: "email", ok: true }]);
+        assert.deepStrictEqual(results, [{ channel: "email", ok: true, error: "" }]);
         assert.match(mailHeader(smtp.messages[1].data, "Subject"), /^WeReadAssistant · 小明 · 测试通知/);
 
         smtp.state.rejectAuth = true;
-        assert.deepStrictEqual(await sendTestNotification(config), [{ channel: "email", ok: false }], "认证失败");
+        const rejected = await sendTestNotification(config);
+        assert.deepStrictEqual(rejected.map(({ channel, ok }) => ({ channel, ok })), [{ channel: "email", ok: false }], "认证失败");
+        assert.match(rejected[0].error, /535|auth/i, "认证失败时带原因");
         await smtp.close();
-        assert.deepStrictEqual(await sendTestNotification(config), [{ channel: "email", ok: false }], "无法连接");
+        const unreachable = await sendTestNotification(config);
+        assert.strictEqual(unreachable[0].ok, false, "无法连接");
+        assert.match(unreachable[0].error, /ECONNREFUSED/);
+        assert.ok(![...rejected, ...unreachable].some((item) => item.error.includes("smtp-pass-123")), "原因中不应出现邮箱密码");
+        config = resolveConfig({ ...emailConfig, emailTo: "" });
+        assert.deepStrictEqual(await sendTestNotification(config), [{ channel: "email", ok: false, error: "缺少配置：收件人" }]);
         const credentials = Buffer.from("\0reader@example.com\0smtp-pass-123").toString("base64");
         assert.ok(!logs.some((line) => line.includes("smtp-pass-123") || line.includes(credentials)), "日志中不应出现邮箱密码");
       } finally {

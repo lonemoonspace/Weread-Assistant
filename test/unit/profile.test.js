@@ -64,19 +64,26 @@ describe("prepareProfile", () => {
     const dir = dataDir();
     const profile = path.join(dir, "profile");
     fs.mkdirSync(profile);
-    // 以 chromium-test 为进程名的 node，模拟仍在运行的浏览器。不用 sleep：有的系统上 sleep 是按程序名分派的
-    // 多合一程序（例如 uutils coreutils），换了名字就会立即退出
-    const fake = path.join(dir, "chromium-test");
-    fs.symlinkSync(process.execPath, fake);
-    const wait = ["-e", "setTimeout(() => {}, 30000)"];
-    const browser = spawn(fake, wait, { stdio: "ignore" });
-    const other = spawn(process.execPath, wait, { stdio: "ignore" });
+    // 用改了进程名的 node 模拟浏览器与 chromedriver。不用改名的 sleep（有的系统上是按程序名分派的多合一程序，
+    // 换了名字就立即退出），也不靠符号链接改名（Node 24 启动后会把主线程改名为 MainThread）：
+    // 子进程自己设置 process.title，并且定时重设
+    const named = (name) =>
+      spawn(process.execPath, ["-e", `const t = () => { process.title = ${JSON.stringify(name)}; }; t(); setInterval(t, 20);`], {
+        stdio: "ignore",
+      });
+    const browser = named("chromium-test");
+    const driver = named("chromedriver");
+    const other = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
     try {
       const comm = (pid) => fs.readFileSync(`/proc/${pid}/comm`, "utf8").trim();
-      for (let i = 0; i < 50 && !/chrom/.test(comm(browser.pid)); i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      assert.match(comm(browser.pid), /chrom/, "模拟的浏览器进程名应含 chrom");
+      const waitName = async (child, name) => {
+        for (let i = 0; i < 100 && comm(child.pid) !== name; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.equal(comm(child.pid), name, "模拟进程的进程名应已生效");
+      };
+      await waitName(browser, "chromium-test");
+      await waitName(driver, "chromedriver");
       fs.symlinkSync(`${os.hostname()}-${browser.pid}`, path.join(profile, "SingletonLock"));
       assert.throws(() => quietly(() => prepareProfile(dir, 153)), ProfileInUseError);
       assert.ok(fs.lstatSync(path.join(profile, "SingletonLock")).isSymbolicLink(), "拒绝时不删除锁");
@@ -85,9 +92,15 @@ describe("prepareProfile", () => {
       fs.symlinkSync(`${os.hostname()}-${other.pid}`, path.join(profile, "SingletonLock"));
       quietly(() => prepareProfile(dir, 153));
       assert.equal(fs.existsSync(path.join(profile, "SingletonLock")), false, "进程不是浏览器时视为残留");
+
+      // chromedriver 进程名也以 chrom 开头，但不是浏览器
+      fs.symlinkSync(`${os.hostname()}-${driver.pid}`, path.join(profile, "SingletonLock"));
+      quietly(() => prepareProfile(dir, 153));
+      assert.equal(fs.existsSync(path.join(profile, "SingletonLock")), false, "chromedriver 不算正在运行的浏览器");
     } finally {
       browser.kill();
       other.kill();
+      driver.kill();
     }
   });
 

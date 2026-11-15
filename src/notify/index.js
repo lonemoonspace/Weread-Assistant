@@ -1,8 +1,11 @@
 const fs = require("fs");
 const path = require("path");
-const { isBarkEnabled, sendBark } = require("./bark");
-const { isNtfyEnabled, sendNtfy } = require("./ntfy");
-const { buildLoginLinkEmailHtml, canSendEmail, sendMail } = require("./email");
+const { CHANNELS, activeChannels, isChannelActive } = require("./channels");
+const { sendBark } = require("./channels/bark");
+const { sendNtfy } = require("./channels/ntfy");
+const { telegramChannel } = require("./channels/telegram");
+const { redact } = require("./channels/common");
+const { buildLoginLinkEmailHtml, canSendEmail, deliverMail, missingEmailFields, sendMail } = require("./email");
 
 const BRAND = "WeReadAssistant";
 // 运行结束时等待后台通知发送完成的最长时间
@@ -20,32 +23,40 @@ const NOTIFY_EVENTS = {
 const PANEL_ONLY_TEXT = "需要扫码登录，但未能从二维码中解析出登录链接，请在面板中扫码。";
 const LOGIN_LINK_TEXT = "请在微信中打开登录链接，或扫描二维码登录。二维码约 1 分钟后失效，失效后会自动刷新。";
 
+// 实际会发送的推送渠道（不含邮件）
 function getEnabledNotificationChannels(config) {
-  const channels = [];
-  if (isBarkEnabled(config)) {
-    channels.push("bark");
-  }
-  if (isNtfyEnabled(config)) {
-    channels.push("ntfy");
-  }
-  return channels;
+  return activeChannels(config).map((channel) => channel.id);
 }
 
-// 统一推送入口：向所有已启用的渠道并行发送，任一渠道失败不影响其他渠道
+// 统一的消息对象，见 channels/common.js
+function buildMessage(title, body, options = {}) {
+  const { event = "", subtitle = "", level = "active", sound = "", url = "", actions = [], photo = null } = options;
+  return { event, title, subtitle, body, level, sound, url, actions, photo };
+}
+
+// 向一组渠道并行发送；渠道实现抛出异常时同样记为失败。返回 [{ channel, ok, error }]
+async function sendToChannels(config, channels, message) {
+  const settled = await Promise.allSettled(channels.map((channel) => channel.send(config, message)));
+  return channels.map((channel, index) => {
+    const outcome = settled[index];
+    if (outcome.status === "fulfilled" && outcome.value && outcome.value.ok) {
+      return { channel: channel.id, ok: true, error: "" };
+    }
+    const error =
+      outcome.status === "rejected" ? redact(config, `发送出错：${outcome.reason?.message || outcome.reason}`) : outcome.value?.error;
+    return { channel: channel.id, ok: false, error: error || "发送失败" };
+  });
+}
+
+// 统一推送入口：向所有已启用的渠道并行发送，任一渠道失败不影响其他渠道。
+// options：event、subtitle、level、sound、url、actions、photo（见 buildMessage）
 async function notify(config, title, body, options = {}) {
-  const channels = getEnabledNotificationChannels(config);
+  const channels = activeChannels(config);
   if (!channels.length) {
-    console.info("未启用任何推送通知渠道（在面板中配置 Bark Key 或 ntfy 主题后生效）");
+    console.info("未启用任何推送通知渠道（在面板中配置 Bark、ntfy、Webhook 或 Telegram 后生效）");
     return [];
   }
-
-  const senders = channels.map((channel) => (channel === "ntfy" ? sendNtfy : sendBark));
-  const settled = await Promise.allSettled(senders.map((send) => send(config, title, body, options)));
-
-  const results = channels.map((channel, index) => ({
-    channel,
-    ok: settled[index].status === "fulfilled" && settled[index].value === true,
-  }));
+  const results = await sendToChannels(config, channels, buildMessage(title, body, options));
   console.info(
     "推送通知渠道结果:",
     results.map((item) => `${item.channel}=${item.ok ? "ok" : "failed"}`).join(", ")
@@ -105,7 +116,7 @@ function createNotifier(config, { loginLinkIntervalMs = 0, panelLink = "" } = {}
     return track(sendEvent(name, body, options));
   }
 
-  async function sendEvent(name, body, { url = "", actions = [], attachments = [], html = "" } = {}) {
+  async function sendEvent(name, body, { url = "", actions = [], attachments = [], html = "", photo = null } = {}) {
     const spec = NOTIFY_EVENTS[name];
     if (!isEnabled(name)) {
       console.info(`通知事件「${spec.subtitle}」未开启，跳过推送`);
@@ -115,11 +126,13 @@ function createNotifier(config, { loginLinkIntervalMs = 0, panelLink = "" } = {}
     const title = notificationTitle(config);
     const tasks = [
       notify(config, title, body, {
+        event: name,
         subtitle: spec.subtitle,
         level: spec.level,
         sound: spec.sound,
         url,
         actions,
+        photo,
       }),
     ];
     if (canSendEmail(config)) {
@@ -158,8 +171,9 @@ function createNotifier(config, { loginLinkIntervalMs = 0, panelLink = "" } = {}
       lines.push(`在面板中扫码：${panelLink}`);
       actions.push({ action: "view", label: "在面板中扫码", url: panelLink, clear: false });
     }
+    // 邮件附件与 Telegram 的图片都用这张二维码截图
     let qrAttachment = null;
-    if (qrImagePath && willEmail("loginRequired")) {
+    if (qrImagePath && (willEmail("loginRequired") || (isEnabled("loginRequired") && isChannelActive(config, telegramChannel)))) {
       try {
         qrAttachment = { filename: path.basename(qrImagePath), content: fs.readFileSync(qrImagePath) };
       } catch (e) {
@@ -170,6 +184,7 @@ function createNotifier(config, { loginLinkIntervalMs = 0, panelLink = "" } = {}
       url: key,
       actions,
       attachments: qrAttachment ? [qrAttachment] : [],
+      photo: qrAttachment,
       html: buildLoginLinkEmailHtml(notificationTitle(config), loginUrl, qrAttachment ? qrAttachment.filename : "", panelLink),
     });
   }
@@ -188,31 +203,39 @@ function createNotifier(config, { loginLinkIntervalMs = 0, panelLink = "" } = {}
   };
 }
 
-// 向已配置的每个渠道发送一条测试通知，不受事件开关影响；返回 [{ channel, ok }]，没有配置任何渠道时为空数组
+// 向已配置的每个渠道发送一条测试通知，不受事件开关影响；返回 [{ channel, ok, error, disabled? }]，没有配置任何渠道时为空数组。
+// 已配置但在账号上关闭的渠道不发送，记为 { ok: false, disabled: true }
 async function sendTestNotification(config) {
   const title = notificationTitle(config);
   const body = "这是一条测试通知，收到说明通知配置正确。";
-  const tasks = [];
-  if (isBarkEnabled(config)) {
-    tasks.push(["bark", sendBark(config, title, body, { subtitle: "测试通知", level: "active", sound: "birdsong" })]);
-  }
-  if (isNtfyEnabled(config)) {
-    tasks.push(["ntfy", sendNtfy(config, title, body, { subtitle: "测试通知", level: "active", sound: "birdsong" })]);
-  }
+  const message = buildMessage(title, body, { event: "test", subtitle: "测试通知", level: "active", sound: "birdsong" });
+  const configured = CHANNELS.filter((channel) => channel.isConfigured(config));
+  const active = configured.filter((channel) => isChannelActive(config, channel));
+  const tasks = [sendToChannels(config, active, message)];
   if (config.emailEnabled) {
-    tasks.push([
-      "email",
-      canSendEmail(config) ? sendMail(config, `${title} · 测试通知`, body, [], { heading: title }) : Promise.resolve(false),
-    ]);
+    const missing = missingEmailFields(config);
+    tasks.push(
+      missing.length
+        ? Promise.resolve({ ok: false, error: `缺少配置：${missing.join("、")}` })
+        : // 邮件在发送前出错（例如构造 SMTP 连接时抛出）也只记为这一项失败，不让整个测试通知报错
+          Promise.resolve()
+            .then(() => deliverMail(config, `${title} · 测试通知`, body, [], { heading: title }))
+            .catch((e) => ({ ok: false, error: redact(config, `发送出错：${e?.message || e}`) }))
+    );
   }
-  const settled = await Promise.allSettled(tasks.map(([, task]) => task));
-  return tasks.map(([channel], index) => ({
-    channel,
-    ok: settled[index].status === "fulfilled" && settled[index].value === true,
-  }));
+  const [channelResults, mail] = await Promise.all(tasks);
+  const byId = new Map(channelResults.map((item) => [item.channel, item]));
+  const results = configured.map(
+    (channel) => byId.get(channel.id) || { channel: channel.id, ok: false, error: "已在配置中关闭，未发送", disabled: true }
+  );
+  if (mail) {
+    results.push({ channel: "email", ok: mail.ok, error: mail.ok ? "" : mail.error || "发送失败" });
+  }
+  return results;
 }
 
 module.exports = {
+  CHANNELS,
   FLUSH_TIMEOUT_MS,
   NOTIFY_EVENTS,
   createNotifier,

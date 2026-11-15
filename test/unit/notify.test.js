@@ -2,9 +2,10 @@ const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("http");
 const { resolveConfig } = require("../../src/config/resolve");
-const { createNotifier } = require("../../src/notify");
-const { canSendEmail, formatEmailTime, smtpTransportOptions, toMailAttachments } = require("../../src/notify/email");
-const { normalizeNtfyPriority } = require("../../src/notify/ntfy");
+const { createNotifier, sendTestNotification } = require("../../src/notify");
+const { pushTelegram } = require("../../src/notify/channels/telegram");
+const { canSendEmail, deliverMail, formatEmailTime, smtpTransportOptions, toMailAttachments } = require("../../src/notify/email");
+const { normalizeNtfyPriority } = require("../../src/notify/channels/ntfy");
 const { postJson } = require("../../src/shared/http");
 
 // 静默运行，返回捕获的日志
@@ -161,5 +162,74 @@ describe("postJson", () => {
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
+  });
+});
+
+describe("发送出错与时限", () => {
+  it("构造 SMTP 连接时出错：deliverMail 返回原因，测试通知只把邮件记为失败", async () => {
+    const nodemailer = require("nodemailer");
+    const original = nodemailer.createTransport;
+    nodemailer.createTransport = () => {
+      throw new Error("bad transport secret-pass-1234");
+    };
+    try {
+      const config = resolveConfig({ emailEnabled: true, emailSmtp: "smtp", emailUser: "u", emailPass: "secret-pass-1234", emailTo: "t" });
+      let mail;
+      let results;
+      await quietly(async () => {
+        mail = await deliverMail(config, "主题", "正文");
+        results = await sendTestNotification(config);
+      });
+      assert.equal(mail.ok, false);
+      assert.match(mail.error, /bad transport ••••••/);
+      assert.deepEqual(results.map((item) => [item.channel, item.ok]), [["email", false]]);
+      assert.ok(!results[0].error.includes("secret-pass-1234"));
+    } finally {
+      nodemailer.createTransport = original;
+    }
+  });
+
+  it("Telegram 的改发文字也在同一个时限内，时限到了就不再发", async () => {
+    const calls = [];
+    const server = http.createServer((req, res) => {
+      calls.push(req.url.split("/").pop());
+      req.resume();
+      if (req.url.endsWith("/sendPhoto")) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, description: "Bad Request: wrong file" }));
+        return;
+      }
+      // 文字接口迟迟不响应
+      setTimeout(() => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      }, 3000).unref();
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const config = resolveConfig({
+        telegramBotToken: "1:token",
+        telegramChatId: "42",
+        telegramApiBase: `http://127.0.0.1:${server.address().port}`,
+      });
+      const message = { title: "t", subtitle: "", body: "b", url: "", actions: [], photo: { filename: "qr.png", content: Buffer.from("png") } };
+      const started = Date.now();
+      let result;
+      await quietly(async () => {
+        result = await pushTelegram(config, message, { timeoutMs: 300 });
+      });
+      assert.equal(result.ok, false);
+      assert.ok(Date.now() - started < 900, `用时 ${Date.now() - started} 毫秒`);
+      assert.deepEqual(calls, ["sendPhoto", "sendMessage"]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("Telegram 接口地址只有空白时用默认地址", async () => {
+    const { apiBase } = require("../../src/notify/channels/telegram");
+    assert.equal(apiBase({ telegramApiBase: "  " }), "https://api.telegram.org");
+    assert.equal(apiBase({ telegramApiBase: "https://proxy/tg/" }), "https://proxy/tg");
   });
 });

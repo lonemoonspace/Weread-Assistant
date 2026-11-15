@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { CONFIG_SCHEMA } = require("../config/schema");
 const { VERSION } = require("../shared/version");
+const { redact } = require("./channels/common");
 
 // 发送邮件所需的配置项，缺失时按配置项名称提示
 const REQUIRED_EMAIL_FIELDS = ["emailSmtp", "emailUser", "emailPass", "emailTo"];
@@ -121,7 +122,7 @@ function canSendEmail(config, { quiet = false } = {}) {
   if (!config.emailEnabled) {
     return false;
   }
-  const missed = REQUIRED_EMAIL_FIELDS.filter((key) => !config[key]).map((key) => FIELD_LABELS[key]);
+  const missed = missingEmailFields(config);
   if (missed.length) {
     if (!quiet) {
       console.warn("邮件通知未发送：缺少配置", missed.join("、"));
@@ -171,39 +172,48 @@ function withContentType(attachment) {
   return contentType ? { ...attachment, contentType } : attachment;
 }
 
-// filePaths：附件（见 toMailAttachments）；options.heading：邮件正文标题；options.html：完整的自定义 HTML
-async function sendMail(config, subject, text, filePaths = [], options = {}) {
-  const nodemailer = require("nodemailer");
-  const transporter = nodemailer.createTransport(smtpTransportOptions(config));
-  const attachments = toMailAttachments(filePaths);
+// 缺少的必填项名称，用于测试通知中说明原因
+function missingEmailFields(config) {
+  return REQUIRED_EMAIL_FIELDS.filter((key) => !config[key]).map((key) => FIELD_LABELS[key]);
+}
 
-  // Use the sender address if provided, otherwise fall back to the SMTP user
-  const fromAddress = config.emailFrom || config.emailUser;
-
-  let mailOptions = {
-    from: fromAddress,
-    to: config.emailTo,
-    subject: formatEmailSubject(subject),
-    text: text,
-    attachments: attachments,
-    html: options.html || buildReportEmailHtml(options.heading || "WeReadAssistant", text, attachments),
-  };
-
+// 发送邮件，返回 { ok, error }。filePaths：附件（见 toMailAttachments）；options.heading：邮件正文标题；options.html：完整的自定义 HTML
+async function deliverMail(config, subject, text, filePaths = [], options = {}) {
+  // 构造连接与邮件内容出错（例如 SMTP 参数无效、附件无法读取）也返回失败原因，不抛出
   try {
+    const nodemailer = require("nodemailer");
+    const transporter = nodemailer.createTransport(smtpTransportOptions(config));
+    const attachments = toMailAttachments(filePaths);
+    const mailOptions = {
+      // 没有填写发件人时用 SMTP 用户名
+      from: config.emailFrom || config.emailUser,
+      to: config.emailTo,
+      subject: formatEmailSubject(subject),
+      text: text,
+      attachments: attachments,
+      html: options.html || buildReportEmailHtml(options.heading || "WeReadAssistant", text, attachments),
+    };
     let info = await transporter.sendMail(mailOptions);
     console.info("Email sent successfully");
     console.info("Message ID: ", info.messageId);
-    return true;
+    return { ok: true, error: "" };
   } catch (error) {
     console.error("Error sending email: ", error);
-    return false;
+    return { ok: false, error: redact(config, error.message || String(error)) };
   }
+}
+
+// 兼容旧的调用方式：返回是否发送成功
+async function sendMail(config, subject, text, filePaths = [], options = {}) {
+  return (await deliverMail(config, subject, text, filePaths, options)).ok;
 }
 
 module.exports = {
   buildLoginLinkEmailHtml,
   canSendEmail,
+  deliverMail,
   formatEmailTime,
+  missingEmailFields,
   sendMail,
   smtpTransportOptions,
   toMailAttachments,
