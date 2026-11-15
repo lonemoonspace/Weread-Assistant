@@ -8,7 +8,7 @@ const {
   normalizeSeleniumUrl,
 } = require("../shared/selenium");
 const { browserPath, checkLocalBrowser, chromedriverPath, majorVersion } = require("../shared/local-browser");
-const { DISK_CACHE_BYTES, prepareProfile, resetProfile } = require("./profile");
+const { DISK_CACHE_BYTES, prepareProfile, resetProfile, restoreProfile } = require("./profile");
 
 // chromedriver 开始监听端口的时限。selenium-webdriver 默认 30 秒，这里写明：树莓派负载高时启动较慢
 const LOCAL_DRIVER_START_TIMEOUT_MS = 30000;
@@ -82,14 +82,21 @@ async function createLocalDriver(capabilities, makeOptions, status, profileDataD
     driver.usesProfile = Boolean(profile);
     return driver;
   } catch (e) {
-    if (!profile) {
+    // chromedriver 本身没能启动与资料目录无关，不重置
+    if (!profile || e.beforeBrowser) {
       throw e;
     }
     console.warn("用浏览器资料目录启动失败，重置后再试一次:", e.message);
     resetProfile(profile, "用它启动浏览器失败");
-    const driver = await startLocalDriver(capabilities, localOptions(profile));
-    driver.usesProfile = true;
-    return driver;
+    try {
+      const driver = await startLocalDriver(capabilities, localOptions(profile));
+      driver.usesProfile = true;
+      return driver;
+    } catch (retryError) {
+      // 换成空的资料目录也启动不了：问题不在资料目录，换回原来的，保留登录状态
+      restoreProfile(profile);
+      throw retryError;
+    }
   }
 }
 
@@ -101,7 +108,9 @@ async function startLocalDriver(capabilities, options) {
     serverUrl = await service.start(LOCAL_DRIVER_START_TIMEOUT_MS);
   } catch (e) {
     await service.kill();
-    throw new Error(`无法启动 chromedriver（${driverPath}）：${e.message}`, { cause: e });
+    const error = new Error(`无法启动 chromedriver（${driverPath}）：${e.message}`, { cause: e });
+    error.beforeBrowser = true;
+    throw error;
   }
   console.info("chromedriver: ", serverUrl);
   let driver;
