@@ -21,6 +21,16 @@ const CONFIG_SCHEMA = [
     default: 10,
   },
   {
+    key: "durationJitter",
+    type: "integer",
+    group: "reading",
+    label: "时长随机增加（分钟）",
+    description: "每次阅读在设定时长之上再随机多读 0 到该值分钟，只增不减。重试、补跑与恢复按剩余分钟读，不再增加。",
+    min: 0,
+    max: 30,
+    default: 0,
+  },
+  {
     key: "speed",
     type: "string",
     group: "reading",

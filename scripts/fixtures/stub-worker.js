@@ -11,6 +11,8 @@
 //   stubborn-*  忽略 SIGTERM，只能被强制结束
 //   hang-*      建立会话后不再有任何动作，收到 SIGTERM 后退出
 //   skip-*      进度从第 1 分钟跳到第 5 分钟，最后上报一个远超阅读时长的分钟数
+//   flaky-*     第 1 次尝试读 1 分钟后上报 error；之后的尝试（重试）读完 config.duration 分钟后上报 done
+//   goal-*      读完 config.duration 分钟（每分钟 30 毫秒）后上报 done
 const fs = require("fs");
 const path = require("path");
 const { PNG } = require("pngjs");
@@ -45,7 +47,7 @@ async function exit(code) {
   process.exit(code);
 }
 
-process.once("message", async ({ mode, config, screenshotDir, panelLink, browserStatus }) => {
+process.once("message", async ({ mode, config, screenshotDir, panelLink, browserStatus, retry, goalDeficit }) => {
   const id = config.profileName;
   if (browserStatus) {
     log(`面板下发的内置浏览器：${browserStatus.message}`);
@@ -66,6 +68,7 @@ process.once("message", async ({ mode, config, screenshotDir, panelLink, browser
   log(`mode=${mode} account=${config.accountName} dataDir=${config.dataDir} panelLink=${panelLink || "-"}`);
   log(`环境变量: ${JSON.stringify(Object.keys(process.env).sort())}`);
   log(`barkKey 已下发: ${Boolean(config.barkKey)}`);
+  log(`retry=${JSON.stringify(retry || null)} duration=${config.duration} goalDeficit=${goalDeficit || 0}`);
   // 模拟子进程不小心打印了密钥与登录链接，面板写入日志前应替换为掩码
   log(`模拟泄露: https://api.day.app/${config.barkKey} https://weread.qq.com/web/confirm?uid=${id}-uid&from=stub`);
   send("started", { version: "stub" });
@@ -116,6 +119,22 @@ process.once("message", async ({ mode, config, screenshotDir, panelLink, browser
   }
 
   send("book-opened", { title: "测试书" });
+  if (kind === "flaky" && (!retry || retry.attempt === 1)) {
+    await sleep(30);
+    send("reading-minute", { minute: 1, total: config.duration, screenshot: "" });
+    send("error", { message: "模拟的阅读中途出错" });
+    await exit(0);
+    return;
+  }
+  if (kind === "flaky" || kind === "goal") {
+    for (let minute = 1; minute <= config.duration; minute += 1) {
+      await sleep(30);
+      send("reading-minute", { minute, total: config.duration, screenshot: "" });
+    }
+    send("done", { minutes: config.duration });
+    await exit(0);
+    return;
+  }
   if (kind === "ok") {
     for (const minute of [1, 2]) {
       await sleep(50);

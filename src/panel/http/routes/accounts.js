@@ -2,22 +2,36 @@ const express = require("express");
 const { createAccount, deleteAccount, findAccount, publicAccount, updateAccount } = require("../../accounts");
 const { publicEffectiveConfig, resolveAccountConfig } = require("../../config");
 const { PanelError, badRequest, requireObject } = require("../../errors");
+const { normalizeGoal, publicGoal } = require("../../goal");
 const { calendar, challengeProgress, lastRun, todayStats } = require("../../history");
-const { nextRunAt, normalizeSchedules, publicSchedule } = require("../../schedules");
+const { nextRunInfo, normalizeSchedules, publicSchedule } = require("../../schedules");
 
-// 账号的增删改查、调度规则、打卡日历与等待扫码时的二维码截图
-function accountRoutes({ dataDir, store, runner }) {
-  // 账号信息附带今天的阅读分钟数与最近一次运行，供总览使用
+// 账号的增删改查、调度规则、每日目标、打卡日历与等待扫码时的二维码截图
+function accountRoutes({ dataDir, store, runner, planner }) {
+  // 计划器中该账号的待办（重试、随机延后的定时运行）与今天的补跑次数
+  const plannedView = (accountId, timezone) => (planner ? planner.accountStatus(accountId, timezone) : null);
+  // 账号信息附带今天的阅读分钟数、最近一次运行与计划器的待办，供总览使用
   const accountView = (account, timezone = store.get().settings.timezone) => ({
     ...publicAccount(account, dataDir, timezone),
     today: todayStats(dataDir, account.id, { timezone }),
     lastRun: lastRun(dataDir, account.id),
+    planned: plannedView(account.id, timezone),
   });
-  const schedulesView = (account, timezone) => ({
+  const schedulesView = (account, timezone) => {
+    const next = nextRunInfo(account, timezone);
+    return {
+      timezone,
+      enabled: account.enabled,
+      nextRunAt: next ? next.at : null,
+      nextRunJitterMinutes: next ? next.jitterMinutes : 0,
+      schedules: account.schedules.map((rule) => publicSchedule(rule, timezone)),
+    };
+  };
+  const goalView = (account, timezone) => ({
     timezone,
-    enabled: account.enabled,
-    nextRunAt: nextRunAt(account, timezone),
-    schedules: account.schedules.map((rule) => publicSchedule(rule, timezone)),
+    ...publicGoal(account.goal, account.challenge),
+    today: todayStats(dataDir, account.id, { timezone }),
+    planned: plannedView(account.id, timezone),
   });
   const schedulesFromBody = (body) => {
     const unknown = Object.keys(requireObject(body)).filter((key) => key !== "schedules");
@@ -80,6 +94,27 @@ function accountRoutes({ dataDir, store, runner }) {
     });
     console.info(`调度规则已更新：账号 ${req.params.id}，${schedules.length} 条`);
     res.json(schedulesView(findAccount(data, req.params.id), data.settings.timezone));
+  });
+
+  // 每日目标：目标设置、按挑战的建议值、检查时间太晚时的提示、今天的分钟数与补跑次数
+  router.get("/accounts/:id/goal", (req, res) => {
+    const data = store.get();
+    res.json(goalView(findAccount(data, req.params.id), data.settings.timezone));
+  });
+
+  // { goal: { enabled, minutes, checkAt } | null }：保存每日目标，null 表示不设置
+  router.put("/accounts/:id/goal", async (req, res) => {
+    const body = requireObject(req.body);
+    const unknown = Object.keys(body).filter((key) => key !== "goal");
+    if (unknown.length > 0 || body.goal === undefined) {
+      throw badRequest("只能提交 { goal: {...} | null }");
+    }
+    const goal = normalizeGoal(body.goal);
+    const data = await store.update((draft) => {
+      findAccount(draft, req.params.id).goal = goal;
+    });
+    console.info(`每日目标已更新：账号 ${req.params.id}，${goal ? `${goal.enabled ? "" : "（未启用）"}${goal.minutes} 分钟，${goal.checkAt} 检查` : "不设置"}`);
+    res.json(goalView(findAccount(data, req.params.id), data.settings.timezone));
   });
 
   // { schedules: [...] }：校验规则并预览接下来的触发时间，不保存

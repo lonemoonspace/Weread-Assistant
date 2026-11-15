@@ -1,4 +1,5 @@
 const { FLUSH_TIMEOUT_MS, createNotifier } = require("../notify");
+const fs = require("fs");
 const { collectDiagnostics, createDriver } = require("./browser");
 const { throwIfStopped } = require("./dom");
 const { login, removeLoginImages, saveCookies } = require("./login");
@@ -11,6 +12,43 @@ const MAX_ERROR_LENGTH_IN_NOTIFICATION = 100;
 const QUIT_TIMEOUT_MS = 10000;
 // 收到停止请求时等待后台通知的最长时间：关闭浏览器（最多 QUIT_TIMEOUT_MS）加上这段时间仍短于 KILL_TIMEOUT_MS
 const STOPPED_FLUSH_TIMEOUT_MS = 3000;
+// 出错时保存现场截图的时限：浏览器已经卡死时不一直等
+const ERROR_SCREENSHOT_TIMEOUT_MS = 5000;
+
+// 最多等 ms 毫秒，超时返回 null
+function withTimeout(promise, ms) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// 阅读流程出错时保存当前页面的截图（运行目录下的 error.png，0600），并记录页面地址与标题，供排查。
+// 尽力而为：浏览器已断开或超时只记录日志。返回截图内容（作为失败邮件的附件），没有时为 null
+async function saveErrorScreenshot(driver, paths) {
+  try {
+    const page = await withTimeout(
+      Promise.all([driver.getCurrentUrl(), driver.getTitle()]).catch(() => null),
+      ERROR_SCREENSHOT_TIMEOUT_MS
+    );
+    if (page) {
+      console.info(`出错时的页面：${page[0]}（标题：${page[1] || "无"}）`);
+    }
+    const image = await withTimeout(driver.takeScreenshot(), ERROR_SCREENSHOT_TIMEOUT_MS);
+    if (!image) {
+      console.warn(`${ERROR_SCREENSHOT_TIMEOUT_MS / 1000} 秒内没能截取出错时的页面，跳过`);
+      return null;
+    }
+    const content = Buffer.from(image, "base64");
+    fs.writeFileSync(paths.screenshot("error.png"), content, { mode: 0o600 });
+    console.info("已保存出错时的页面截图 error.png");
+    return content;
+  } catch (e) {
+    console.warn("保存出错时的页面截图失败:", e.message);
+    return null;
+  }
+}
 
 // 发送事件通知；需要为该事件发邮件时截图作为附件（只在内存中，不写入运行目录）。
 // 截图是尽力而为：截图失败时照常发送不带附件的通知，不影响运行结果。通知在后台发送，不等待结果
@@ -37,6 +75,9 @@ async function notifyWithScreenshot(eventName, body, driver, ctx) {
  * options.screenshotDir: 阅读截图的保存目录，默认为账号数据目录
  * options.panelLink: 面板中该账号实时页面的地址，附在扫码推送中（面板配置了 PANEL_PUBLIC_URL 时）
  * options.browserStatus: 面板已检查过的内置浏览器状态，有值时子进程不再执行 --version
+ * options.retry: { attempt, retriesLeft }，第几次尝试与出错后还会自动重试的次数：还会重试时不发送失败通知，
+ *   最后一次失败的通知中写明重试过几次
+ * options.goalDeficit: 每日目标补跑时当天还差的分钟数，写进扫码超时的通知
  * options.homeUrl / options.timing: 覆盖首页地址与时间参数，供测试使用
  *
  * 返回 { status: "success" | "login-timeout" | "error" | "stopped", minutes, error }
@@ -45,6 +86,9 @@ async function runOnce(config, options = {}) {
   const mode = options.mode || "read";
   const { signal } = options;
   const report = options.report || (() => {});
+  const retry = { attempt: 1, retriesLeft: 0, ...options.retry };
+  const retriedNote = retry.attempt > 1 ? `（已重试 ${retry.attempt - 1} 次）` : "";
+  const goalNote = options.goalDeficit > 0 ? `；今天还差 ${options.goalDeficit} 分钟，需要扫码后手动运行` : "";
   const timing = { ...resolveTiming(config), ...options.timing };
   const paths = getDataPaths(config, { screenshotDir: options.screenshotDir });
   const notifier = createNotifier(config, {
@@ -112,7 +156,7 @@ async function runOnce(config, options = {}) {
 
     if (!(await login(driver, ctx))) {
       report("login-timeout");
-      notifier.event("failure", `等待扫码超时（${formatDuration(timing.loginTimeoutMs)}），本次未阅读`);
+      notifier.event("failure", `等待扫码超时（${formatDuration(timing.loginTimeoutMs)}），本次未阅读${goalNote}`);
       return { status: "login-timeout", minutes: 0, error: "" };
     }
     console.info("Successfully logged in.");
@@ -153,6 +197,8 @@ async function runOnce(config, options = {}) {
     }
     const errorMessage = String(e?.message || e || "Unknown error");
     console.error("运行出错:", e);
+    // 先截图再上报：上报结果后面板会在一段时间后结束子进程
+    const errorImage = driver ? await saveErrorScreenshot(driver, paths) : null;
     report("error", { message: errorMessage });
     // 出错时检查 Selenium 健康状态
     await collectDiagnostics(config, errorMessage, { browserStatus: options.browserStatus });
@@ -160,7 +206,12 @@ async function runOnce(config, options = {}) {
       errorMessage.length > MAX_ERROR_LENGTH_IN_NOTIFICATION
         ? `${errorMessage.substring(0, MAX_ERROR_LENGTH_IN_NOTIFICATION)}...`
         : errorMessage;
-    notifier.event("failure", `运行出错：${shortMessage}`);
+    if (retry.retriesLeft > 0) {
+      console.info(`还会自动重试（剩余 ${retry.retriesLeft} 次），这次不发送失败通知`);
+    } else {
+      const attachments = errorImage && notifier.willEmail("failure") ? [{ filename: "error.png", content: errorImage }] : [];
+      notifier.event("failure", `运行出错：${shortMessage}${retriedNote}`, { attachments });
+    }
     return { status: "error", minutes: 0, error: errorMessage };
   } finally {
     if (signal) {

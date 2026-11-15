@@ -5,13 +5,19 @@ const { describeSchedule, schedulePatterns } = require("./schedules");
 /**
  * 调度器：按账号的调度规则在面板时区的对应时间把运行加入队列。
  * panel.json 中的时区、账号启用状态或调度规则变化后整体重建定时任务，修改立即生效。
- * 面板停机期间错过的时间不补跑；账号已在运行或排队、已停用时跳过本次触发并记录日志。
+ * 账号已在运行或排队、已停用时跳过本次触发并记录日志。
+ * onFire(accountId, rule)：到点后调用，面板中由计划器处理随机延后（planner.js），停机期间错过的时间也由计划器补触发；
+ * 不提供时直接加入队列
  */
-function createScheduler({ store, runner }) {
+function createScheduler({ store, runner, onFire }) {
   let jobs = [];
   let closed = false;
 
   function fire(accountId, rule) {
+    if (onFire) {
+      onFire(accountId, rule);
+      return;
+    }
     const label = `账号 ${accountId}，规则 ${rule.id}（${describeSchedule(rule)}）`;
     try {
       const run = runner.enqueue(accountId, { mode: "read", trigger: "schedule", scheduleId: rule.id });
