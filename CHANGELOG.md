@@ -2,6 +2,23 @@
 
 版本号与 `package.json` 一致；推送 `v<版本号>` tag 时，发布流程把对应一节作为 GitHub Release 的说明。
 
+## 0.7.0
+
+API 令牌与 MCP 接口：脚本、快捷指令与 AI 助手可以按权限查询打卡状态、开始阅读、读取与搜索笔记。
+
+升级说明：
+
+- 执行 `docker compose pull && docker compose up -d` 即可，数据目录无需改动
+- 不新建令牌时面板的行为与 0.6.0 相同：`api/v1/` 与 `mcp` 只接受 API 令牌，没有令牌时一律 401
+- 面板前面有 Cloudflare Access 等登录网关、又想让脚本或 AI 助手访问时，需要为 `api/v1/` 与 `mcp` 两个路径放行（它们有自己的令牌认证）
+- 降级到 0.6.0：换回旧镜像即可。旧版本会忽略 `panel.json` 中的令牌（`auth.tokens`），令牌在旧版本中不能使用
+
+新增：
+
+- API 令牌：在「设置 → API 令牌」中新建，选择权限（查看状态与运行记录、开始与停止运行、读取与同步笔记和阅读报告）、能访问的账号与有效期；新建时需要二次验证，令牌只显示一次。`panel.json` 中只保存哈希。令牌不能修改设置、配置与调度，拿不到密钥、cookies 与登录链接；删除后立即失效
+- `api/v1`：用 `Authorization: Bearer 令牌` 访问的接口，可以在 iOS 快捷指令、cron、Home Assistant 等中查看账号状态与运行记录、开始或停止阅读、读取与搜索笔记、下载 Markdown、生成上周的阅读报告，接口列表见 `docs/panel.md`
+- MCP 接口：子路径下的 `mcp`（Streamable HTTP），Claude Code、Cursor 等支持 MCP 的 AI 助手用同一个令牌连接，提供 10 个工具（账号状态、最近运行、开始与停止、笔记书单、一本书的笔记、搜索、同步、上周报告），按令牌的权限列出。例如 `claude mcp add --transport http weread https://example.com/weread/mcp --header "Authorization: Bearer wat_…"`
+
 ## 0.6.0
 
 阅读助手：用微信读书官方 API 同步、浏览、搜索与导出本人的划线和想法，每周一推送上周的阅读报告。
