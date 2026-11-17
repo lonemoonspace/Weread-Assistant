@@ -11,6 +11,8 @@ const { accountRoutes } = require("./http/routes/accounts");
 const { officialRoutes } = require("./http/routes/official");
 const { tokenRoutes } = require("./http/routes/tokens");
 const { v1Routes } = require("./http/routes/v1");
+const { mcpRoutes } = require("./http/routes/mcp");
+const { createMcp } = require("./mcp");
 const { createTokenAuth } = require("./http/token-auth");
 const { createAgent } = require("./agent");
 const { createTokens } = require("./tokens");
@@ -61,6 +63,7 @@ function createPanelApp(
   ctx.tokens = createTokens({ store, ...options.tokens });
   ctx.agent = createAgent({ dataDir: ctx.dataDir, store, runner, planner, notes, reports });
   ctx.tokenAuth = createTokenAuth({ tokens: ctx.tokens });
+  ctx.mcp = createMcp({ agent: ctx.agent, store });
 
   const app = express();
   app.disable("x-powered-by");
@@ -87,6 +90,7 @@ function createPanelApp(
 
   // 令牌认证的接口在面板接口之前：不经过面板的会话、自定义请求头与请求体检查
   router.use("/api/v1", v1Routes(ctx));
+  router.use("/mcp", mcpRoutes(ctx));
 
   const api = express.Router();
   api.use((req, res, next) => {

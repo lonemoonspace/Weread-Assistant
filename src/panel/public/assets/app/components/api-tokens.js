@@ -79,14 +79,16 @@ export const ApiTokens = {
     const scopesLabel = (token) => token.scopes.map((scope) => scopes.value[scope] || scope).join("；");
     const expired = (token) => token.expiresAt && Date.parse(token.expiresAt) <= Date.now();
     const baseUrl = computed(() => new URL("api/v1/", location.href).href);
+    const mcpUrl = computed(() => new URL("mcp", location.href).href);
 
     onMounted(load);
-    return { tokens, scopes, form, creating, created, create, remove, copy, accountsLabel, scopesLabel, expired, baseUrl, state, formatDateTime, tz: timezone, EXPIRY_OPTIONS };
+    return { tokens, scopes, form, creating, created, create, remove, copy, accountsLabel, scopesLabel, expired, baseUrl, mcpUrl, state, formatDateTime, tz: timezone, EXPIRY_OPTIONS };
   },
   template: `
     <div class="api-tokens">
       <p class="muted">
-        给脚本、快捷指令与 AI 助手用的令牌，在请求头中带上 <code>Authorization: Bearer 令牌</code> 访问 <code>{{ baseUrl }}</code>。
+        给脚本、快捷指令与 AI 助手用的令牌，在请求头中带上 <code>Authorization: Bearer 令牌</code> 访问 <code>{{ baseUrl }}</code>；
+        支持 MCP 的 AI 助手（Claude Code、Cursor 等）用同一个令牌连接 <code>{{ mcpUrl }}</code>（Streamable HTTP）。
         令牌只能做勾选的事、只能访问选定的账号，不能修改设置、配置与密钥，也拿不到 cookies 与登录链接。
       </p>
       <article v-if="created" class="token-created">
@@ -96,6 +98,7 @@ export const ApiTokens = {
           <button type="button" @click="copy">复制</button>
         </div>
         <p class="muted">试一下：<code>curl -H "Authorization: Bearer {{ created.token.slice(0, 8) }}…" {{ baseUrl }}accounts</code></p>
+        <p class="muted">添加到 Claude Code：<code>claude mcp add --transport http weread {{ mcpUrl }} --header "Authorization: Bearer {{ created.token.slice(0, 8) }}…"</code>（把 <code>{{ created.token.slice(0, 8) }}…</code> 换成完整的令牌）</p>
         <button type="button" class="secondary outline" @click="created = null">我已保存</button>
       </article>
       <div v-if="tokens.length" class="table-scroll">

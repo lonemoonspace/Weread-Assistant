@@ -65,6 +65,7 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/tokens.js` | API 令牌：新建（权限、账号、有效期）、列出、删除、校验 | `panel.json` 的 `auth.tokens` 中只存 SHA-256 哈希；最近使用时间最多每小时写回一次 |
 | `src/panel/agent.js` | 令牌可以调用的操作（`api/v1` 与 MCP 共用）：检查权限与账号，返回挑选过的字段 | 不返回配置、密钥、cookies、登录链接与截图 |
 | `src/panel/http/token-auth.js`、`src/panel/http/routes/v1.js` | `Authorization: Bearer` 认证与 `api/v1` 接口 | 不使用 cookie，不需要 `X-WA-Request`；同一 IP 15 分钟内认证失败 20 次后暂停 |
+| `src/panel/mcp.js`、`src/panel/http/routes/mcp.js` | MCP 服务端（Streamable HTTP，无状态、只返回 JSON）：初始化、按令牌权限列出工具、调用工具 | 工具调用交给 `agent.js`；带 `Origin` 时只接受同源；不提供 SSE 流 |
 | `src/panel/passkeys.js` | passkey（WebAuthn）的添加、登录与二次验证校验、改名、删除（@simplewebauthn/server） | 域名与地址只取自 `PANEL_PUBLIC_URL`，不信任请求的 Host；challenge 一次有效（登录用的自带过期时间与 HMAC，不在服务端保存）；`panel.json` 中只保存公钥；密码登录关闭时不能删除最后一个可用的 passkey |
 | `src/panel/server.js` | 组装 Express 应用（中间件与各组接口的挂载顺序）、启动与停止面板 | 挂载顺序决定哪些接口需要登录：页面 → 不需要登录的认证接口 → 要求登录 → 其余接口 → 404 |
 | `src/panel/http/security.js` | 安全响应头与 CSP、`csrfGuard`、会话 cookie 的读写与 HTTPS 判断 | 统一安全响应头；修改类请求校验自定义请求头 |
@@ -630,6 +631,33 @@ curl -X POST -H "Authorization: Bearer wat_…" -H "Content-Type: application/js
   -d '{"mode":"read"}' https://example.com/weread/api/v1/accounts/me/runs
 ```
 
+### MCP
+
+支持 MCP（Model Context Protocol）的 AI 助手可以连接子路径下的 `mcp`（例如 `https://example.com/weread/mcp`），用 API 令牌认证（`Authorization: Bearer wat_…`），让助手查询打卡状态、开始阅读、读取与搜索笔记。例如 Claude Code：
+
+```sh
+claude mcp add --transport http weread https://example.com/weread/mcp --header "Authorization: Bearer wat_…"
+```
+
+| 工具 | 权限 | 说明 |
+| --- | --- | --- |
+| `list_accounts` | `read` | 能访问的账号的今日阅读、打卡、连续天数、运行与下次运行时间 |
+| `get_account_status` | `read` | 一个账号的详细状态（同 `GET api/v1/accounts/:id`） |
+| `list_recent_runs` | `read` | 最近的运行（`limit` 1–50） |
+| `start_reading` | `run` | 开始阅读或仅登录（`mode`） |
+| `stop_run` | `run` | 停止当前的运行 |
+| `list_note_books` | `notes` | 笔记同步状态与有笔记的书 |
+| `get_book_notes` | `notes` | 一本书的笔记（Markdown） |
+| `search_notes` | `notes` | 搜索划线与想法 |
+| `sync_notes` | `notes` | 立即同步笔记 |
+| `get_weekly_report` | `notes` | 上周的阅读报告 |
+
+- 工具按令牌的权限列出，没有权限的工具看不到也不能调用；`account_id` 在令牌只能访问一个账号时可以不填。
+- 结果同时有文本（JSON 或 Markdown）与 `structuredContent`；没有权限、账号不存在、已在运行等作为工具错误（`isError: true`）返回，助手能读到原因。
+- 传输：只支持 `POST`（`GET`、`DELETE` 返回 405，不提供服务端推送流），不使用 `Mcp-Session-Id`；协议版本 `2025-06-18` 与 `2025-03-26`，`MCP-Protocol-Version` 为其他值时 400；支持批量请求（最多 20 条）。
+- 带 `Origin` 请求头（浏览器发起）时只接受与面板同源或 `PANEL_PUBLIC_URL` 的，防止 DNS 重绑定。
+- 面板前面有 Cloudflare Access 等登录网关时，`api/v1/` 与 `mcp` 需要放行（它们用令牌认证），否则脚本与助手会被网关挡住。
+
 ### 安全
 
 | 项目 | 做法 |
@@ -643,7 +671,7 @@ curl -X POST -H "Authorization: Bearer wat_…" -H "Content-Type: application/js
 | 关闭密码登录 | 可选，见上文“关闭密码登录”；关闭后密码泄露也不能用来登录 |
 | 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；上次失败 15 分钟后（且不在锁定中）从头计数。正在校验的请求预先占用失败名额：同一 IP 同时校验的请求数不超过距离锁定剩余的失败次数（锁定刚结束时为 1），并发突发不能多试，超出的请求 429（`retryAfter` 为 1 秒）；所有 IP 在 15 分钟内累计失败 100 次后暂停 15 分钟，暂停期间只有本次启动以来、最近 30 天内登录或二次验证成功过的 IP 可以用密码登录（仍按 IP 限速），未认证的请求不能借此挡住这些 IP；passkey 登录（含申请登录参数）与已登录会话的二次验证不受暂停影响，只按 IP 限速：passkey 猜不中，暂停只为分散的密码猜测而设。这份名单与暂停都只在内存中，面板重启后或管理员换了 IP 时密码登录仍可能被暂停挡住，用 passkey 登录或重启面板即可。密码与 passkey 的登录、二次验证以及修改密码时的当前密码共用同一套按 IP 的失败计数与锁定；只有密码登录与修改密码时的当前密码计入全局上限 |
 | 密码哈希 | `panel.json` 中的哈希格式或参数无效（例如被手工改坏）时拒绝启动并提示恢复办法，校验时一律不通过 |
-| API 令牌 | 见“API 令牌与 api/v1”：32 字节随机数，`panel.json` 中只存 SHA-256 哈希，只能访问 `api/v1` 与 MCP，按权限与账号限定；面板的管理接口（设置、配置、密钥、备份、令牌、passkey）只接受面板会话。修改面板密码与退出其他设备不影响令牌，不用的令牌请在设置中删除 |
+| API 令牌 | 见“API 令牌与 api/v1”：32 字节随机数，`panel.json` 中只存 SHA-256 哈希，只能访问 `api/v1` 与 `mcp`，按权限与账号限定；面板的管理接口（设置、配置、密钥、备份、令牌、passkey）只接受面板会话。修改面板密码与退出其他设备不影响令牌，不用的令牌请在设置中删除 |
 | 跨站请求伪造 | 修改类请求必须带 `X-WA-Request: 1` 请求头且为 JSON，配合 `SameSite=Strict` |
 | 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`、`Permissions-Policy`（关闭摄像头、麦克风、定位等用不到的能力）；经 HTTPS 访问时（判断方式与会话 cookie 的 `Secure` 相同）`Strict-Transport-Security: max-age=15552000`（不含子域名）；接口响应与面板主页面、登录页 `Cache-Control: no-store` |
 | 文件 | 新建的数据目录 0700（已有的不改）；`panel.json` 权限 0600，已有文件在启动时收紧；账号数据目录 0700，`cookies.json` 与登录二维码图片 0600（等同于登录状态）；初始密码不写入日志文件 |
