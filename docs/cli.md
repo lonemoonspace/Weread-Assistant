@@ -9,7 +9,7 @@
 | `panel` / 无参数 | 启动 Web 面板 | `PANEL_*` 与 `SELENIUM_URL` 环境变量 | HTTP 服务、`<面板数据目录>/panel.log` | 镜像默认命令；不接受额外参数；端口被占用时报错退出 |
 | `run --account <id>` | 按面板中的账号配置执行一次自动阅读 | `PANEL_DATA_DIR` 下的 `panel.json` | 控制台日志、`accounts/<id>/` 下的 `output.log`、cookies、登录二维码、截图、通知 | 账号覆盖 > 全局默认 > 内置默认；不读取运行相关的环境变量；只读 `panel.json`；不检查面板是否正在运行同一账号，两边会同时写 cookies 与截图，调试前先在面板中停止该账号的运行 |
 | `--login-only` | 与 `run --account` 搭配，只登录（需要时扫码）并保存 cookies | 同上 | 同上，不选书、不阅读 | 用于刷新登录态 |
-| `export --out <文件>` | 导出配置备份（面板设置、全局默认配置、账号、调度规则、挑战与每日目标），格式见 `docs/panel.md`“备份与迁移” | `PANEL_DATA_DIR` 下的 `panel.json`；`--include-secrets`、`--include-cookies` 时还需要 `--passphrase-file <文件>`（备份密码，末尾的换行不算） | 备份文件（0600；`--out` 为目录时写入其中的 `weread-assistant-backup-<日期>.json`，为 `-` 时输出到标准输出），提示写到标准错误 | 只读打开数据，面板运行中也可以执行，适合放进定时备份；密码不放在命令行参数中；导入只能在面板中进行 |
+| `export --out <文件>` | 导出配置备份（面板设置、全局默认配置、账号、调度规则、挑战、每日目标与分段阅读），格式见 `docs/panel.md`“备份与迁移” | `PANEL_DATA_DIR` 下的 `panel.json`；`--include-secrets`、`--include-cookies` 时还需要 `--passphrase-file <文件>`（备份密码，末尾的换行不算） | 备份文件（0600；`--out` 为目录时写入其中的 `weread-assistant-backup-<日期>.json`，为 `-` 时输出到标准输出），提示写到标准错误 | 只读打开数据，面板运行中也可以执行，适合放进定时备份；密码不放在命令行参数中；导入只能在面板中进行 |
 | `help` / `-h` / `--help` | 输出帮助与面板环境变量清单 | 无 | 帮助文本 | 不启动浏览器 |
 
 ### 配置

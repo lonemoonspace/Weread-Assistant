@@ -9,6 +9,7 @@ const { normalizeChallenge } = require("./challenge");
 const { ACCOUNT_ID_PATTERN, accountDataDir, applyConfigPatch, isSensitiveValue, maskValues } = require("./config");
 const { PanelError, badRequest } = require("./errors");
 const { normalizeGoal } = require("./goal");
+const { normalizeSplit } = require("./split");
 const { normalizeSchedules } = require("./schedules");
 const { applySettingsPatch } = require("./settings");
 
@@ -185,6 +186,7 @@ async function buildBackup(data, { dataDir, includeSecrets = false, includeCooki
       schedules: account.schedules,
       challenge: account.challenge,
       goal: account.goal || null,
+      split: account.split || null,
     };
   });
   return {
@@ -332,6 +334,7 @@ function normalizeImportedAccount(item, invalid, now) {
     schedules: normalizeSchedules(item.schedules === undefined || item.schedules === null ? [] : item.schedules),
     challenge: item.challenge === undefined || item.challenge === null ? null : normalizeChallenge(item.challenge),
     goal: item.goal === undefined || item.goal === null ? null : normalizeGoal(item.goal),
+    split: item.split === undefined || item.split === null ? null : normalizeSplit(item.split),
   };
 }
 
