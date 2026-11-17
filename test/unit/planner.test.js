@@ -9,6 +9,7 @@ const { createPlanner, zonedTime } = require("../../src/panel/planner");
 const { retriesLeftFor, retryDelayMs } = require("../../src/panel/retry");
 const { describeSchedule, nextRunInfo, normalizeSchedules } = require("../../src/panel/schedules");
 const { createStore } = require("../../src/panel/store");
+const { minutesFrom, writeRun } = require("../../scripts/fixtures/run-records");
 
 // 静默运行，返回捕获的日志
 function quietly(fn) {
@@ -383,6 +384,110 @@ describe("createPlanner", () => {
     quietly(() => planner.tick());
     assert.equal(enqueued.at(-1).trigger, "catchup");
     assert.deepEqual(planner.accountStatus("a1").catchups, { count: 1, max: 3, blocked: false, waitingLogin: false });
+  });
+
+  describe("晚间断签预警", () => {
+    let warnings;
+    const warn = async (config, body, url) => {
+      warnings.push({ name: config.accountName, body, url });
+    };
+    const at = (time, date = "2026-11-15") => zonedTime(date, time, "Asia/Shanghai");
+    const create = () => createPlanner({ dataDir, store, runner, clock, warn, publicUrl: "https://panel.example" });
+
+    beforeEach(() => {
+      warnings = [];
+    });
+
+    it("到时间还没打卡时提醒一次，附账号页面链接；第二天照常", () => {
+      const planner = create();
+      now = at("21:29");
+      quietly(() => planner.recover());
+      assert.equal(warnings.length, 0, "预警时间之前不提醒");
+      now = at("21:30");
+      quietly(() => planner.tick());
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0].body, /今天（2026-11-15）只读了 0 分钟，还没打卡/);
+      assert.equal(warnings[0].url, "https://panel.example#/accounts/a1/live");
+      now = at("21:40");
+      quietly(() => planner.tick());
+      assert.equal(warnings.length, 1, "每天只提醒一次");
+      planner.close();
+      // 重启后不重复
+      const again = create();
+      quietly(() => again.recover());
+      assert.equal(warnings.length, 1);
+      now = at("21:30", "2026-11-16");
+      quietly(() => again.tick());
+      assert.equal(warnings.length, 2);
+    });
+
+    it("已打卡、正在运行、有待办、今天还有调度或补跑、关闭或账号停用时不提醒", async () => {
+      const planner = create();
+      now = at("21:30");
+      quietly(() => planner.recover());
+      warnings = [];
+
+      const reset = () => {
+        warnings = [];
+        fs.rmSync(path.join(dataDir, "planner.json"), { force: true });
+      };
+      const check = (label) => {
+        reset();
+        const fresh = create();
+        quietly(() => fresh.recover());
+        assert.equal(warnings.length, 0, label);
+        return fresh;
+      };
+
+      active.add("a1");
+      check("正在运行或排队");
+      active.clear();
+
+      await store.update((data) => {
+        data.accounts[0].schedules = normalizeSchedules([{ type: "daily", times: ["22:00"] }]);
+      });
+      check("今天 22:00 还有定时运行");
+      await store.update((data) => {
+        data.accounts[0].schedules = [];
+        data.accounts[0].goal = { enabled: true, minutes: 30, checkAt: "22:30" };
+      });
+      check("每日目标的检查时间还没到");
+      await store.update((data) => {
+        data.accounts[0].goal = null;
+        data.defaults.notifyOnCheckinWarning = false;
+      });
+      check("关闭了提醒");
+      await store.update((data) => {
+        data.defaults.notifyOnCheckinWarning = true;
+        data.accounts[0].overrides.checkinWarningAt = "22:00";
+      });
+      check("账号的提醒时间改为 22:00");
+      await store.update((data) => {
+        data.accounts[0].overrides = {};
+        data.accounts[0].enabled = false;
+      });
+      check("账号停用");
+      await store.update((data) => {
+        data.accounts[0].enabled = true;
+      });
+
+      writeRun(dataDir, "a1", { queuedAt: new Date(at("08:00")).toISOString(), marks: minutesFrom(new Date(at("08:00")).toISOString(), 5) });
+      check("已经读满 5 分钟");
+    });
+
+    it("扫码超时后提醒中写明扫码登录后会补读", async () => {
+      await store.update((data) => {
+        data.accounts[0].goal = { enabled: true, minutes: 30, checkAt: "21:00" };
+      });
+      const planner = create();
+      now = at("21:00");
+      quietly(() => planner.recover());
+      quietly(() => planner.handleFinished(failedRun({ trigger: "catchup", errorKind: "login-timeout", plannedMinutes: 30, minutes: 0 })));
+      now = at("21:30");
+      quietly(() => planner.tick());
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0].body, /扫码登录（「仅登录」即可）后会自动补读/);
+    });
   });
 
   it("planner.json 中到期时间无效的待办在加载时丢弃", () => {

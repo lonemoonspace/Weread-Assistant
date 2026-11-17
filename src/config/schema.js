@@ -377,6 +377,24 @@ const CONFIG_SCHEMA = [
     default: true,
   },
   {
+    key: "notifyOnCheckinWarning",
+    type: "boolean",
+    group: "events",
+    label: "晚间还没打卡时提醒",
+    description:
+      "到下面的时间（面板时区）今天还没读满 5 分钟、也没有正在进行或今天还会进行的运行（定时、重试、每日目标补跑）时推送一次，附账号页面的链接。每天最多一次，只在面板中生效。",
+    default: true,
+  },
+  {
+    key: "checkinWarningAt",
+    type: "string",
+    group: "events",
+    label: "晚间提醒时间（HH:MM）",
+    default: "21:30",
+    pattern: /^(?:[01]\d|2[0-3]):[0-5]\d$/,
+    patternHint: "格式为 HH:MM，例如 21:30",
+  },
+  {
     key: "accountName",
     type: "string",
     group: "advanced",
