@@ -19,6 +19,22 @@ export const ConfigTab = {
     // 内置浏览器的资料目录：null 表示还没有读到
     const profile = ref(null);
     const resettingProfile = ref(false);
+    // 测试微信读书 API Key 的结果
+    const officialTest = ref(null);
+    const testingOfficial = ref(false);
+    const hasApiKey = computed(() => Boolean(props.account.overrides && props.account.overrides.wereadApiKey));
+
+    async function testOfficial() {
+      testingOfficial.value = true;
+      officialTest.value = null;
+      try {
+        officialTest.value = await api(`accounts/${props.account.id}/official/test`, { method: "POST", body: {} });
+      } catch (error) {
+        officialTest.value = { ok: false, error: error.message };
+      } finally {
+        testingOfficial.value = false;
+      }
+    }
 
     // 继承的值：全局默认，未设置时为内置默认
     const inherited = computed(() =>
@@ -124,6 +140,10 @@ export const ConfigTab = {
       inherited,
       profile,
       resettingProfile,
+      officialTest,
+      testingOfficial,
+      hasApiKey,
+      testOfficial,
       formatBytes,
       saveInfo,
       saveConfig,
@@ -160,6 +180,20 @@ export const ConfigTab = {
     <section>
       <h3>测试通知</h3>
       <test-notification :account-id="account.id" />
+    </section>
+
+    <section>
+      <h3>微信读书 API</h3>
+      <p class="muted">
+        在上面的“微信读书 API”分组中填写本人的 API Key 后，可以同步笔记与划线、读取阅读统计。API Key 在电脑浏览器登录微信读书网页版后，打开
+        <a href="https://weread.qq.com/r/weread-skills" target="_blank" rel="noopener noreferrer">weread.qq.com/r/weread-skills</a> 获取，只发给微信读书。
+      </p>
+      <button type="button" class="secondary" :aria-busy="testingOfficial" :disabled="testingOfficial || !hasApiKey" @click="testOfficial">测试 API Key</button>
+      <p v-if="!hasApiKey" class="muted">还没有填写 API Key。</p>
+      <p v-if="officialTest && officialTest.ok" class="muted">
+        可以使用：有笔记的书 {{ officialTest.totalBookCount }} 本，笔记 {{ officialTest.totalNoteCount }} 条。<template v-if="officialTest.upgradeInfo">（{{ officialTest.upgradeInfo }}）</template>
+      </p>
+      <p v-else-if="officialTest" class="error-text">{{ officialTest.error }}</p>
     </section>
 
     <section>
