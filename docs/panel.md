@@ -46,7 +46,9 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/scheduler.js` | 按调度规则到点触发（croner），交给计划器加入队列 | 时区、账号启用状态或调度规则变化后重建定时任务 |
 | `src/panel/planner.js` | 计划器：失败重试、调度随机延后、分段阅读、每日目标补跑、扫码后补读、晚间断签预警、启动时恢复被中断的运行与错过的调度，见下文“重试、补跑与恢复” | 待办保存在 `planner.json`，重启不丢；时钟经参数注入，单元测试不需要真的等待 |
 | `src/official/api.js` | 微信读书官方 API 客户端：统一网关、`skill_version`、Bearer 鉴权，`errcode` 与 HTTP 错误归类（API Key 无效、网络、接口出错、格式不对），499 与 5xx 重试 2 次 | 只读；错误信息中的 API Key 替换为掩码；响应体上限 16 MB |
-| `src/panel/http/routes/official.js` | 官方 API 相关接口（测试 API Key 等） | 网关地址可由面板选项 `officialApi` 替换，测试时指向 `scripts/fixtures/mock-official.js` |
+| `src/official/notes.js` | 用官方 API 读取笔记本概览、一本书的划线（`/book/bookmarklist`）与想法（`/review/list/mine`），按章节整理并渲染为 Markdown | 想法按 `range` 挂到对应划线下；对不上的想法单独成条，没有章节的放在“书评与其他想法” |
+| `src/panel/notes.js` | 笔记同步：每天到 `notesSyncAt` 自动同步一次，也可手动同步；保存到账号数据目录的 `notes/` | 只重新读取最近笔记时间或数量有变化的书；同一账号同一时间只同步一次 |
+| `src/panel/http/routes/official.js` | 官方 API 相关接口（测试 API Key、笔记同步与读取） | 网关地址可由面板选项 `officialApi` 替换，测试时指向 `scripts/fixtures/mock-official.js` |
 | `src/panel/split.js` | 分段阅读的设置校验与一天各段的排法（段数、长度、开始时间随机，段间隔 30 分钟） | |
 | `src/panel/retry.js`、`src/panel/goal.js` | 重试规则（哪些运行、哪些失败、间隔）；每日目标的校验、按挑战的建议值与检查时间太晚时的提示 | |
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
@@ -99,6 +101,9 @@ docker compose logs app | grep 面板初始密码
 | `GET api/accounts/:id/schedules` | 是 | `{ timezone, enabled, nextRunAt, nextRunJitterMinutes, schedules }`：每条规则带 `description` 与接下来 5 次触发时间 `nextRuns`；`nextRunJitterMinutes` 为下次运行那条规则的随机延后分钟数 |
 | `PUT api/accounts/:id/schedules` | 是 | `{ schedules: [...] }`：整体替换账号的调度规则，保存后立即生效；任一条非法时返回 400，`message` 指出第几条规则与原因，整个请求不生效 |
 | `GET api/accounts/:id/goal` | 是 | 每日目标：`{ timezone, goal, suggestedMinutes, warning, today, planned }`。`goal` 为 `{ enabled, minutes, checkAt }` 或 null；`suggestedMinutes` 为按挑战折算的每天分钟数（没有挑战时为 null）；`warning` 为检查时间太晚、补不满目标时的提示；`today` 同账号列表；`planned` 为计划器中的待办与今天的补跑次数 `{ pending, catchups: { count, max, blocked, waitingLogin } }`（`blocked` 为手动停止了自动运行、当天不再补跑；`waitingLogin` 为自动运行等待扫码超时，下次运行成功后补读） |
+| `GET api/accounts/:id/notes` | 否 | 笔记同步状态与书单：`{ configured, running, syncedAt, lastError, lastErrorAt, totalBookCount, totalNoteCount, books }`，书单按最近笔记时间倒序，已经没有笔记的书（`removed`）排在最后 |
+| `POST api/accounts/:id/notes/sync` | 是 | 开始同步笔记，返回 202 与同步状态；已经在同步时不重复开始；没有配置 API Key 时 400 |
+| `GET api/accounts/:id/notes/books/:bookId` | 否 | 一本书按章节整理后的划线与想法：`{ book, syncedAt, chapters, general }`；没有同步过时 404 |
 | `POST api/accounts/:id/official/test` | 是 | 用账号配置中的微信读书 API Key 读取笔记本概览的第一页：成功时 `{ ok: true, totalBookCount, totalNoteCount, upgradeInfo }`，失败时 `{ ok: false, kind, error }`（`kind` 为 `key`、`network`、`api` 或 `format`）；没有配置 API Key 时 400 |
 | `GET api/accounts/:id/split` | 是 | 分段阅读：`{ timezone, split, gapMinutes, today, plan }`。`split` 为 `{ enabled, minutes, from, to, minSegment, maxSegment }` 或 null；`gapMinutes` 为相邻两段的最小间隔；`today` 同账号列表；`plan` 为今天排好的各段 `{ date, segments: [{ at, minutes, status }] }`（`status` 为 `planned`、`started`、`skipped` 或 `cancelled`），没有时为 null |
 | `PUT api/accounts/:id/split` | 是 | `{ split: { enabled?, minutes, from, to, minSegment, maxSegment } \| null }`：保存分段阅读，`minutes` 为 1–1440，`from`、`to` 为 `HH:MM`（面板时区，`to` 晚于 `from`，不跨零点），`minSegment`、`maxSegment` 为 5–240 且前者不大于后者；按每段最长与段间隔在时段内排不下 `minutes` 时返回 400 并说明最多能读多少。null 表示不使用。保存后立即按新设置重新排今天剩下的段；返回同上 |
@@ -279,6 +284,22 @@ docker compose logs app | grep 面板初始密码
 
 内置浏览器的资料目录 `accounts/<id>/profile/` 在每次运行开始前整理：超过 300 MB 时清空其中的缓存（HTTP 缓存本身限制为 50 MB）。在账号“配置”页可以查看占用并重置，见 `docs/reader.md` 的“浏览器资料目录”。
 
+### 笔记同步
+
+在账号的“配置”中填写微信读书 API Key（在微信读书 App 中申请）后，面板每天到全局设置“每天同步笔记的时间”（`notesSyncAt`，默认 04:30，面板时区）为启用的账号同步一次，也可以随时手动同步。只读取本人的划线与想法（含书评），口径与官方 Skill 的笔记导出一致；书签只有数量。
+
+```
+accounts/<id>/notes/
+  index.json             # 有笔记的书、各书的数量、最近一次同步的时间与错误
+  books/<bookId>.json    # 一本书的章节、划线与想法（官方回包整理后的字段）
+  markdown/<书名>.md      # 同一内容的 Markdown：按章节，划线为引用，想法紧随其后；书名重复时加上 bookId
+```
+
+- 增量：笔记本概览中最近笔记时间（`sort`）、划线数与想法数都没变的书不重新读取；逐本读取，间隔 300 毫秒。
+- 在微信读书中删光了笔记的书不删除文件，在 `index.json` 中标记 `removed`，作为备份保留。
+- 失败时（API Key 失效、网络或接口出错）保留上一次的结果，在 `index.json` 中记下原因与时间；每日自动同步失败时按账号的通知配置发送失败通知，当天不再自动重试。
+- 文件只在面板数据目录中，备份配置（“备份与迁移”）不包含笔记；需要时直接备份 `accounts/<id>/notes/`。
+
 ### 备份与迁移
 
 在“设置 → 备份与迁移”中导出与导入，或用 `node src/cli.js export --out <文件>` 导出（见 `docs/cli.md`）。用于迁移到另一台机器，或把配置放进定期备份。实现见 `src/panel/backup.js`。
@@ -426,6 +447,7 @@ data/
   panel.json.pre-import-* # 导入配置备份前的 panel.json（0600，保留最近 3 份），见“备份与迁移”
   accounts/<id>/          # 账号数据（0700）：cookies.json、login.png、login-qr.png（0600；命令行运行时的截图也在这里）
   accounts/<id>/profile/  # 内置浏览器的资料目录（0700）：缓存、本地存储与登录状态，备份时可以排除；profile.broken/ 为最近一次重置前的目录
+  accounts/<id>/notes/    # 同步的笔记（0700，文件 0600），见“笔记同步”
   planner.json            # 计划器的待办与当天的补跑次数（0600），见“重试、补跑与恢复”
   runs/<id>/<runId>/      # 每次运行（目录 0700，启动时收紧旧目录）：meta.json、output.log、screenshot-*.png、error.png（0600）
 ```
@@ -458,6 +480,7 @@ data/
     "maxConcurrentRuns": 1,
     "logRetentionDays": 30,
     "screenshotRetentionRuns": 3,
+    "notesSyncAt": "04:30",
     "vncUrl": ""
   },
   "defaults": { "duration": 68 },

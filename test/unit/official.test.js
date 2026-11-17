@@ -73,3 +73,67 @@ describe("微信读书官方 API 客户端", () => {
     assert.equal(failing.calls.length, 3);
   });
 });
+
+const { fetchBookNotes, fetchNotebooks, organizeNotes, renderBookMarkdown } = require("../../src/official/notes");
+
+// 按 api_name 返回预设回包的假客户端
+function fakeApi(handlers) {
+  const calls = [];
+  return {
+    calls,
+    async call(apiName, params) {
+      calls.push({ apiName, params });
+      return handlers[apiName](params);
+    },
+  };
+}
+
+describe("笔记读取与整理", () => {
+  it("笔记本概览按 lastSort 翻页到 hasMore 为 0", async () => {
+    const pages = [
+      { totalBookCount: 3, totalNoteCount: 9, hasMore: 1, books: [{ bookId: "a", book: { title: "甲" }, sort: 30, noteCount: 1, reviewCount: 1, bookmarkCount: 0 }, { bookId: "b", book: { title: "乙" }, sort: 20 }] },
+      { hasMore: 0, books: [{ bookId: "c", book: { title: "丙", author: "作者" }, sort: 10, markedStatus: 1 }] },
+    ];
+    const api = fakeApi({ "/user/notebooks": () => pages.shift() });
+    const result = await fetchNotebooks(api);
+    assert.deepEqual(result.books.map((book) => book.bookId), ["a", "b", "c"]);
+    assert.deepEqual([result.totalBookCount, result.totalNoteCount, result.books[2].finished, result.books[2].author], [3, 9, true, "作者"]);
+    assert.deepEqual(api.calls.map((call) => call.params), [{ count: 50 }, { count: 50, lastSort: 20 }]);
+  });
+
+  it("想法按 synckey 翻页；跳过书签；按章节整理，想法挂在对应划线下面", async () => {
+    const reviewPages = [
+      { hasMore: 1, synckey: 2, reviews: [
+        { review: { reviewId: "r1", content: "想法一", abstract: "划线二", range: "50-60", chapterUid: 1, chapterIdx: 1, createTime: 3 } },
+        { review: { reviewId: "r2", content: "章节点评", chapterUid: 2, chapterIdx: 2, chapterName: "第二章", createTime: 4 } },
+      ] },
+      { hasMore: 0, synckey: 3, reviews: [{ review: { reviewId: "r3", content: "整本书评", star: 4, createTime: 5 } }] },
+    ];
+    const api = fakeApi({
+      "/book/bookmarklist": () => ({
+        chapters: [{ chapterUid: 1, chapterIdx: 1, title: "第一章" }],
+        updated: [
+          { bookmarkId: "m2", chapterUid: 1, range: "50-60", markText: "划线二", createTime: 2, type: 1 },
+          { bookmarkId: "m1", chapterUid: 1, range: "5-9", markText: "划线一", createTime: 1, type: 1 },
+          { bookmarkId: "bm", chapterUid: 1, range: "1-1", markText: "", createTime: 1, type: 0 },
+        ],
+      }),
+      "/review/list/mine": () => reviewPages.shift(),
+    });
+    const notes = await fetchBookNotes(api, "book1");
+    assert.equal(notes.highlights.length, 2, "书签不算划线");
+    assert.equal(notes.reviews.length, 3);
+    assert.deepEqual(api.calls.filter((call) => call.apiName === "/review/list/mine").map((call) => call.params.synckey), [0, 2]);
+
+    const { chapters, general } = organizeNotes(notes);
+    assert.deepEqual(chapters.map((chapter) => chapter.title), ["第一章", "第二章"]);
+    assert.deepEqual(chapters[0].entries.map((entry) => [entry.text, entry.reviews.map((review) => review.content)]), [["划线一", []], ["划线二", ["想法一"]]]);
+    assert.deepEqual(chapters[1].entries.map((entry) => entry.reviews[0].content), ["章节点评"]);
+    assert.deepEqual(general.map((review) => review.content), ["整本书评"]);
+
+    const markdown = renderBookMarkdown({ title: "测试之书", author: "某人" }, notes, { formatDate: (seconds) => `D${seconds}`, syncedAt: "2026-11-18" });
+    assert.match(markdown, /^# 测试之书\n\n作者：某人 · 划线 2 条，想法与点评 3 条 · 同步于 2026-11-18\n/);
+    assert.match(markdown, /## 第一章\n\n> 划线一\n\n\*D1\*\n\n> 划线二\n\n想法一\n\n\*D2\*/);
+    assert.match(markdown, /## 书评与其他想法\n\n整本书评\n\n\*D5 · ★★★★\*/);
+  });
+});
