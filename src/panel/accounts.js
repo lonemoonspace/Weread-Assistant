@@ -43,6 +43,7 @@ function publicAccount(account, panelDataDir, timezone) {
     overrides: maskValues(account.overrides),
     challenge: account.challenge,
     goal: account.goal || null,
+    split: account.split || null,
     schedules: account.schedules.map((rule) => publicSchedule(rule, timezone)),
     ...nextRunView(account, timezone),
     hasCookies: fs.existsSync(path.join(accountDataDir(panelDataDir, account.id), "cookies.json")),
@@ -85,6 +86,7 @@ async function createAccount(store, panelDataDir, body) {
       schedules: [],
       challenge: null,
       goal: null,
+      split: null,
     });
   });
   return findAccount(data, id);

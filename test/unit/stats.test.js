@@ -124,7 +124,7 @@ describe("统计页数据", () => {
     assert.deepEqual(runs, {
       total: 6,
       byStatus: { success: 3, failed: 2, stopped: 1, interrupted: 0 },
-      byTrigger: { manual: 2, schedule: 1, retry: 1, catchup: 1, resume: 1 },
+      byTrigger: { manual: 2, schedule: 1, split: 0, retry: 1, catchup: 1, resume: 1 },
       rescued: 1,
       catchups: 1,
       loginPrompted: 1,

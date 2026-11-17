@@ -12,7 +12,7 @@ export const STATUS_LABELS = {
 };
 
 export const ACTIVE_STATUSES = ["queued", "starting", "waiting-login", "reading"];
-export const TRIGGER_LABELS = { manual: "手动", schedule: "定时", retry: "重试", catchup: "补跑", resume: "恢复" };
+export const TRIGGER_LABELS = { manual: "手动", schedule: "定时", split: "分段", retry: "重试", catchup: "补跑", resume: "恢复" };
 // 计划器中的待办
 export const PLANNED_LABELS = { retry: "重试", schedule: "定时运行（随机延后）" };
 export const MODE_LABELS = { read: "阅读", login: "仅登录" };

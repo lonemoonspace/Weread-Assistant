@@ -21,7 +21,7 @@ function createRedactor(config = {}) {
 }
 
 const MODE_LABELS = { read: "阅读", login: "仅登录" };
-const TRIGGER_LABELS = { manual: "手动", schedule: "定时", retry: "重试", catchup: "补跑", resume: "恢复" };
+const TRIGGER_LABELS = { manual: "手动", schedule: "定时", split: "分段", retry: "重试", catchup: "补跑", resume: "恢复" };
 
 function publicRun(run, { withLog = false } = {}) {
   const view = {

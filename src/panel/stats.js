@@ -367,7 +367,7 @@ function runCounts(entries, from) {
   const counts = {
     total: 0,
     byStatus: { success: 0, failed: 0, stopped: 0, interrupted: 0 },
-    byTrigger: { manual: 0, schedule: 0, retry: 0, catchup: 0, resume: 0 },
+    byTrigger: { manual: 0, schedule: 0, split: 0, retry: 0, catchup: 0, resume: 0 },
     rescued: 0,
     catchups: 0,
     loginPrompted: 0,

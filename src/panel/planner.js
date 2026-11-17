@@ -10,6 +10,7 @@ const { dateInZone } = require("./dates");
 const { CHECK_IN_MINUTES, todayStats } = require("./stats");
 const { AUTO_TRIGGERS, RETRYABLE_ERROR_KINDS, RETRY_DELAYS_MS, retriesLeftFor, retryDelayMs } = require("./retry");
 const { describeSchedule, jitterOf, nextRuns } = require("./schedules");
+const { minuteOf, planSegments } = require("./split");
 
 /**
  * 计划器：调度器到点触发之外的自动运行都在这里安排。
@@ -19,6 +20,8 @@ const { describeSchedule, jitterOf, nextRuns } = require("./schedules");
  * - 每日目标：每天到账号的 goal.checkAt，当天分钟数不够时补跑差额（不跨过零点，每天最多 3 次）
  * - 扫码后补读：自动运行因扫码超时失败后，当天先不补跑；之后同一天里任何一次运行成功（说明已重新登录）就解除，
  *   成功的是「仅登录」时接着补读：已过目标检查时间的按每日目标补差额，否则补读失败那次剩下的分钟
+ * - 分段阅读：账号设了 split 时，每天第一次检查时在时段内随机排几段阅读，到点加入队列（trigger 为 split，失败照常重试）；
+ *   当天读满 split.minutes 后取消剩下的段，与调度规则同时使用时两者叠加
  * - 晚间断签预警：到账号配置的 checkinWarningAt，今天还没打卡、也没有正在进行或今天还会进行的运行时，经通知渠道提醒一次
  * - 启动时恢复：面板启动 startupDelayMs 后，恢复上次停止时被中断的自动运行、补触发停机期间错过的调度、执行过期的待办，
  *   都只处理宽限时间（面板设置 catchupGraceMinutes）以内的
@@ -77,7 +80,7 @@ function zonedTime(date, time, timezone) {
 }
 
 function emptyState() {
-  return { version: STATE_VERSION, lastCheckAt: null, pending: [], catchups: {}, checkinWarned: {} };
+  return { version: STATE_VERSION, lastCheckAt: null, pending: [], catchups: {}, checkinWarned: {}, splits: {} };
 }
 
 const isPlainObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -117,6 +120,7 @@ function loadState(file) {
     pending,
     catchups: isPlainObject(raw.catchups) ? raw.catchups : {},
     checkinWarned: isPlainObject(raw.checkinWarned) ? raw.checkinWarned : {},
+    splits: isPlainObject(raw.splits) ? raw.splits : {},
   };
 }
 
@@ -432,10 +436,117 @@ function createPlanner({
     }
   }
 
+  // ---------- 分段阅读 ----------
+
+  const splitKey = (split) => JSON.stringify([split.minutes, split.from, split.to, split.minSegment, split.maxSegment]);
+  const activeSplit = (account) => (account && account.enabled && account.split && account.split.enabled ? account.split : null);
+
+  // 今天的分段计划（不是今天的或格式不对的当作没有）
+  function splitPlanOf(accountId, today) {
+    const plan = state.splits[accountId];
+    return isPlainObject(plan) && plan.date === today && Array.isArray(plan.segments) ? plan : null;
+  }
+
+  // 账号设了分段阅读而今天还没有计划（或设置变了）时排出今天的各段：从现在（不早于时段开始）到时段结束，
+  // 读今天还差的分钟数。没有设置或停用时删掉今天的计划
+  function ensureSplitPlan(account, today, timezone, now) {
+    const split = activeSplit(account);
+    const plan = splitPlanOf(account.id, today);
+    if (!split) {
+      if (state.splits[account.id]) {
+        delete state.splits[account.id];
+        save();
+      }
+      return null;
+    }
+    const key = splitKey(split);
+    if (plan && plan.key === key) {
+      return plan;
+    }
+    const read = todayStats(panelDataDir, account.id, { timezone, now: new Date(now) }).minutes;
+    // 现在是今天的第几分钟（墙上时间），下一分钟起才排
+    const wallMinute = Math.floor((((now + zoneOffsetMs(now, timezone)) % 86400000) + 86400000) % 86400000 / 60000);
+    const segments = planSegments({
+      total: split.minutes - read,
+      start: Math.max(minuteOf(split.from), wallMinute + 1),
+      end: minuteOf(split.to),
+      minSegment: split.minSegment,
+      maxSegment: split.maxSegment,
+      random,
+    }).map(({ time, minutes }) => ({ at: formatTime(zonedTime(today, time, timezone)), time, minutes, status: "planned" }));
+    // 设置变了重新排时，已经开始、跳过或取消的段留作记录
+    const kept = plan ? plan.segments.filter((segment) => segment.status !== "planned") : [];
+    state.splits[account.id] = { date: today, key, segments: [...kept, ...segments] };
+    save();
+    const text = segments.map((segment) => `${segment.time} ${segment.minutes} 分钟`).join("、");
+    console.info(
+      segments.length > 0
+        ? `分段阅读：账号 ${account.id} 今天（${today}）排了 ${segments.length} 段：${text}`
+        : `分段阅读：账号 ${account.id} 今天（${today}）已读 ${read} 分钟或时段已过，不再排`
+    );
+    return state.splits[account.id];
+  }
+
+  function runSplit(accountId) {
+    const data = store.get();
+    const account = findAccount(data, accountId);
+    const { timezone } = data.settings;
+    const now = clock.now();
+    const today = dateInZone(new Date(now), timezone);
+    const plan = ensureSplitPlan(account || { id: accountId }, today, timezone, now);
+    if (!plan) {
+      return;
+    }
+    const planned = plan.segments.filter((segment) => segment.status === "planned");
+    if (planned.length === 0) {
+      return;
+    }
+    const split = activeSplit(account);
+    const read = todayStats(panelDataDir, accountId, { timezone, now: new Date(now) }).minutes;
+    if (read >= split.minutes) {
+      for (const segment of planned) {
+        segment.status = "cancelled";
+      }
+      save();
+      console.info(`分段阅读：账号 ${accountId} 今天已读 ${read} 分钟，达到 ${split.minutes} 分钟，取消剩下的 ${planned.length} 段`);
+      return;
+    }
+    const [segment] = planned;
+    const dueAt = Date.parse(segment.at);
+    if (dueAt > now) {
+      return;
+    }
+    if (now - dueAt >= BUSY_GIVE_UP_MS) {
+      segment.status = "skipped";
+      save();
+      console.info(`分段阅读：账号 ${accountId} 原定 ${segment.time} 的一段已晚了 ${minutesBetween(dueAt, now)} 分钟，跳过`);
+      return;
+    }
+    // 正在运行、排队或还有待办（例如上一段的重试）：等它们结束，下一次检查再试
+    if (runner.isActive(accountId) || state.pending.some((item) => item.accountId === accountId)) {
+      return;
+    }
+    const minutes = Math.min(segment.minutes, split.minutes - read);
+    const run = enqueue(
+      accountId,
+      { trigger: "split", minutes, delayedMinutes: minutesBetween(dueAt, now) },
+      `分段阅读（原定 ${segment.time}，读 ${minutes} 分钟，今天已读 ${read}/${split.minutes} 分钟）`
+    );
+    segment.status = run ? "started" : "skipped";
+    if (run) {
+      segment.runId = run.id;
+    }
+    save();
+  }
+
   // ---------- 晚间断签预警 ----------
 
   // 今天还会自动进行的运行：启用的调度规则今天还会触发，或者每日目标的检查时间还没到（且今天还能补跑）
   function moreRunsToday(account, today, timezone, now) {
+    const plan = activeSplit(account) ? splitPlanOf(account.id, today) : null;
+    if (plan && plan.segments.some((segment) => segment.status === "planned")) {
+      return true;
+    }
     const later = (account.schedules || []).some(
       (rule) =>
         rule.enabled &&
@@ -557,8 +668,15 @@ function createPlanner({
       }
     }
     for (const account of store.get().accounts) {
+      runSplit(account.id);
       checkGoal(account.id);
       checkCheckin(account.id);
+    }
+    // 删除了的账号不再保留分段计划
+    for (const accountId of Object.keys(state.splits)) {
+      if (!findAccount(store.get(), accountId)) {
+        delete state.splits[accountId];
+      }
     }
     state.lastCheckAt = formatTime(now);
     save();
@@ -703,7 +821,24 @@ function createPlanner({
         .map(({ kind, dueAt, attempt, minutes, scheduleId }) => ({ kind, dueAt, attempt, minutes, scheduleId }))
         .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
       const { count, blocked, loginWait } = catchupsOf(accountId, today);
-      return { pending, catchups: { count, max: MAX_CATCHUPS_PER_DAY, blocked: Boolean(blocked), waitingLogin: Boolean(loginWait) } };
+      const plan = splitPlanOf(accountId, today);
+      return {
+        pending,
+        catchups: { count, max: MAX_CATCHUPS_PER_DAY, blocked: Boolean(blocked), waitingLogin: Boolean(loginWait) },
+        split: plan ? { date: plan.date, segments: plan.segments.map(({ at, minutes, status }) => ({ at, minutes, status })) } : null,
+      };
+    },
+
+    // 分段阅读的设置变了：下一次检查时按新设置重新排今天剩下的段（已经开始的段不受影响）
+    refreshSplit(accountId) {
+      const plan = state.splits[accountId];
+      if (plan) {
+        plan.key = "";
+        save();
+      }
+      if (ready && !closing) {
+        runSplit(accountId);
+      }
     },
 
     // 面板开始停止：不再安排新的重试与补跑，被中断的运行仍会记下
