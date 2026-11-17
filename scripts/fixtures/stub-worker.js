@@ -13,6 +13,7 @@
 //   skip-*      进度从第 1 分钟跳到第 5 分钟，最后上报一个远超阅读时长的分钟数
 //   flaky-*     第 1 次尝试读 1 分钟后上报 error；之后的尝试（重试）读完 config.duration 分钟后上报 done
 //   goal-*      读完 config.duration 分钟（每分钟 30 毫秒）后上报 done
+//   relogin-*   还没扫过码时阅读上报 login-timeout；仅登录时扫码成功并在数据目录记下，之后阅读同 goal-*
 const fs = require("fs");
 const path = require("path");
 const { PNG } = require("pngjs");
@@ -108,6 +109,24 @@ process.once("message", async ({ mode, config, screenshotDir, panelLink, browser
     return;
   }
 
+  if (kind === "relogin") {
+    const scanned = path.join(config.dataDir, "stub-scanned");
+    if (mode === "login" || !fs.existsSync(scanned)) {
+      send("login-required", { url: `https://weread.qq.com/web/confirm?uid=${id}` });
+      await sleep(150);
+      if (mode !== "login") {
+        send("login-timeout");
+        await exit(0);
+        return;
+      }
+      fs.writeFileSync(scanned, "");
+      send("login-ok");
+      send("done", { minutes: 0 });
+      await exit(0);
+      return;
+    }
+  }
+
   if (kind === "fail") {
     send("error", { message: config.barkKey ? `模拟的页面错误 ${config.barkKey}` : "模拟的页面错误" });
     await exit(0);
@@ -127,7 +146,7 @@ process.once("message", async ({ mode, config, screenshotDir, panelLink, browser
     await exit(0);
     return;
   }
-  if (kind === "flaky" || kind === "goal") {
+  if (kind === "flaky" || kind === "goal" || kind === "relogin") {
     for (let minute = 1; minute <= config.duration; minute += 1) {
       await sleep(30);
       send("reading-minute", { minute, total: config.duration, screenshot: "" });

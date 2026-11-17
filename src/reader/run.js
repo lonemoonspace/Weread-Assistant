@@ -88,7 +88,7 @@ async function runOnce(config, options = {}) {
   const report = options.report || (() => {});
   const retry = { attempt: 1, retriesLeft: 0, ...options.retry };
   const retriedNote = retry.attempt > 1 ? `（已重试 ${retry.attempt - 1} 次）` : "";
-  const goalNote = options.goalDeficit > 0 ? `；今天还差 ${options.goalDeficit} 分钟，需要扫码后手动运行` : "";
+  const goalNote = options.goalDeficit > 0 ? `；今天还差 ${options.goalDeficit} 分钟，在面板中扫码登录（「仅登录」即可）后会自动补读` : "";
   const timing = { ...resolveTiming(config), ...options.timing };
   const paths = getDataPaths(config, { screenshotDir: options.screenshotDir });
   const notifier = createNotifier(config, {

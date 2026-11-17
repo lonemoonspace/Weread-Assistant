@@ -1,4 +1,4 @@
-// 面板 smoke：计划器（失败重试、代发失败通知、启动恢复、错过的调度、随机延后、每日目标补跑）
+// 面板 smoke：计划器（失败重试、代发失败通知、启动恢复、错过的调度、随机延后、每日目标补跑、扫码后补读）
 
 const assert = require("assert");
 const fs = require("fs");
@@ -283,7 +283,7 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
     assert.doesNotMatch(runLog(panel, retried), /随机增加/);
   });
 
-  await scenario("每日目标：到检查时间后补跑差额；补跑不跨过 23:57，每天最多 3 次；扫码超时后当天不再补跑；接口校验", async () => {
+  await scenario("每日目标：到检查时间后补跑差额；补跑不跨过 23:57，每天最多 3 次；扫码超时后等重新登录再补跑；接口校验", async () => {
     const options = plannerOptions();
     const panel = await startAuthed({ planner: options });
     const today = dateInZone(new Date(), TIMEZONE);
@@ -292,7 +292,7 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
     };
     setClock("12:00");
     await panel.call("PATCH", "api/settings", { settings: { maxConcurrentRuns: 3 } });
-    for (const id of ["goal-l", "goal-m", "timeout-n"]) {
+    for (const id of ["goal-l", "goal-m", "timeout-n", "relogin-p"]) {
       await panel.call("POST", "api/accounts", { id });
     }
 
@@ -327,13 +327,26 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
     );
     assert.strictEqual(runs.length, 3);
 
-    // 扫码超时：通知中写明还差多少，当天不再补跑
+    // 扫码超时：通知中写明还差多少，重新登录之前不再补跑
     setClock("12:00");
     await panel.call("PUT", "api/accounts/timeout-n/goal", { goal: { minutes: 30, checkAt: "06:00" } });
     const [timedOut] = await settle(panel, "timeout-n", 1);
     assert.match(runLog(panel, timedOut), /goalDeficit=30/);
     await new Promise((resolve) => setTimeout(resolve, 300));
-    assert.strictEqual(accountRuns(panel, "timeout-n").length, 1, "扫码超时后当天不应再补跑");
-    assert.strictEqual(panel.planner.accountStatus("timeout-n").catchups.blocked, true);
+    assert.strictEqual(accountRuns(panel, "timeout-n").length, 1, "扫码超时后不应再补跑");
+    assert.deepStrictEqual(panel.planner.accountStatus("timeout-n").catchups, { count: 1, max: 3, blocked: false, waitingLogin: true });
+
+    // 扫码超时后「仅登录」成功：已过检查时间，按每日目标补读差额
+    await panel.call("PUT", "api/accounts/relogin-p/goal", { goal: { minutes: 3, checkAt: "06:00" } });
+    await settle(panel, "relogin-p", 1);
+    assert.strictEqual(panel.planner.accountStatus("relogin-p").catchups.waitingLogin, true);
+    assert.strictEqual((await panel.call("POST", "api/accounts/relogin-p/runs", { mode: "login" })).status, 202);
+    const relogin = await settle(panel, "relogin-p", 3, "仅登录成功后应补读");
+    assert.deepStrictEqual(
+      relogin.map((run) => [run.mode, run.trigger, run.status]),
+      [["read", "catchup", "failed"], ["login", "manual", "success"], ["read", "catchup", "success"]]
+    );
+    assert.strictEqual(relogin[2].plannedMinutes, 3);
+    assert.deepStrictEqual(panel.planner.accountStatus("relogin-p").catchups, { count: 2, max: 3, blocked: false, waitingLogin: false });
   });
 };

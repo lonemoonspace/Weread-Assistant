@@ -112,7 +112,7 @@ const GoalCard = {
         </p>
         <p v-if="view.warning" class="callout callout-warn" role="note">{{ view.warning }}</p>
         <p v-if="view.goal && view.goal.enabled" class="muted">
-          今天已读 {{ view.today.minutes }}/{{ view.goal.minutes }} 分钟<template v-if="view.planned">，已补跑 {{ view.planned.catchups.count }}/{{ view.planned.catchups.max }} 次<template v-if="view.planned.catchups.blocked">（今天不再补跑）</template></template>。
+          今天已读 {{ view.today.minutes }}/{{ view.goal.minutes }} 分钟<template v-if="view.planned">，已补跑 {{ view.planned.catchups.count }}/{{ view.planned.catchups.max }} 次<template v-if="view.planned.catchups.blocked">（今天不再补跑）</template><template v-else-if="view.planned.catchups.waitingLogin">（等扫码登录后补读）</template></template>。
         </p>
         <p v-if="error" class="error-text">{{ error }}</p>
         <p v-if="dirty" class="muted">每日目标有未保存的修改。</p>
