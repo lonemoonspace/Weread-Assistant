@@ -48,7 +48,9 @@ docker compose logs app | grep 面板初始密码
 | `src/official/api.js` | 微信读书官方 API 客户端：统一网关、`skill_version`、Bearer 鉴权，`errcode` 与 HTTP 错误归类（API Key 无效、网络、接口出错、格式不对），499 与 5xx 重试 2 次 | 只读；错误信息中的 API Key 替换为掩码；响应体上限 16 MB |
 | `src/official/notes.js` | 用官方 API 读取笔记本概览、一本书的划线（`/book/bookmarklist`）与想法（`/review/list/mine`），按章节整理并渲染为 Markdown | 想法按 `range` 挂到对应划线下；对不上的想法单独成条，没有章节的放在“书评与其他想法” |
 | `src/panel/notes.js` | 笔记同步：每天到 `notesSyncAt` 自动同步一次，也可手动同步；保存到账号数据目录的 `notes/` | 只重新读取最近笔记时间或数量有变化的书；同一账号同一时间只同步一次 |
-| `src/panel/http/routes/official.js` | 官方 API 相关接口（测试 API Key、笔记同步与读取） | 网关地址可由面板选项 `officialApi` 替换，测试时指向 `scripts/fixtures/mock-official.js` |
+| `src/official/report.js` | 每周阅读报告：`/readdata/detail`（`mode=weekly`）读取某一周与前一周，统计这一周新增的笔记，渲染为通知正文 | 时长字段一律按秒处理（官方 Skill 的口径） |
+| `src/panel/reports.js` | 每周一到 `weeklyReportAt` 之后推送上周的阅读报告；预览与立即发送 | 已发送的周记在 `reports.json`，重启不重复 |
+| `src/panel/http/routes/official.js` | 官方 API 相关接口（测试 API Key、笔记同步与读取、每周阅读报告） | 网关地址可由面板选项 `officialApi` 替换，测试时指向 `scripts/fixtures/mock-official.js` |
 | `src/panel/split.js` | 分段阅读的设置校验与一天各段的排法（段数、长度、开始时间随机，段间隔 30 分钟） | |
 | `src/panel/retry.js`、`src/panel/goal.js` | 重试规则（哪些运行、哪些失败、间隔）；每日目标的校验、按挑战的建议值与检查时间太晚时的提示 | |
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
@@ -103,6 +105,8 @@ docker compose logs app | grep 面板初始密码
 | `GET api/accounts/:id/goal` | 是 | 每日目标：`{ timezone, goal, suggestedMinutes, warning, today, planned }`。`goal` 为 `{ enabled, minutes, checkAt }` 或 null；`suggestedMinutes` 为按挑战折算的每天分钟数（没有挑战时为 null）；`warning` 为检查时间太晚、补不满目标时的提示；`today` 同账号列表；`planned` 为计划器中的待办与今天的补跑次数 `{ pending, catchups: { count, max, blocked, waitingLogin } }`（`blocked` 为手动停止了自动运行、当天不再补跑；`waitingLogin` 为自动运行等待扫码超时，下次运行成功后补读） |
 | `GET api/accounts/:id/notes` | 否 | 笔记同步状态与书单：`{ configured, running, syncedAt, lastError, lastErrorAt, totalBookCount, totalNoteCount, books }`，书单按最近笔记时间倒序，已经没有笔记的书（`removed`）排在最后 |
 | `POST api/accounts/:id/notes/sync` | 是 | 开始同步笔记，返回 202 与同步状态；已经在同步时不重复开始；没有配置 API Key 时 400 |
+| `GET api/accounts/:id/reports/weekly` | 否 | 预览上周的阅读报告：`{ ok: true, weekStart, weekEnd, text }`，失败时 `{ ok: false, kind, error }`；没有配置 API Key 时 400 |
+| `POST api/accounts/:id/reports/weekly/send` | 是 | 生成上周的报告并立即发送到账号的通知渠道（不看 `notifyOnWeeklyReport` 开关），返回同上；没有配置 API Key 或没有启用任何通知渠道时 400 |
 | `GET api/accounts/:id/notes/search` | 否 | `?q=`（最多 100 个字）在已同步的划线与想法中搜索，不区分大小写：`{ hits: [{ bookId, title, chapter, text, reviews }], truncated }`，最多 100 条 |
 | `GET api/accounts/:id/notes/markdown` | 否 | 下载全部书的 Markdown，合成一份（`<账号名称>的笔记.md`）；还没有同步过时 404 |
 | `GET api/accounts/:id/notes/books/:bookId/markdown` | 否 | 下载一本书的 Markdown；没有时 404 |
@@ -305,6 +309,23 @@ accounts/<id>/notes/
 - 在账号的“笔记”页面浏览、搜索与下载，见“页面”。
 - 文件只在面板数据目录中，备份配置（“备份与迁移”）不包含笔记；需要时直接备份 `accounts/<id>/notes/`。
 
+### 每周阅读报告
+
+账号配置“微信读书 API”分组中的“每周阅读报告”（`notifyOnWeeklyReport`，默认开，可以放在全局默认里）在填写了 API Key 时生效：每周一到全局设置“每周一发送阅读报告的时间”（`weeklyReportAt`，默认 09:00，面板时区）之后，经账号的通知渠道推送一次 `weeklyReport`，内容为：
+
+```
+11-10 至 11-16 阅读 5 小时 12 分钟，读了 6 天，日均 44 分钟
+比前一周多 1 小时 3 分钟（+25%）
+读得最多：《置身事内》2 小时 10 分钟；《人类简史》1 小时 5 分钟
+新增划线 12 条、想法 3 条（2 本书）
+数据来自微信读书 API，包含在手机上的阅读。
+```
+
+- 周按面板时区的周一到周日；读取官方统计时取那一周周四正午作为 `baseTime`，避开时区差异。时长、天数与日均来自官方回包（`totalReadTime`、`readDays`、`dayAverageReadTime`，单位秒），包括在手机上的阅读，与面板自己的运行统计不是同一口径。
+- 新增划线与想法按已同步笔记中的创建时间统计，没有同步过笔记时不写这一行。笔记每天 04:30 同步，早于默认的报告时间。
+- 发过的周记在 `reports.json`，重启后不重复；周一没发出去（面板停机、接口出错）时，本周之后的日子每天再试一次。账号停用时不发送。
+- 账号“配置”页可以预览上周的报告，或立即发送到本账号的通知渠道（不看开关）。
+
 ### 备份与迁移
 
 在“设置 → 备份与迁移”中导出与导入，或用 `node src/cli.js export --out <文件>` 导出（见 `docs/cli.md`）。用于迁移到另一台机器，或把配置放进定期备份。实现见 `src/panel/backup.js`。
@@ -453,6 +474,7 @@ data/
   accounts/<id>/          # 账号数据（0700）：cookies.json、login.png、login-qr.png（0600；命令行运行时的截图也在这里）
   accounts/<id>/profile/  # 内置浏览器的资料目录（0700）：缓存、本地存储与登录状态，备份时可以排除；profile.broken/ 为最近一次重置前的目录
   accounts/<id>/notes/    # 同步的笔记（0700，文件 0600），见“笔记同步”
+  reports.json            # 每周阅读报告：各账号已发送的周（0600）
   planner.json            # 计划器的待办与当天的补跑次数（0600），见“重试、补跑与恢复”
   runs/<id>/<runId>/      # 每次运行（目录 0700，启动时收紧旧目录）：meta.json、output.log、screenshot-*.png、error.png（0600）
 ```
@@ -486,6 +508,7 @@ data/
     "logRetentionDays": 30,
     "screenshotRetentionRuns": 3,
     "notesSyncAt": "04:30",
+    "weeklyReportAt": "09:00",
     "vncUrl": ""
   },
   "defaults": { "duration": 68 },

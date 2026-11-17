@@ -62,6 +62,13 @@ const SETTINGS_FIELDS = [
     default: "04:30",
   },
   {
+    key: "weeklyReportAt",
+    type: "string",
+    label: "每周一发送阅读报告的时间",
+    description: "账号配置中开启了“每周阅读报告”并填写了微信读书 API Key 的账号，每周一到这个时间（HH:MM，面板时区）之后推送上周的阅读报告。",
+    default: "09:00",
+  },
+  {
     key: "vncUrl",
     type: "string",
     label: "noVNC 地址",
@@ -107,6 +114,7 @@ const EXTRA_CHECKS = {
   timezone: checkTimezone,
   vncUrl: checkHttpUrl,
   notesSyncAt: checkTime,
+  weeklyReportAt: checkTime,
 };
 
 // 按 patch 修改设置并返回新对象；值为 null 时恢复默认值

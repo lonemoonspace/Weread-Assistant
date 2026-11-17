@@ -1,5 +1,6 @@
 // 模拟微信读书官方 API 网关（POST /api/agent/gateway），回包结构按官方 skills/*.md 的说明，供 panel smoke 与单元测试使用。
 // data：{ books: [{ bookId, title, author, sort, noteCount, reviewCount, bookmarkCount, bookmarks: [...], reviews: [...], chapters: [...] }], readdata }
+// readdata 为 /readdata/detail 的回包，或按请求体返回回包的函数
 // 只接受 Authorization: Bearer <key>；错误的 key 返回 errcode -2012。requests 记录收到的请求体
 const http = require("http");
 
@@ -81,7 +82,8 @@ function startMockOfficial({ key, data = { books: [] } }) {
           return;
         }
         case "/readdata/detail":
-          send({ errcode: 0, ...(data.readdata || {}) });
+          // readdata 可以是函数：按请求（mode、baseTime）返回不同周期的数据
+          send({ errcode: 0, ...((typeof data.readdata === "function" ? data.readdata(body) : data.readdata) || {}) });
           return;
         default:
           send({ errcode: -1, errmsg: `未知接口 ${body.api_name}` });

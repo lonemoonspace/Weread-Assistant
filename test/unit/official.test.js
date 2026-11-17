@@ -137,3 +137,77 @@ describe("笔记读取与整理", () => {
     assert.match(markdown, /## 书评与其他想法\n\n整本书评\n\n\*D5 · ★★★★\*/);
   });
 });
+
+const { countNewNotes, fetchWeeklyReport, formatDuration, renderWeeklyReport } = require("../../src/official/report");
+
+describe("每周阅读报告", () => {
+  it("时长按秒换算为小时与分钟", () => {
+    assert.deepEqual([formatDuration(0), formatDuration(59), formatDuration(600), formatDuration(3600), formatDuration(3600 * 5 + 720)], [
+      "0 分钟",
+      "0 分钟",
+      "10 分钟",
+      "1 小时",
+      "5 小时 12 分钟",
+    ]);
+  });
+
+  it("读取这一周与前一周（baseTime 取周四正午），渲染时长、天数、对比与读得最多的书", async () => {
+    const weeks = {
+      current: {
+        baseTime: 1762704000,
+        totalReadTime: 3600 * 5 + 720,
+        readDays: 6,
+        dayAverageReadTime: 2674,
+        readLongest: [
+          { book: { title: "置身事内" }, readTime: 7800 },
+          { albumInfo: { title: "有声书" }, readTime: 3900 },
+          { book: { title: "没有时长" }, readTime: 0 },
+          { book: { title: "第三本" }, readTime: 600 },
+          { book: { title: "第四本" }, readTime: 300 },
+        ],
+      },
+      previous: { totalReadTime: 3600 * 4 + 540 },
+    };
+    const api = fakeApi({ "/readdata/detail": (params) => (params.baseTime === Date.UTC(2025, 10, 13, 12) / 1000 ? weeks.current : weeks.previous) });
+    const report = await fetchWeeklyReport(api, "2025-11-10");
+    assert.deepEqual(api.calls.map((call) => call.params), [
+      { mode: "weekly", baseTime: Date.UTC(2025, 10, 13, 12) / 1000 },
+      { mode: "weekly", baseTime: Date.UTC(2025, 10, 6, 12) / 1000 },
+    ]);
+    assert.equal(report.startSeconds, 1762704000);
+    assert.deepEqual(report.current.longest.map((item) => item.title), ["置身事内", "有声书", "第三本"]);
+    const text = renderWeeklyReport(report, { weekLabel: "11-10 至 11-16", newNotes: { highlights: 12, reviews: 3, books: 2 } });
+    assert.equal(
+      text,
+      [
+        "11-10 至 11-16 阅读 5 小时 12 分钟，读了 6 天，日均 44 分钟",
+        "比前一周多 1 小时 3 分钟（+25%）",
+        "读得最多：《置身事内》2 小时 10 分钟；《有声书》1 小时 5 分钟；《第三本》10 分钟",
+        "新增划线 12 条、想法 3 条（2 本书）",
+        "数据来自微信读书 API，包含在手机上的阅读。",
+      ].join("\n")
+    );
+  });
+
+  it("没有阅读、前一周没有阅读、持平与减少；没有同步过笔记时不写笔记一行；回包没有 baseTime 时按北京时间周一零点", async () => {
+    const make = (current, previous) => ({ current: { totalReadTime: 0, readDays: 0, dayAverageReadTime: 0, longest: [], ...current }, previous: { totalReadTime: 0, ...previous } });
+    assert.equal(renderWeeklyReport(make({}, {}), { weekLabel: "W" }), "W 在微信读书中没有阅读记录。\n数据来自微信读书 API，包含在手机上的阅读。");
+    assert.match(renderWeeklyReport(make({ totalReadTime: 600, readDays: 1, dayAverageReadTime: 85 }, {}), { weekLabel: "W" }), /\n前一周没有阅读记录\n/);
+    assert.match(renderWeeklyReport(make({ totalReadTime: 600 }, { totalReadTime: 630 }), { weekLabel: "W" }), /\n与前一周基本持平\n/);
+    assert.match(renderWeeklyReport(make({ totalReadTime: 600 }, { totalReadTime: 1200 }), { weekLabel: "W" }), /\n比前一周少 10 分钟（-50%）\n/);
+    assert.match(renderWeeklyReport(make({ totalReadTime: 600 }, {}), { weekLabel: "W", newNotes: { highlights: 0, reviews: 0, books: 0 } }), /\n没有新增划线与想法\n/);
+
+    const api = fakeApi({ "/readdata/detail": () => ({}) });
+    assert.equal((await fetchWeeklyReport(api, "2025-11-10")).startSeconds, Date.UTC(2025, 10, 9, 16) / 1000);
+  });
+
+  it("新增笔记按 createTime 落在这一周内统计", () => {
+    const start = 1762704000;
+    const books = [
+      { highlights: [{ createTime: start - 1 }, { createTime: start }, { createTime: start + 7 * 86400 - 1 }], reviews: [{ createTime: start + 7 * 86400 }] },
+      { highlights: [], reviews: [{ createTime: start + 100 }] },
+      { highlights: [{ createTime: 1 }], reviews: [] },
+    ];
+    assert.deepEqual(countNewNotes(books, start), { highlights: 2, reviews: 1, books: 2 });
+  });
+});

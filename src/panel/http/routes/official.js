@@ -7,7 +7,7 @@ const { PanelError, badRequest } = require("../../errors");
 const { safeFileName } = require("../../notes");
 
 // 微信读书官方 API：用账号配置中的 API Key 访问本人的数据。options.officialApi 供测试替换网关地址
-function officialRoutes({ dataDir, store, options, notes }) {
+function officialRoutes({ dataDir, store, options, notes, reports }) {
   const router = express.Router();
 
   // 账号的官方 API 客户端；没有配置 API Key 时 400
@@ -70,6 +70,25 @@ function officialRoutes({ dataDir, store, options, notes }) {
     }
     res.json(result);
   });
+
+  // 每周阅读报告：预览上周的报告，或立即发送到账号的通知渠道
+  async function weeklyReport(req, res, action) {
+    findAccount(store.get(), req.params.id);
+    apiFor(req.params.id);
+    try {
+      const report = await action(req.params.id);
+      res.json({ ok: true, weekStart: report.weekStart, weekEnd: report.weekEnd, text: report.text });
+    } catch (e) {
+      if (!(e instanceof OfficialApiError)) {
+        throw e;
+      }
+      console.warn(`生成每周阅读报告失败：账号 ${req.params.id}：${e.message}`);
+      res.json({ ok: false, kind: e.kind, error: e.message });
+    }
+  }
+
+  router.get("/accounts/:id/reports/weekly", (req, res) => weeklyReport(req, res, (id) => reports.build(id)));
+  router.post("/accounts/:id/reports/weekly/send", (req, res) => weeklyReport(req, res, (id) => reports.sendNow(id)));
 
   // 搜索划线与想法
   router.get("/accounts/:id/notes/search", (req, res) => {

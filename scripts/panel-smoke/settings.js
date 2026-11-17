@@ -188,7 +188,7 @@ module.exports = async function settingsScenarios({ scenario, startAuthed }) {
     assert.strictEqual(schema.fields.find((field) => field.key === "barkKey").secret, true);
     assert.deepStrictEqual(
       schema.settingsFields.map((field) => field.key),
-      ["timezone", "maxConcurrentRuns", "retryCount", "catchupGraceMinutes", "logRetentionDays", "screenshotRetentionRuns", "notesSyncAt", "vncUrl"]
+      ["timezone", "maxConcurrentRuns", "retryCount", "catchupGraceMinutes", "logRetentionDays", "screenshotRetentionRuns", "notesSyncAt", "weeklyReportAt", "vncUrl"]
     );
   });
 

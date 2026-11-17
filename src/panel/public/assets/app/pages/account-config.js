@@ -24,6 +24,24 @@ export const ConfigTab = {
     const testingOfficial = ref(false);
     const hasApiKey = computed(() => Boolean(props.account.overrides && props.account.overrides.wereadApiKey));
 
+    // 每周阅读报告的预览：{ ok, weekStart, weekEnd, text } 或 { ok: false, error }
+    const report = ref(null);
+    const reportBusy = ref("");
+
+    async function weeklyReport(send) {
+      reportBusy.value = send ? "send" : "preview";
+      try {
+        report.value = await api(`accounts/${props.account.id}/reports/weekly${send ? "/send" : ""}`, send ? { method: "POST", body: {} } : undefined);
+        if (send && report.value.ok) {
+          notify("已发送到通知渠道");
+        }
+      } catch (error) {
+        report.value = { ok: false, error: error.message };
+      } finally {
+        reportBusy.value = "";
+      }
+    }
+
     async function testOfficial() {
       testingOfficial.value = true;
       officialTest.value = null;
@@ -141,6 +159,9 @@ export const ConfigTab = {
       profile,
       resettingProfile,
       officialTest,
+      report,
+      reportBusy,
+      weeklyReport,
       testingOfficial,
       hasApiKey,
       testOfficial,
@@ -194,6 +215,14 @@ export const ConfigTab = {
         可以使用：有笔记的书 {{ officialTest.totalBookCount }} 本，笔记 {{ officialTest.totalNoteCount }} 条。<template v-if="officialTest.upgradeInfo">（{{ officialTest.upgradeInfo }}）</template>
       </p>
       <p v-else-if="officialTest" class="error-text">{{ officialTest.error }}</p>
+      <h4>每周阅读报告</h4>
+      <p class="muted">每周一推送上周的阅读统计（开关在上面的“微信读书 API”分组，时间在“设置”中调整）。可以先预览，或立即发送到本账号的通知渠道。</p>
+      <div class="notes-actions">
+        <button type="button" class="secondary" :aria-busy="reportBusy === 'preview'" :disabled="Boolean(reportBusy) || !hasApiKey" @click="weeklyReport(false)">预览上周报告</button>
+        <button type="button" class="secondary" :aria-busy="reportBusy === 'send'" :disabled="Boolean(reportBusy) || !hasApiKey" @click="weeklyReport(true)">立即发送</button>
+      </div>
+      <pre v-if="report && report.ok" class="weekly-report">{{ report.text }}</pre>
+      <p v-else-if="report" class="error-text">{{ report.error }}</p>
     </section>
 
     <section>

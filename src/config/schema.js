@@ -410,6 +410,15 @@ const CONFIG_SCHEMA = [
     patternHint: "形如 wrk-xxxxxxxx",
   },
   {
+    key: "notifyOnWeeklyReport",
+    type: "boolean",
+    group: "official",
+    label: "每周阅读报告",
+    description:
+      "填写了 API Key 时，每周一（时间在面板设置中调整，默认 09:00）经通知渠道推送上周的阅读统计：阅读时长与天数、与前一周相比、读得最多的书，以及上周新增的划线与想法（来自已同步的笔记）。数据来自微信读书，包含在手机上的阅读。只在面板中生效。",
+    default: true,
+  },
+  {
     key: "accountName",
     type: "string",
     group: "advanced",

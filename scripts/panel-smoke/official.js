@@ -188,4 +188,82 @@ module.exports = async function officialScenarios({ scenario, startAuthed }) {
       await gateway.close();
     }
   });
+
+  await scenario("每周阅读报告：周一到设定时间后推送上周的统计与新增笔记，每周一次；关闭开关的账号不发；可以预览与立即发送", async () => {
+    const WEEK_START = 1762704000; // 2025-11-10 周一 00:00（北京时间）
+    const books = JSON.parse(JSON.stringify(BOOKS));
+    books[0].bookmarks[0].createTime = WEEK_START + 3600;
+    const readdata = ({ baseTime }) =>
+      baseTime >= WEEK_START
+        ? { baseTime: WEEK_START, totalReadTime: 7200, readDays: 3, dayAverageReadTime: 1028, readLongest: [{ book: { title: "测试之书" }, readTime: 5400 }] }
+        : { baseTime: WEEK_START - 7 * 86400, totalReadTime: 3600 };
+    const gateway = await startMockOfficial({ key: KEY, data: { books, readdata } });
+    const sent = [];
+    const clock = { offset: 0, now: () => Date.now() + clock.offset, setInterval: () => null, clearInterval: () => {} };
+    try {
+      const panel = await startAuthed({
+        officialApi: { gatewayUrl: gateway.url, retryDelayMs: 1 },
+        notes: { delayMs: 0 },
+        reports: { clock, send: async (config, body, url) => sent.push({ account: config.accountName, toggle: config.notifyOnWeeklyReport, body, url }) },
+      });
+      assert.strictEqual((await panel.call("PATCH", "api/settings", { settings: { weeklyReportAt: "9:00" } })).status, 400);
+      await panel.call("PATCH", "api/settings", { settings: { weeklyReportAt: "09:00" } });
+      for (const id of ["on-a", "off-b", "none-c"]) {
+        await panel.call("POST", "api/accounts", { id, name: id });
+      }
+      await panel.call("PATCH", "api/accounts/on-a", { overrides: { wereadApiKey: KEY } });
+      await panel.call("PATCH", "api/accounts/off-b", { overrides: { wereadApiKey: KEY, notifyOnWeeklyReport: false } });
+      await panel.notes.sync("on-a");
+
+      const { zonedTime } = require("../../src/panel/planner");
+      const tz = "Asia/Shanghai";
+      const readdataCalls = () => gateway.requests.filter((request) => request.api_name === "/readdata/detail").length;
+      clock.offset = zonedTime("2025-11-17", "08:59", tz) - Date.now();
+      panel.reports.tick();
+      assert.strictEqual(readdataCalls(), 0, "周一还没到时间不发送");
+      clock.offset = zonedTime("2025-11-17", "09:01", tz) - Date.now();
+      panel.reports.tick();
+      await until(() => sent.length === 1, { message: "应发送一份报告" });
+      await panel.reports.idle();
+      assert.deepStrictEqual([sent[0].account, readdataCalls()], ["on-a", 2], "只发给开启了开关、填写了 API Key 的账号");
+      assert.strictEqual(
+        sent[0].body,
+        [
+          "11-10 至 11-16 阅读 2 小时，读了 3 天，日均 17 分钟",
+          "比前一周多 1 小时（+100%）",
+          "读得最多：《测试之书》1 小时 30 分钟",
+          "新增划线 1 条、想法 0 条（1 本书）",
+          "数据来自微信读书 API，包含在手机上的阅读。",
+        ].join("\n")
+      );
+      const saved = JSON.parse(fs.readFileSync(path.join(panel.options.dataDir, "reports.json"), "utf8"));
+      assert.deepStrictEqual(saved.sent, { "on-a": "2025-11-10" });
+      assert.strictEqual(fs.statSync(path.join(panel.options.dataDir, "reports.json")).mode & 0o777, 0o600);
+
+      // 同一周不再发送（第二天也不发）
+      clock.offset = zonedTime("2025-11-18", "10:00", tz) - Date.now();
+      panel.reports.tick();
+      await panel.reports.idle();
+      assert.strictEqual(sent.length, 1);
+
+      // 预览与立即发送：不看开关
+      clock.offset = zonedTime("2025-11-17", "12:00", tz) - Date.now();
+      const preview = (await panel.call("GET", "api/accounts/off-b/reports/weekly")).json;
+      assert.deepStrictEqual([preview.ok, preview.weekStart, preview.weekEnd], [true, "2025-11-10", "2025-11-16"]);
+      assert.match(preview.text, /^11-10 至 11-16 阅读 2 小时/);
+      assert.doesNotMatch(preview.text, /新增划线/, "没有同步过笔记时不写笔记一行");
+      assert.strictEqual((await panel.call("POST", "api/accounts/off-b/reports/weekly/send", {})).status, 400, "没有通知渠道时 400");
+      await panel.call("PATCH", "api/accounts/off-b", { overrides: { ntfyEnabled: true, ntfyTopic: "wa-smoke-topic" } });
+      const now = await panel.call("POST", "api/accounts/off-b/reports/weekly/send", {});
+      assert.strictEqual(now.json.ok, true);
+      assert.deepStrictEqual([sent.length, sent[1].account, sent[1].toggle], [2, "off-b", true]);
+      assert.strictEqual((await panel.call("GET", "api/accounts/none-c/reports/weekly")).status, 400, "没有 API Key 时 400");
+
+      await panel.call("PATCH", "api/accounts/off-b", { overrides: { wereadApiKey: "wrk-wrong-key-123456" } });
+      const failed = (await panel.call("GET", "api/accounts/off-b/reports/weekly")).json;
+      assert.deepStrictEqual([failed.ok, failed.kind], [false, "key"]);
+    } finally {
+      await gateway.close();
+    }
+  });
 };

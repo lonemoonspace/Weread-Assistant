@@ -176,6 +176,17 @@ function createNotesService({ dataDir, store, officialOptions = {}, clock = syst
     return { hits, truncated: false };
   }
 
+  // 已同步的全部书的划线与想法（每周报告统计新增笔记用）；还没有同步过时为 null
+  function syncedBooks(accountId) {
+    const index = readIndex(accountId);
+    if (!index || !index.syncedAt) {
+      return null;
+    }
+    return index.books
+      .map((entry) => readJson(bookFile(accountId, entry.bookId)))
+      .filter((saved) => saved && Array.isArray(saved.highlights) && Array.isArray(saved.reviews));
+  }
+
   // 全部书的 Markdown 合成一份（按书单顺序，已没有笔记的书在最后）；还没有同步过时为 null
   function allMarkdown(accountId) {
     const index = readIndex(accountId);
@@ -327,6 +338,7 @@ function createNotesService({ dataDir, store, officialOptions = {}, clock = syst
     markdownOf,
     allMarkdown,
     search,
+    syncedBooks,
     sync,
     tick,
     isRunning: (accountId) => running.has(accountId),

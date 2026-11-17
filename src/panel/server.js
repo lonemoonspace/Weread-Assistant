@@ -21,6 +21,7 @@ const { passkeyRelyingParty } = require("./options");
 const { createPasskeys } = require("./passkeys");
 const { createPlanner } = require("./planner");
 const { createNotesService } = require("./notes");
+const { createReportService } = require("./reports");
 const { createRunner } = require("./runner");
 const { cleanupRunTempDirs } = require("./runner/process");
 const { markInterruptedRuns, restrictRunDirs } = require("./runs");
@@ -44,12 +45,13 @@ function createPanelApp(
     passkeys,
     planner = null,
     notes = null,
+    reports = null,
     checkLocalBrowser = createLocalBrowserChecker(process.env, { timeoutMs: options.browserVersionTimeoutMs }),
   }
 ) {
   const cookies = createSessionCookies(options);
   // 各组接口共用的依赖
-  const ctx = { options, dataDir: path.resolve(options.dataDir), auth, store, runner, passkeys, planner, notes, checkLocalBrowser, cookies };
+  const ctx = { options, dataDir: path.resolve(options.dataDir), auth, store, runner, passkeys, planner, notes, reports, checkLocalBrowser, cookies };
 
   const app = express();
   app.disable("x-powered-by");
@@ -133,6 +135,7 @@ async function startPanel(options) {
   let scheduler;
   let planner;
   let notes;
+  let reports;
   let cleanupTimer;
   let auth;
   try {
@@ -210,7 +213,9 @@ async function startPanel(options) {
     });
     // options.notes：测试时替换时钟、去掉请求间隔
     notes = createNotesService({ dataDir: options.dataDir, store, officialOptions: options.officialApi, ...options.notes });
-    const app = createPanelApp(options, { auth, store, runner, passkeys, planner, notes, checkLocalBrowser });
+    // options.reports：测试时替换时钟与发送
+    reports = createReportService({ dataDir: options.dataDir, store, notes, officialOptions: options.officialApi, publicUrl: options.publicUrl, ...options.reports });
+    const app = createPanelApp(options, { auth, store, runner, passkeys, planner, notes, reports, checkLocalBrowser });
     scheduler = createScheduler({ store, runner, onFire: (accountId, rule) => planner.fireSchedule(accountId, rule) });
     server = http.createServer(app);
     // 面板通常在 cloudflared、nginx 等反向代理之后：空闲连接的保持时间要长于代理的（常见为 60–90 秒），
@@ -232,6 +237,7 @@ async function startPanel(options) {
     checkLocalBrowser().catch(() => {});
     planner.start();
     notes.start();
+    reports.start();
 
     // 停止：不再接受新连接；结束进行中的运行（期间实时推送仍可送达）；断开剩余连接后释放锁
     let closing = null;
@@ -244,6 +250,7 @@ async function startPanel(options) {
       await runner.close();
       planner.close();
       await notes.close();
+      await reports.close();
       server.closeAllConnections();
       await serverClosed;
       auth.close();
@@ -256,6 +263,7 @@ async function startPanel(options) {
       scheduler,
       planner,
       notes,
+      reports,
       port: server.address().port,
       generatedPassword,
       close: () => {
@@ -273,6 +281,9 @@ async function startPanel(options) {
     }
     if (notes) {
       notes.close();
+    }
+    if (reports) {
+      reports.close();
     }
     if (auth) {
       auth.close();
