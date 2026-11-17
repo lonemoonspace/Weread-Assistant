@@ -173,6 +173,15 @@ function runDockerSmoke() {
     const helpOutput = runCommand('docker', ['run', '--rm', imageTag, 'node', 'src/cli.js', 'help']);
     assertHelpOutput(helpOutput, 'docker run <image> node src/cli.js help');
     console.log('Smoke passed: Docker image entrypoint is runnable.');
+    // 运行时只需要 node：npm、corepack 等包管理器在构建时已删除（#55）
+    const leftovers = runCommand('docker', [
+      'run', '--rm', imageTag, 'sh', '-c',
+      'for t in npm npx corepack yarn yarnpkg; do command -v "$t"; done; ls -A /usr/local/lib/node_modules 2>/dev/null; true',
+    ], { quiet: true });
+    if (leftovers) {
+      throw new Error(`Package managers should not be in the runtime image: ${leftovers.split('\n').join(', ')}`);
+    }
+    console.log('Smoke passed: no package managers in the runtime image.');
     runPanelSmoke(imageTag);
   } finally {
     if (!prebuilt) {

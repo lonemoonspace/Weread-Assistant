@@ -16,8 +16,13 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 # 生产依赖都不需要安装脚本：不运行，避免以 root 执行依赖中的代码。
 # selenium-webdriver 自带的 Selenium Manager（各平台的二进制）用不到：内置浏览器使用系统的 chromedriver
+# 装完依赖后删掉基础镜像自带的 npm、corepack（以及可能存在的 yarn）：运行时只需要 node，
+# 它们内部打包的依赖（如 undici、brace-expansion）是每周漏洞扫描告警的来源（#55）
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force \
-  && rm -rf node_modules/selenium-webdriver/bin
+  && rm -rf node_modules/selenium-webdriver/bin \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+    /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-* /root/.npm
 COPY src ./src
 COPY docker-entrypoint.sh /usr/local/bin/weread-entrypoint.sh
 RUN chmod 755 /usr/local/bin/weread-entrypoint.sh
