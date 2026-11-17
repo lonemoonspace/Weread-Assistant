@@ -48,7 +48,7 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/retry.js`、`src/panel/goal.js` | 重试规则（哪些运行、哪些失败、间隔）；每日目标的校验、按挑战的建议值与检查时间太晚时的提示 | |
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
 | `src/panel/history.js` | 运行历史的读取、按保留策略清理 | 运行记录（`meta.json`）永久保留 |
-| `src/panel/stats.js` | 按天统计（内存中的按天聚合缓存）、连续打卡、打卡日历、挑战进度与统计页数据 | 按面板时区统计；口径为本工具的运行记录，非微信读书官方数据 |
+| `src/panel/stats.js` | 按天统计（内存中的按天聚合缓存）、连续打卡、打卡日历、挑战进度与统计页数据 | 按面板时区统计；口径为本工具的运行记录，非微信读书官方数据。挑战设了校准时，校准日（含）之前用 App 中的数字，之后用运行记录；已漏打卡天数在校准范围内按“已过完的天数 − 校准的打卡天数”算 |
 | `src/panel/challenge.js` | 阅读挑战（月卡、年卡）的规则与设置校验 | |
 | `src/shared/local-browser.js` | 查找内置浏览器（Chromium 与 chromedriver），读取版本 | 返回值与 Selenium 状态格式相同；找不到或无法运行时为 `unreachable` 并附带原因 |
 | `src/shared/selenium.js` | 查询 Selenium 的 `/status`：是否就绪、已用/总会话数；面板总览与阅读子进程的运行日志共用 | 先 `/status`，不是 Selenium 状态时再试 `/wd/hub/status`；3 秒超时（整个请求的时限，含读取响应体，响应体不超过 1 MB）；展示的地址去掉其中的用户名与密码 |
@@ -92,10 +92,10 @@ docker compose logs app | grep 面板初始密码
 | `GET api/accounts` | 是 | 账号列表，含是否已有 cookies、调度规则（带接下来的触发时间）、下一次定时运行时间 `nextRunAt`、挑战设置 `challenge`、今天的阅读分钟数 `today`（`{ date, minutes, checkedIn }`）与最近一次运行 `lastRun` |
 | `POST api/accounts` | 是 | `{ id, name? }`；成功 201，ID 已存在 409，ID 或名称非法 400；同时创建账号数据目录 |
 | `GET api/accounts/:id` | 是 | `{ account, challengeProgress, effective, profile }`：账号、本轮挑战进度（未设置挑战时为 null）、实际生效的运行配置与浏览器资料目录 `{ exists, broken, bytes }`（`broken` 为是否有重置时留下的 `profile.broken`，`bytes` 含它；大小统计要遍历目录，结果按资料目录、`Default/` 与 `profile.broken` 的修改时间缓存，目录有变化或超过 5 分钟后重新统计） |
-| `PATCH api/accounts/:id` | 是 | `{ name?, enabled?, overrides?, challenge? }`；ID 不可修改；`challenge` 为 `{ type: "month" \| "year", startDate: "YYYY-MM-DD" }` 或 null |
+| `PATCH api/accounts/:id` | 是 | `{ name?, enabled?, overrides?, challenge? }`；ID 不可修改；`challenge` 为 `{ type: "month" \| "year", startDate: "YYYY-MM-DD", calibration? }` 或 null。`calibration` 为可选的校准 `{ asOf: "YYYY-MM-DD", minutes, checkedDays }`：截至 `asOf`（含，须在本轮挑战之内）微信读书 App 中显示的累计分钟数与打卡天数（不超过开始日期到 `asOf` 的天数），null 或不填表示不校准 |
 | `GET api/accounts/:id/schedules` | 是 | `{ timezone, enabled, nextRunAt, nextRunJitterMinutes, schedules }`：每条规则带 `description` 与接下来 5 次触发时间 `nextRuns`；`nextRunJitterMinutes` 为下次运行那条规则的随机延后分钟数 |
 | `PUT api/accounts/:id/schedules` | 是 | `{ schedules: [...] }`：整体替换账号的调度规则，保存后立即生效；任一条非法时返回 400，`message` 指出第几条规则与原因，整个请求不生效 |
-| `GET api/accounts/:id/goal` | 是 | 每日目标：`{ timezone, goal, suggestedMinutes, warning, today, planned }`。`goal` 为 `{ enabled, minutes, checkAt }` 或 null；`suggestedMinutes` 为按挑战折算的每天分钟数（没有挑战时为 null）；`warning` 为检查时间太晚、补不满目标时的提示；`today` 同账号列表；`planned` 为计划器中的待办与今天的补跑次数 `{ pending, catchups: { count, max, blocked } }` |
+| `GET api/accounts/:id/goal` | 是 | 每日目标：`{ timezone, goal, suggestedMinutes, warning, today, planned }`。`goal` 为 `{ enabled, minutes, checkAt }` 或 null；`suggestedMinutes` 为按挑战折算的每天分钟数：挑战进行中或未开始时为剩余天数平均每天还需读的分钟数（含校准，向上取整到 5 分钟，至少 5 分钟），已结束时按规则平均（月卡 60、年卡 50），没有挑战时为 null；`warning` 为检查时间太晚、补不满目标时的提示；`today` 同账号列表；`planned` 为计划器中的待办与今天的补跑次数 `{ pending, catchups: { count, max, blocked } }` |
 | `PUT api/accounts/:id/goal` | 是 | `{ goal: { enabled?, minutes, checkAt } \| null }`：保存每日目标，`minutes` 为 1–1440，`checkAt` 为 `HH:MM`（面板时区），null 表示不设置；返回同上 |
 | `DELETE api/accounts/:id/profile` | 是 | 重置浏览器资料：删除账号的 `profile/` 与 `profile.broken/`，返回 `{ profile }`；下次运行从 cookies.json 恢复登录；账号正在运行或排队时 409 `account_busy` |
 | `POST api/backup/export` | 是，需二次验证 | `{ includeSecrets?, includeCookies?, passphrase? }`：返回备份文件（JSON，带 `Content-Disposition` 文件名），见下文“备份与迁移”；包含密钥或登录状态而没有至少 8 位的备份密码时 400 `backup_passphrase_required` |
@@ -210,7 +210,7 @@ docker compose logs app | grep 面板初始密码
   "days": [{ "date": "2026-10-01", "minutes": 70, "checkedIn": true, "future": false }],
   "monthMinutes": 1036,
   "monthCheckedDays": 15,
-  "challenge": { "type": "month", "label": "月卡", "startDate": "2026-10-01", "endDate": "2026-10-30", "status": "active", "dayNumber": 16, "totalDays": 30, "checkedDays": 15, "requiredDays": 29, "totalMinutes": 1036, "requiredMinutes": 1800, "missedDays": 0, "allowedMissedDays": 1, "remainingDays": 15, "missesLeft": 1, "minutesPerDayNeeded": 51, "achieved": false },
+  "challenge": { "type": "month", "label": "月卡", "startDate": "2026-10-01", "endDate": "2026-10-30", "status": "active", "dayNumber": 16, "totalDays": 30, "checkedDays": 15, "requiredDays": 29, "totalMinutes": 1036, "requiredMinutes": 1800, "missedDays": 0, "allowedMissedDays": 1, "remainingDays": 15, "missesLeft": 1, "minutesPerDayNeeded": 51, "achieved": false, "calibration": null },
   "note": "按本工具运行记录统计，非微信读书官方数据"
 }
 ```

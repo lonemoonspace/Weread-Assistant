@@ -18,7 +18,8 @@ export const CalendarTab = {
     const data = ref(null);
     const month = ref("");
     const loading = ref(false);
-    const form = reactive({ type: "month", startDate: "" });
+    // 校准：截至 asOf（含）App 中显示的累计时长（小时 + 分钟）与打卡天数
+    const form = reactive({ type: "month", startDate: "", calibrated: false, asOf: "", hours: 0, minutes: 0, checkedDays: 0 });
     const saving = ref(false);
     // 连续翻月时只采用最近一次请求的结果，显示的月份与按钮一致
     let latest = 0;
@@ -34,10 +35,21 @@ export const CalendarTab = {
         }
         data.value = result;
         month.value = data.value.month;
-        if (props.account.challenge) {
-          Object.assign(form, props.account.challenge);
+        const challenge = props.account.challenge;
+        if (challenge) {
+          const calibration = challenge.calibration || null;
+          Object.assign(form, {
+            type: challenge.type,
+            startDate: challenge.startDate,
+            calibrated: Boolean(calibration),
+            asOf: calibration ? calibration.asOf : data.value.today.date,
+            hours: calibration ? Math.floor(calibration.minutes / 60) : 0,
+            minutes: calibration ? calibration.minutes % 60 : 0,
+            checkedDays: calibration ? calibration.checkedDays : 0,
+          });
         } else if (!form.startDate) {
           form.startDate = data.value.today.date;
+          form.asOf = data.value.today.date;
         }
       } catch (error) {
         if (request === latest) {
@@ -99,7 +111,18 @@ export const CalendarTab = {
         month.value = shiftMonth(month.value, 1);
         load();
       },
-      save: () => saveChallenge({ type: form.type, startDate: form.startDate }),
+      save: () =>
+        saveChallenge({
+          type: form.type,
+          startDate: form.startDate,
+          calibration: form.calibrated
+            ? {
+                asOf: form.asOf,
+                minutes: (Number(form.hours) || 0) * 60 + (Number(form.minutes) || 0),
+                checkedDays: Number(form.checkedDays) || 0,
+              }
+            : null,
+        }),
       clear: () => saveChallenge(null),
       formatHours,
       formatMinutes,
@@ -126,6 +149,9 @@ export const CalendarTab = {
         </p>
         <p v-if="data.challenge.status !== 'ended' && data.challenge.minutesPerDayNeeded > 0" class="muted">
           剩余 {{ data.challenge.remainingDays }} 天平均每天还需读 {{ data.challenge.minutesPerDayNeeded }} 分钟，还能漏 {{ data.challenge.missesLeft }} 天
+        </p>
+        <p v-if="data.challenge.calibration" class="muted">
+          {{ data.challenge.calibration.asOf }}（含）之前按 App 校准值（{{ formatHours(data.challenge.calibration.minutes) }}、打卡 {{ data.challenge.calibration.checkedDays }} 天），之后按本工具的运行记录。
         </p>
       </article>
 
@@ -179,6 +205,29 @@ export const CalendarTab = {
             开始日期
             <input type="date" v-model="form.startDate" required>
           </label>
+          <label class="switch-line">
+            <input type="checkbox" role="switch" v-model="form.calibrated">
+            按 App 中的进度校准（在手机上也读过时，让进度与 App 一致）
+          </label>
+          <template v-if="form.calibrated">
+            <label>
+              截至日期（含这一天）
+              <input type="date" v-model="form.asOf" :min="form.startDate" required>
+            </label>
+            <label>
+              App 显示已读（小时）
+              <input type="number" v-model.number="form.hours" min="0" step="1" inputmode="numeric" required>
+            </label>
+            <label>
+              （分钟）
+              <input type="number" v-model.number="form.minutes" min="0" max="59" step="1" inputmode="numeric" required>
+            </label>
+            <label>
+              App 显示已打卡（天）
+              <input type="number" v-model.number="form.checkedDays" min="0" step="1" inputmode="numeric" required>
+            </label>
+            <p class="muted">进度 = 校准值 + 本工具在截至日期之后的记录。截至今天时，今天之后再读的分钟要到明天才计入，填昨天结束时的数字最准确。</p>
+          </template>
           <div class="form-actions">
             <button type="submit" :aria-busy="saving" :disabled="saving">保存</button>
             <button v-if="data.challenge" type="button" class="secondary" :disabled="saving" @click="clear">清除</button>

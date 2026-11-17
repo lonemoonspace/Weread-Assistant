@@ -60,9 +60,19 @@ function suggestedGoalMinutes(challenge) {
   return Math.ceil(spec.requiredMinutes / spec.days / 5) * 5;
 }
 
-// 接口中返回的目标：附带按挑战的建议值，以及 checkAt 太晚、来不及补满目标时的提示
-function publicGoal(goal, challenge) {
-  const suggested = suggestedGoalMinutes(challenge);
+// 按挑战进度（含校准）建议的每日分钟数：剩余天数平均每天还需读的分钟，向上取整到 5 分钟，至少 5 分钟（打卡）。
+// 没有进度或挑战已结束时按规则平均
+function suggestedFromProgress(challenge, progress) {
+  if (!progress || progress.status === "ended" || progress.minutesPerDayNeeded === null) {
+    return suggestedGoalMinutes(challenge);
+  }
+  return Math.max(5, Math.ceil(progress.minutesPerDayNeeded / 5) * 5);
+}
+
+// 接口中返回的目标：附带按挑战的建议值，以及 checkAt 太晚、来不及补满目标时的提示。
+// progress 为挑战进度（stats.challengeProgress），有时按它给建议值
+function publicGoal(goal, challenge, progress = null) {
+  const suggested = suggestedFromProgress(challenge, progress);
   if (!goal) {
     return { goal: null, suggestedMinutes: suggested, warning: "" };
   }

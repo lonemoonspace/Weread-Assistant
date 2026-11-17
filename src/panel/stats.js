@@ -1,5 +1,5 @@
 const path = require("path");
-const { CHALLENGES, isChallengeType, isValidDate } = require("./challenge");
+const { CHALLENGES, isChallengeType, isValidDate, storedCalibration } = require("./challenge");
 const { addDays, dateInZone, dateParts, daysBetween, weekdayIndex } = require("./dates");
 const { badRequest } = require("./errors");
 const { accountRunIds, minuteMarksOf, readMeta, runIdTime, runsRoot } = require("./history");
@@ -274,7 +274,8 @@ function rangeTotals(minutesOf, checkedOf, from, to) {
 // ---------- 挑战与日历 ----------
 
 // 本轮挑战进度：第几天、已打卡天数、累计分钟、已漏打卡天数（不含今天），
-// 以及要达成目标剩余每天平均还需读多少分钟、还能漏几天
+// 以及要达成目标剩余每天平均还需读多少分钟、还能漏几天。
+// 设了校准时，校准日（含）之前按校准值（App 中显示的数字），之后按面板的运行记录
 function challengeProgress(panelDataDir, account, { timezone, now = new Date() }) {
   const { challenge } = account;
   if (!challenge || !isChallengeType(challenge.type) || !isValidDate(challenge.startDate)) {
@@ -287,15 +288,24 @@ function challengeProgress(panelDataDir, account, { timezone, now = new Date() }
   const dayNumber = daysBetween(start, today) + 1;
   const status = dayNumber < 1 ? "not-started" : dayNumber > spec.days ? "ended" : "active";
 
+  const calibration = storedCalibration(challenge);
+  // 面板记录从这一天算起：校准日的次日，没有校准时为开始日期
+  const from = calibration ? addDays(calibration.asOf, 1) : start;
   const upTo = today < end ? today : end;
-  const totals = upTo >= start ? dailyMinutes(panelDataDir, account.id, { timezone, from: start, to: upTo }) : {};
+  const totals = upTo >= from ? dailyMinutes(panelDataDir, account.id, { timezone, from, to: upTo }) : {};
   const checkedDates = Object.keys(totals).filter((date) => totals[date] >= CHECK_IN_MINUTES);
-  const totalMinutes = Object.values(totals).reduce((sum, minutes) => sum + minutes, 0);
+  const panelMinutes = Object.values(totals).reduce((sum, minutes) => sum + minutes, 0);
+  const totalMinutes = (calibration ? calibration.minutes : 0) + panelMinutes;
+  const checkedDays = (calibration ? calibration.checkedDays : 0) + checkedDates.length;
   // 已经过完的天：进行中时到昨天为止，结束后为整个周期
   const lastPastDay = status === "ended" ? end : addDays(today, -1);
-  const pastDays = lastPastDay >= start ? daysBetween(start, lastPastDay) + 1 : 0;
+  const daysIn = (first, last) => (last >= first ? daysBetween(first, last) + 1 : 0);
+  // 校准范围内已过完的天数减去校准的打卡天数（校准日当天还没过完时，它的打卡也算进去，最多少算一天）；之后按面板记录
+  const calibratedMissed = calibration
+    ? Math.max(0, daysIn(start, calibration.asOf < lastPastDay ? calibration.asOf : lastPastDay) - calibration.checkedDays)
+    : 0;
   const checkedPastDays = checkedDates.filter((date) => date <= lastPastDay).length;
-  const missedDays = pastDays - checkedPastDays;
+  const missedDays = calibratedMissed + daysIn(from, lastPastDay) - checkedPastDays;
   const allowedMissedDays = spec.days - spec.requiredDays;
   // 还剩的天数（进行中时含今天）
   const remainingDays = status === "ended" ? 0 : status === "not-started" ? spec.days : spec.days - dayNumber + 1;
@@ -309,7 +319,7 @@ function challengeProgress(panelDataDir, account, { timezone, now = new Date() }
     status,
     dayNumber: Math.min(Math.max(dayNumber, 0), spec.days),
     totalDays: spec.days,
-    checkedDays: checkedDates.length,
+    checkedDays,
     requiredDays: spec.requiredDays,
     totalMinutes,
     requiredMinutes: spec.requiredMinutes,
@@ -318,7 +328,8 @@ function challengeProgress(panelDataDir, account, { timezone, now = new Date() }
     remainingDays,
     missesLeft: Math.max(0, allowedMissedDays - missedDays),
     minutesPerDayNeeded: remainingDays > 0 ? Math.ceil(minutesLeft / remainingDays) : null,
-    achieved: checkedDates.length >= spec.requiredDays && totalMinutes >= spec.requiredMinutes,
+    achieved: checkedDays >= spec.requiredDays && totalMinutes >= spec.requiredMinutes,
+    calibration,
   };
 }
 

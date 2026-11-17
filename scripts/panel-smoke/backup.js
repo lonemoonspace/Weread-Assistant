@@ -29,7 +29,7 @@ module.exports = async function backupScenarios({ scenario, startAuthed }) {
     await panel.call("POST", "api/accounts", { id: "me", name: "小明" });
     await panel.call("PATCH", "api/accounts/me", {
       overrides: { ntfyTopic: "topic_secret_123", speed: "fast", telegramChatId: "-100123" },
-      challenge: { type: "month", startDate: "2026-11-01" },
+      challenge: { type: "month", startDate: "2026-11-01", calibration: { asOf: "2026-11-10", minutes: 600, checkedDays: 10 } },
     });
     await panel.call("PUT", "api/accounts/me/schedules", { schedules: [{ type: "daily", times: ["06:00", "21:30"], jitterMinutes: 5 }] });
     await panel.call("PUT", "api/accounts/me/goal", { goal: { minutes: 40, checkAt: "22:00" } });
@@ -111,7 +111,7 @@ module.exports = async function backupScenarios({ scenario, startAuthed }) {
     const [me] = data.accounts;
     assert.strictEqual(me.name, "小明");
     assert.deepStrictEqual(me.overrides, { speed: "fast", telegramChatId: "-100123", ntfyTopic: "topic_secret_123" });
-    assert.deepStrictEqual(me.challenge, { type: "month", startDate: "2026-11-01" });
+    assert.deepStrictEqual(me.challenge, { type: "month", startDate: "2026-11-01", calibration: { asOf: "2026-11-10", minutes: 600, checkedDays: 10 } });
     assert.deepStrictEqual(me.goal, { enabled: true, minutes: 40, checkAt: "22:00" });
     assert.deepStrictEqual(me.schedules.map((rule) => rule.times), [["06:00", "21:30"]]);
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(cookiesFile(panel, "me"), "utf8")), COOKIES);

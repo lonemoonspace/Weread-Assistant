@@ -62,6 +62,15 @@ describe("每日目标", () => {
     assert.equal(suggestedGoalMinutes({ type: "year" }), 50);
     assert.equal(suggestedGoalMinutes(null), null);
   });
+
+  it("有挑战进度（含校准）时按剩余天数建议，至少 5 分钟；已结束时按规则平均", () => {
+    const challenge = { type: "month" };
+    const progress = (status, minutesPerDayNeeded) => ({ status, minutesPerDayNeeded });
+    assert.equal(publicGoal(null, challenge, progress("active", 71)).suggestedMinutes, 75);
+    assert.equal(publicGoal(null, challenge, progress("active", 0)).suggestedMinutes, 5, "时长已够时只需打卡");
+    assert.equal(publicGoal(null, challenge, progress("ended", null)).suggestedMinutes, 60);
+    assert.equal(publicGoal(null, challenge).suggestedMinutes, 60);
+  });
 });
 
 describe("调度随机延后", () => {
