@@ -188,7 +188,7 @@ const SplitCard = {
     return { view, form, error, busy, dirty, save, segments };
   },
   template: `
-    <article class="goal-card">
+    <article class="goal-card split-card">
       <h3>分段阅读（可选）</h3>
       <p class="muted">
         不想手写调度时用：只设每天读多少分钟、在什么时段、每段多长，每天自动在时段内随机排几段，开始时间和长度都随机，两段之间至少隔

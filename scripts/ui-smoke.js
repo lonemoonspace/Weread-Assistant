@@ -408,14 +408,15 @@ async function desktop(env, h, driver, results) {
   step("调度：添加规则、预览接下来的运行时间、保存后立即生效");
 
   await h.go("#/accounts/ok-1/schedules");
-  await h.waitText(".goal-card", "每日目标");
-  const goalCard = await driver.findElement(By.css(".goal-card"));
+  // 分段阅读卡片沿用 .goal-card 的样式，每日目标卡片要排除它
+  await h.waitText(".goal-card:not(.split-card)", "每日目标");
+  const goalCard = await driver.findElement(By.css(".goal-card:not(.split-card)"));
   await h.type(await goalCard.findElement(By.css("input[type=number]")), "45");
   await h.click(await goalCard.findElement(By.css("input[role=switch]")));
   await h.clickButton("保存目标", goalCard);
   await h.waitText(".notice", "每日目标已保存");
   assert.deepStrictEqual((await call("GET", "api/accounts/ok-1/goal")).goal, { enabled: true, minutes: 45, checkAt: "22:00" });
-  await h.waitText(".goal-card", "今天已读");
+  await h.waitText(".goal-card:not(.split-card)", "今天已读");
   await h.shot("10b-goal");
   await h.go("#/");
   await h.waitText(".account-card", "/45 分钟，22:00 检查");
