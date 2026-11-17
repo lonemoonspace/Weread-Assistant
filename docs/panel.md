@@ -103,6 +103,9 @@ docker compose logs app | grep 面板初始密码
 | `GET api/accounts/:id/goal` | 是 | 每日目标：`{ timezone, goal, suggestedMinutes, warning, today, planned }`。`goal` 为 `{ enabled, minutes, checkAt }` 或 null；`suggestedMinutes` 为按挑战折算的每天分钟数（没有挑战时为 null）；`warning` 为检查时间太晚、补不满目标时的提示；`today` 同账号列表；`planned` 为计划器中的待办与今天的补跑次数 `{ pending, catchups: { count, max, blocked, waitingLogin } }`（`blocked` 为手动停止了自动运行、当天不再补跑；`waitingLogin` 为自动运行等待扫码超时，下次运行成功后补读） |
 | `GET api/accounts/:id/notes` | 否 | 笔记同步状态与书单：`{ configured, running, syncedAt, lastError, lastErrorAt, totalBookCount, totalNoteCount, books }`，书单按最近笔记时间倒序，已经没有笔记的书（`removed`）排在最后 |
 | `POST api/accounts/:id/notes/sync` | 是 | 开始同步笔记，返回 202 与同步状态；已经在同步时不重复开始；没有配置 API Key 时 400 |
+| `GET api/accounts/:id/notes/search` | 否 | `?q=`（最多 100 个字）在已同步的划线与想法中搜索，不区分大小写：`{ hits: [{ bookId, title, chapter, text, reviews }], truncated }`，最多 100 条 |
+| `GET api/accounts/:id/notes/markdown` | 否 | 下载全部书的 Markdown，合成一份（`<账号名称>的笔记.md`）；还没有同步过时 404 |
+| `GET api/accounts/:id/notes/books/:bookId/markdown` | 否 | 下载一本书的 Markdown；没有时 404 |
 | `GET api/accounts/:id/notes/books/:bookId` | 否 | 一本书按章节整理后的划线与想法：`{ book, syncedAt, chapters, general }`；没有同步过时 404 |
 | `POST api/accounts/:id/official/test` | 是 | 用账号配置中的微信读书 API Key 读取笔记本概览的第一页：成功时 `{ ok: true, totalBookCount, totalNoteCount, upgradeInfo }`，失败时 `{ ok: false, kind, error }`（`kind` 为 `key`、`network`、`api` 或 `format`）；没有配置 API Key 时 400 |
 | `GET api/accounts/:id/split` | 是 | 分段阅读：`{ timezone, split, gapMinutes, today, plan }`。`split` 为 `{ enabled, minutes, from, to, minSegment, maxSegment }` 或 null；`gapMinutes` 为相邻两段的最小间隔；`today` 同账号列表；`plan` 为今天排好的各段 `{ date, segments: [{ at, minutes, status }] }`（`status` 为 `planned`、`started`、`skipped` 或 `cancelled`），没有时为 null |
@@ -141,6 +144,7 @@ docker compose logs app | grep 面板初始密码
 | 账号 · 实时 | `#/accounts/<id>/live` | 状态、“正在读《书名》第 23/68 分钟”与进度条、二维码与“复制登录链接”、最新截图、实时日志；运行进行中且设置了 noVNC 地址时显示查看浏览器画面的链接 |
 | 账号 · 历史 | `#/accounts/<id>/history`、`#/accounts/<id>/history/<YYYY-MM-DD>` | 运行列表（带日期时只显示当天及以前的）（开始时间、时长、触发方式、结果、阅读分钟），展开查看日志与截图，下载日志，加载更多 |
 | 账号 · 打卡日历 | `#/accounts/<id>/calendar` | 按月显示每天的阅读分钟与打卡状态（已打卡、不足 5 分钟、今天未打卡高亮），本月合计；挑战进度与设置 |
+| 账号 · 笔记 | `#/accounts/<id>/notes`、`#/accounts/<id>/notes/<bookId>` | 同步状态（上次同步时间、最近一次失败的原因）、“立即同步”与“下载全部 Markdown”；有笔记的书（划线数、想法数、最近笔记日期、阅读进度，已没有笔记的书标出并排在最后）；搜索框同时按书名、作者筛选书单，并在划线与想法中搜索（标出关键词）；打开一本书按章节显示划线与想法，下载这本书的 Markdown。没有配置 API Key 时说明到配置中填写 |
 | 账号 · 调度 | `#/accounts/<id>/schedules` | 编辑多条规则（每天固定时间 / 每 N 小时 / cron），单独启停，预览接下来的运行时间，保存后立即生效；可选的分段阅读（每天多少分钟、时段、每段长短，显示今天排好的各段与状态）；每日目标。总览的“待办”包括今天下一段分段阅读 |
 | 账号 · 配置 | `#/accounts/<id>/config` | 名称与启用状态；运行配置的每一项可“继承全局”或“单独设置”；发送测试通知；删除账号（可选同时删除数据） |
 | 新建账号 | `#/accounts/new` | 账号 ID 与名称，创建后进入账号页面并提示扫码 |
@@ -298,6 +302,7 @@ accounts/<id>/notes/
 - 增量：笔记本概览中最近笔记时间（`sort`）、划线数与想法数都没变的书不重新读取；逐本读取，间隔 300 毫秒。
 - 在微信读书中删光了笔记的书不删除文件，在 `index.json` 中标记 `removed`，作为备份保留。
 - 失败时（API Key 失效、网络或接口出错）保留上一次的结果，在 `index.json` 中记下原因与时间；每日自动同步失败时按账号的通知配置发送失败通知，当天不再自动重试。
+- 在账号的“笔记”页面浏览、搜索与下载，见“页面”。
 - 文件只在面板数据目录中，备份配置（“备份与迁移”）不包含笔记；需要时直接备份 `accounts/<id>/notes/`。
 
 ### 备份与迁移

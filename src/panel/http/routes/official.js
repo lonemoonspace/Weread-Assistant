@@ -1,8 +1,10 @@
+const fs = require("fs");
 const express = require("express");
 const { OfficialApiError, createOfficialApi } = require("../../../official/api");
 const { findAccount } = require("../../accounts");
 const { resolveAccountConfig } = require("../../config");
 const { PanelError, badRequest } = require("../../errors");
+const { safeFileName } = require("../../notes");
 
 // 微信读书官方 API：用账号配置中的 API Key 访问本人的数据。options.officialApi 供测试替换网关地址
 function officialRoutes({ dataDir, store, options, notes }) {
@@ -67,6 +69,39 @@ function officialRoutes({ dataDir, store, options, notes }) {
       throw new PanelError(404, "not_found", "没有这本书的笔记");
     }
     res.json(result);
+  });
+
+  // 搜索划线与想法
+  router.get("/accounts/:id/notes/search", (req, res) => {
+    findAccount(store.get(), req.params.id);
+    const query = typeof req.query.q === "string" ? req.query.q : "";
+    if (query.length > 100) {
+      throw badRequest("搜索内容不能超过 100 个字");
+    }
+    res.json(notes.search(req.params.id, query));
+  });
+
+  // 下载 Markdown：一本书，或全部书合成一份
+  router.get("/accounts/:id/notes/books/:bookId/markdown", (req, res) => {
+    findAccount(store.get(), req.params.id);
+    const file = notes.markdownOf(req.params.id, req.params.bookId);
+    if (!file) {
+      throw new PanelError(404, "not_found", "没有这本书的 Markdown");
+    }
+    res.attachment(file.name);
+    res.type("text/markdown; charset=utf-8");
+    res.send(fs.readFileSync(file.file, "utf8"));
+  });
+
+  router.get("/accounts/:id/notes/markdown", (req, res) => {
+    const account = findAccount(store.get(), req.params.id);
+    const markdown = notes.allMarkdown(req.params.id);
+    if (!markdown) {
+      throw new PanelError(404, "not_found", "还没有同步过笔记");
+    }
+    res.attachment(`${safeFileName(account.name)}的笔记.md`);
+    res.type("text/markdown; charset=utf-8");
+    res.send(markdown);
   });
 
   return router;

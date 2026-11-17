@@ -48,7 +48,7 @@ const App = {
       <template v-else>
         <overview-page v-if="route.name === 'overview'" />
         <new-account-page v-else-if="route.name === 'new-account'" />
-        <account-page v-else-if="route.name === 'account'" :id="route.params.id" :tab="route.params.tab" :date="route.params.date" />
+        <account-page v-else-if="route.name === 'account'" :id="route.params.id" :tab="route.params.tab" :date="route.params.date" :book="route.params.book" />
         <settings-page v-else-if="route.name === 'settings'" />
         <stats-page v-else-if="route.name === 'stats'" :account="route.params.account" />
         <article v-else><p>页面不存在。</p><a href="#/">返回总览</a></article>

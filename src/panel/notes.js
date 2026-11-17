@@ -140,6 +140,59 @@ function createNotesService({ dataDir, store, officialOptions = {}, clock = syst
     return fs.existsSync(file) ? { file, name: entry.file } : null;
   }
 
+  // 在已同步的划线与想法中搜索（不区分大小写），返回最多 limit 条：{ bookId, title, chapter, text, reviews }
+  function search(accountId, query, { limit = 100 } = {}) {
+    const needle = String(query || "").trim().toLowerCase();
+    const hits = [];
+    if (!needle) {
+      return { hits, truncated: false };
+    }
+    const has = (text) => String(text || "").toLowerCase().includes(needle);
+    for (const entry of (readIndex(accountId) || { books: [] }).books) {
+      const saved = readJson(bookFile(accountId, entry.bookId));
+      if (!saved || !Array.isArray(saved.highlights) || !Array.isArray(saved.reviews)) {
+        continue;
+      }
+      const { chapters, general } = organizeNotes(saved);
+      const items = [
+        ...chapters.flatMap((chapter) => chapter.entries.map((item) => ({ chapter: chapter.title, text: item.text, reviews: item.reviews }))),
+        ...general.map((review) => ({ chapter: "", text: review.abstract, reviews: [review] })),
+      ];
+      for (const item of items) {
+        if (has(item.text) || item.reviews.some((review) => has(review.content))) {
+          if (hits.length >= limit) {
+            return { hits, truncated: true };
+          }
+          hits.push({
+            bookId: entry.bookId,
+            title: entry.title,
+            chapter: item.chapter,
+            text: item.text,
+            reviews: item.reviews.map((review) => review.content).filter(Boolean),
+          });
+        }
+      }
+    }
+    return { hits, truncated: false };
+  }
+
+  // 全部书的 Markdown 合成一份（按书单顺序，已没有笔记的书在最后）；还没有同步过时为 null
+  function allMarkdown(accountId) {
+    const index = readIndex(accountId);
+    if (!index) {
+      return null;
+    }
+    const parts = [];
+    for (const entry of index.books) {
+      try {
+        parts.push(fs.readFileSync(path.join(markdownDir(accountId), entry.file), "utf8").trimEnd());
+      } catch (_) {
+        // 文件缺失（例如被手工删除）：跳过，下次同步时补上
+      }
+    }
+    return parts.length > 0 ? `${parts.join("\n\n---\n\n")}\n` : null;
+  }
+
   async function runSync(accountId, trigger) {
     const config = configFor(accountId);
     if (!config || !config.wereadApiKey) {
@@ -272,6 +325,8 @@ function createNotesService({ dataDir, store, officialOptions = {}, clock = syst
     status,
     book,
     markdownOf,
+    allMarkdown,
+    search,
     sync,
     tick,
     isRunning: (accountId) => running.has(accountId),

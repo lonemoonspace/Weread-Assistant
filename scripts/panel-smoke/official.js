@@ -67,7 +67,7 @@ module.exports = async function officialScenarios({ scenario, startAuthed }) {
     }
   });
 
-  await scenario("笔记同步：写入 index.json、每本书的 JSON 与 Markdown；只重新读取有变化的书；删光笔记的书保留并标记；失败时记下原因", async () => {
+  await scenario("笔记同步：写入 index.json、每本书的 JSON 与 Markdown；只重新读取有变化的书；删光笔记的书保留并标记；失败时记下原因；搜索与下载 Markdown", async () => {
     const books = JSON.parse(JSON.stringify(BOOKS));
     books.push({ ...JSON.parse(JSON.stringify(BOOKS[0])), bookId: "100002", title: "另一本/书", sort: 1762000000, noteCount: 1, reviewCount: 0, bookmarkCount: 0, reviews: [] });
     books[1].bookmarks = [books[1].bookmarks[0]];
@@ -76,6 +76,7 @@ module.exports = async function officialScenarios({ scenario, startAuthed }) {
       const panel = await startAuthed({ officialApi: { gatewayUrl: gateway.url, retryDelayMs: 1 }, notes: { delayMs: 0 } });
       await panel.call("POST", "api/accounts", { id: "me" });
       assert.strictEqual((await panel.call("POST", "api/accounts/me/notes/sync", {})).status, 400, "没有 API Key 时 400");
+      assert.strictEqual((await panel.call("GET", "api/accounts/me/notes/markdown")).status, 404, "没有同步过时没有可下载的内容");
       await panel.call("PATCH", "api/accounts/me", { overrides: { wereadApiKey: KEY } });
 
       const started = await panel.call("POST", "api/accounts/me/notes/sync", {});
@@ -99,6 +100,24 @@ module.exports = async function officialScenarios({ scenario, startAuthed }) {
       const detail = (await panel.call("GET", "api/accounts/me/notes/books/100001")).json;
       assert.deepStrictEqual(detail.chapters.map((chapter) => chapter.entries.length), [1, 1]);
       assert.strictEqual((await panel.call("GET", "api/accounts/me/notes/books/nope")).status, 404);
+
+      // 搜索划线与想法（不区分大小写）；下载一本书与全部书的 Markdown
+      const search = (await panel.call("GET", `api/accounts/me/notes/search?q=${encodeURIComponent("想法")}`)).json;
+      assert.deepStrictEqual(search.hits.map((hit) => [hit.bookId, hit.chapter, hit.text, hit.reviews]), [["100001", "第一章", "第一段划线", ["我的想法"]]]);
+      assert.strictEqual(search.truncated, false);
+      assert.deepStrictEqual((await panel.call("GET", "api/accounts/me/notes/search?q=%E7%AC%AC%E4%BA%8C")).json.hits.map((hit) => hit.chapter), ["第二章"]);
+      assert.deepStrictEqual((await panel.call("GET", "api/accounts/me/notes/search?q=")).json, { hits: [], truncated: false });
+      assert.strictEqual((await panel.call("GET", `api/accounts/me/notes/search?q=${"a".repeat(101)}`)).status, 400);
+      const one = await panel.call("GET", "api/accounts/me/notes/books/100001/markdown");
+      assert.strictEqual(one.status, 200);
+      assert.match(one.headers.get("content-type"), /^text\/markdown; charset=utf-8/);
+      assert.match(one.headers.get("content-disposition"), /^attachment; .*filename\*=UTF-8''%E6%B5%8B%E8%AF%95%E4%B9%8B%E4%B9%A6\.md$/);
+      assert.strictEqual(one.text, markdown);
+      assert.strictEqual((await panel.call("GET", "api/accounts/me/notes/books/nope/markdown")).status, 404);
+      const all = await panel.call("GET", "api/accounts/me/notes/markdown");
+      assert.strictEqual(all.status, 200);
+      assert.match(all.text, /^# 测试之书\n[\s\S]*\n---\n\n# 另一本\/书\n/);
+      assert.match(all.headers.get("content-disposition"), /attachment/);
 
       // 再同步一次：没有变化的书不再读取；第二本删光了笔记：保留并标记 removed
       const before = gateway.requests.length;
