@@ -62,6 +62,9 @@ docker compose logs app | grep 面板初始密码
 | `src/reader/worker.js` | 阅读子进程入口：经 IPC 接收配置、上报事件，收到 SIGTERM 时关闭浏览器后退出 | 只由面板启动，见 `docs/reader.md` |
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入、先写临时文件并刷到磁盘再重命名、权限 0600；每次修改前把上一版保存为 `panel.json.bak`；启动时把已有文件的权限收紧为 0600，改不了时拒绝启动；文件无法解析或结构不对（例如 `accounts` 不是数组、`settings` 不是对象）时视为损坏，另存为 `panel.json.corrupt-<时间>`（只保留最近 3 份）并从上一版恢复，`panel.json` 不见了而上一版还在时同样从上一版恢复，上一版也不可用时拒绝启动（重置面板需同时删除 `panel.json` 与 `panel.json.bak`）；补齐缺少的部分（旧文件自动升级） |
 | `src/panel/auth.js` | 密码哈希、会话、登录限速、修改密码、二次验证 | 密码以 scrypt 哈希保存；会话只保存令牌哈希，写入 `sessions.json`（`src/panel/session-file.js`），面板重启后恢复，见“安全”中的“会话持久化”；passkey 登录与二次验证的失败同样计入登录限速 |
+| `src/panel/tokens.js` | API 令牌：新建（权限、账号、有效期）、列出、删除、校验 | `panel.json` 的 `auth.tokens` 中只存 SHA-256 哈希；最近使用时间最多每小时写回一次 |
+| `src/panel/agent.js` | 令牌可以调用的操作（`api/v1` 与 MCP 共用）：检查权限与账号，返回挑选过的字段 | 不返回配置、密钥、cookies、登录链接与截图 |
+| `src/panel/http/token-auth.js`、`src/panel/http/routes/v1.js` | `Authorization: Bearer` 认证与 `api/v1` 接口 | 不使用 cookie，不需要 `X-WA-Request`；同一 IP 15 分钟内认证失败 20 次后暂停 |
 | `src/panel/passkeys.js` | passkey（WebAuthn）的添加、登录与二次验证校验、改名、删除（@simplewebauthn/server） | 域名与地址只取自 `PANEL_PUBLIC_URL`，不信任请求的 Host；challenge 一次有效（登录用的自带过期时间与 HMAC，不在服务端保存）；`panel.json` 中只保存公钥；密码登录关闭时不能删除最后一个可用的 passkey |
 | `src/panel/server.js` | 组装 Express 应用（中间件与各组接口的挂载顺序）、启动与停止面板 | 挂载顺序决定哪些接口需要登录：页面 → 不需要登录的认证接口 → 要求登录 → 其余接口 → 404 |
 | `src/panel/http/security.js` | 安全响应头与 CSP、`csrfGuard`、会话 cookie 的读写与 HTTPS 判断 | 统一安全响应头；修改类请求校验自定义请求头 |
@@ -91,6 +94,9 @@ docker compose logs app | grep 面板初始密码
 | `DELETE api/auth/passkeys/:id` | 是，需二次验证 | 删除 passkey，用它登录的其他会话立即失效（当前会话保留）；不存在 404；密码登录在设置中关闭时，不能删除当前域名下最后一个可用的 passkey，返回 409 `last_passkey` |
 | `PATCH api/auth/password-login` | 是，需二次验证 | `{ enabled }`：在设置中打开或关闭密码登录，返回 `{ passwordLogin }`。关闭要求当前域名下有可用的 passkey（否则 409 `no_usable_passkey`），并且 5 分钟内用 passkey 验证过（否则 403 `reauth_required`，带 `method: "passkey"`）；关闭后其他用密码登录的会话立即失效（当前会话保留）。打开只要求 5 分钟内验证过 |
 | `POST api/auth/logout` | 是 | 注销当前会话 |
+| `GET api/tokens` | 是 | API 令牌列表（不含哈希）与可选的权限 `{ scopes, tokens }` |
+| `POST api/tokens` | 是，需二次验证 | `{ name, scopes, accounts?, expiresInDays? }` 新建令牌，201 返回 `{ token, info }`，`token` 只在这里返回一次；`accounts` 为 null 或不填表示全部账号 |
+| `DELETE api/tokens/:id` | 是 | 删除令牌，立即失效 |
 | `POST api/auth/logout-others` | 是，需二次验证 | 退出其他设备：结束当前会话以外的所有会话（含实时推送连接），返回 `{ ended }`；5 分钟内没有登录或二次验证过时 403 `reauth_required` |
 | `POST api/auth/password` | 是 | `{ current, next }`；成功后所有会话失效，并为当前请求下发新会话；密码来自环境变量或密码登录关闭时返回 409（`password_from_env` / `password_login_disabled`）。多个请求依次处理，后到的请求按新密码校验 |
 | `GET api/schema` | 是 | 表单清单：配置分组、运行配置字段（类型、可选值、范围、是否密钥、是否只能在账号中设置 `accountOnly`）、面板设置字段。`accountOnly` 的项（微信读书 API Key）在全局默认中不显示，`PATCH api/settings` 的 `defaults` 中提交时 400 |
@@ -152,7 +158,7 @@ docker compose logs app | grep 面板初始密码
 | 账号 · 调度 | `#/accounts/<id>/schedules` | 编辑多条规则（每天固定时间 / 每 N 小时 / cron），单独启停，预览接下来的运行时间，保存后立即生效；可选的分段阅读（每天多少分钟、时段、每段长短，显示今天排好的各段与状态）；每日目标。总览的“待办”包括今天下一段分段阅读 |
 | 账号 · 配置 | `#/accounts/<id>/config` | 名称与启用状态；运行配置的每一项可“继承全局”或“单独设置”；发送测试通知；删除账号（可选同时删除数据） |
 | 新建账号 | `#/accounts/new` | 账号 ID 与名称，创建后进入账号页面并提示扫码 |
-| 设置 | `#/settings` | 面板设置（时区、并发数、保留策略、noVNC 地址，填写 noVNC 地址时显示安全提示）；全局默认配置与测试通知；登录方式：passkey 列表（添加、改名、删除，在当前域名下不可用的标出）、“允许用面板密码登录”开关（关闭前确认后果并用 passkey 验证；设置中关闭而实际仍允许时说明原因）与修改面板密码（密码登录关闭时隐藏） |
+| 设置 | `#/settings` | 面板设置（时区、并发数、保留策略、noVNC 地址，填写 noVNC 地址时显示安全提示）；全局默认配置与测试通知；登录方式：passkey 列表（添加、改名、删除，在当前域名下不可用的标出）、“允许用面板密码登录”开关（关闭前确认后果并用 passkey 验证；设置中关闭而实际仍允许时说明原因）与修改面板密码（密码登录关闭时隐藏）；API 令牌（新建时选择权限、账号与有效期，令牌只显示一次；列表显示最近使用与过期时间，可以删除）；备份与迁移 |
 
 | 规则 | 说明 |
 | --- | --- |
@@ -588,6 +594,42 @@ data/
 | passkey 已同步到 iCloud 钥匙串、Google 密码管理器等 | 在新设备上登录同一个账号即可，不受影响。这类 passkey 的安全性取决于这些账号，建议为它们开启两步验证 |
 | 换了域名 | 旧的 passkey 全部不可用，密码登录自动恢复；用密码登录后在新域名下重新添加，再关闭密码登录 |
 
+### API 令牌与 api/v1
+
+给脚本、快捷指令、Home Assistant 与 AI 助手用的长期凭据，在“设置 → API 令牌”中新建：
+
+| 权限（scope） | 可以做的事 |
+| --- | --- |
+| `read` | 查看账号状态（今天的分钟数与是否打卡、连续打卡天数、正在进行与最近一次运行、下次运行时间、每日目标与挑战进度、计划器的待办）与运行记录 |
+| `run` | 开始阅读或仅登录、停止运行 |
+| `notes` | 读取笔记的同步状态、书单、一本书的笔记与 Markdown、搜索，立即同步笔记，生成上周的阅读报告 |
+
+令牌还可以限定账号（不能访问的账号与不存在的一样返回 404）与有效期。令牌不能修改设置、配置与调度，看不到配置、密钥、cookies、登录链接与截图。
+
+请求时带上 `Authorization: Bearer wat_…`，返回 JSON（Markdown 接口为 `text/markdown`），错误为 `{ error, message }`：401 令牌无效或过期，403 没有权限，404 账号不存在或不能访问，429 认证失败过多。
+
+| 方法与路径（相对子路径） | 权限 | 说明 |
+| --- | --- | --- |
+| `GET api/v1/me` | 任意 | 令牌的名称、权限与能访问的账号 |
+| `GET api/v1/accounts` | `read` | 能访问的账号的状态 |
+| `GET api/v1/accounts/:id` | `read` | 一个账号的状态，另含 `goal`、`challenge`（挑战进度）与 `planned`（待办、今天的分段） |
+| `GET api/v1/accounts/:id/runs` | `read` | 最近的运行，`?limit=`（1–50，默认 10） |
+| `POST api/v1/accounts/:id/runs` | `run` | `{ mode?: "read" \| "login" }` 立即运行，202；已在运行或排队时 409 |
+| `POST api/v1/accounts/:id/stop` | `run` | 停止当前的运行，202 |
+| `GET api/v1/accounts/:id/notes` | `notes` | 笔记同步状态与书单 |
+| `POST api/v1/accounts/:id/notes/sync` | `notes` | 立即同步笔记，202；没有配置 API Key 时 400 |
+| `GET api/v1/accounts/:id/notes/search` | `notes` | `?q=` 搜索划线与想法 |
+| `GET api/v1/accounts/:id/notes/books/:bookId` | `notes` | 一本书按章节整理的划线与想法 |
+| `GET api/v1/accounts/:id/notes/markdown`、`…/notes/books/:bookId/markdown` | `notes` | 全部书或一本书的 Markdown |
+| `GET api/v1/accounts/:id/reports/weekly` | `notes` | 上周的阅读报告 `{ weekStart, weekEnd, text }` |
+
+例如在 iOS 快捷指令或 cron 中立即读一次：
+
+```sh
+curl -X POST -H "Authorization: Bearer wat_…" -H "Content-Type: application/json" \
+  -d '{"mode":"read"}' https://example.com/weread/api/v1/accounts/me/runs
+```
+
 ### 安全
 
 | 项目 | 做法 |
@@ -601,6 +643,7 @@ data/
 | 关闭密码登录 | 可选，见上文“关闭密码登录”；关闭后密码泄露也不能用来登录 |
 | 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；上次失败 15 分钟后（且不在锁定中）从头计数。正在校验的请求预先占用失败名额：同一 IP 同时校验的请求数不超过距离锁定剩余的失败次数（锁定刚结束时为 1），并发突发不能多试，超出的请求 429（`retryAfter` 为 1 秒）；所有 IP 在 15 分钟内累计失败 100 次后暂停 15 分钟，暂停期间只有本次启动以来、最近 30 天内登录或二次验证成功过的 IP 可以用密码登录（仍按 IP 限速），未认证的请求不能借此挡住这些 IP；passkey 登录（含申请登录参数）与已登录会话的二次验证不受暂停影响，只按 IP 限速：passkey 猜不中，暂停只为分散的密码猜测而设。这份名单与暂停都只在内存中，面板重启后或管理员换了 IP 时密码登录仍可能被暂停挡住，用 passkey 登录或重启面板即可。密码与 passkey 的登录、二次验证以及修改密码时的当前密码共用同一套按 IP 的失败计数与锁定；只有密码登录与修改密码时的当前密码计入全局上限 |
 | 密码哈希 | `panel.json` 中的哈希格式或参数无效（例如被手工改坏）时拒绝启动并提示恢复办法，校验时一律不通过 |
+| API 令牌 | 见“API 令牌与 api/v1”：32 字节随机数，`panel.json` 中只存 SHA-256 哈希，只能访问 `api/v1` 与 MCP，按权限与账号限定；面板的管理接口（设置、配置、密钥、备份、令牌、passkey）只接受面板会话。修改面板密码与退出其他设备不影响令牌，不用的令牌请在设置中删除 |
 | 跨站请求伪造 | 修改类请求必须带 `X-WA-Request: 1` 请求头且为 JSON，配合 `SameSite=Strict` |
 | 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`、`Permissions-Policy`（关闭摄像头、麦克风、定位等用不到的能力）；经 HTTPS 访问时（判断方式与会话 cookie 的 `Secure` 相同）`Strict-Transport-Security: max-age=15552000`（不含子域名）；接口响应与面板主页面、登录页 `Cache-Control: no-store` |
 | 文件 | 新建的数据目录 0700（已有的不改）；`panel.json` 权限 0600，已有文件在启动时收紧；账号数据目录 0700，`cookies.json` 与登录二维码图片 0600（等同于登录状态）；初始密码不写入日志文件 |

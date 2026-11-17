@@ -176,6 +176,16 @@ function createNotesService({ dataDir, store, officialOptions = {}, clock = syst
     return { hits, truncated: false };
   }
 
+  // 一本书的 Markdown 文本；没有时为 null
+  function markdownText(accountId, bookId) {
+    const file = markdownOf(accountId, bookId);
+    try {
+      return file ? fs.readFileSync(file.file, "utf8") : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   // 已同步的全部书的划线与想法（每周报告统计新增笔记用）；还没有同步过时为 null
   function syncedBooks(accountId) {
     const index = readIndex(accountId);
@@ -337,6 +347,7 @@ function createNotesService({ dataDir, store, officialOptions = {}, clock = syst
     book,
     markdownOf,
     allMarkdown,
+    markdownText,
     search,
     syncedBooks,
     sync,

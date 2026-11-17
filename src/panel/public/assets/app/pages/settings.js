@@ -1,5 +1,6 @@
 import { computed, onMounted, reactive, ref, watch } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
+import { ApiTokens } from "../components/api-tokens.js";
 import { BackupPanel } from "../components/backup-panel.js";
 import { ConfigForm } from "../components/config-form.js";
 import { ReauthCancelled, ReauthDialog, withReauth } from "../components/reauth-dialog.js";
@@ -10,9 +11,9 @@ import { createPasskey, originMatches, passkeyErrorMessage, passkeySupported } f
 
 const COMMON_TIMEZONES = ["Asia/Shanghai", "Asia/Hong_Kong", "Asia/Taipei", "Asia/Tokyo", "Asia/Singapore", "Europe/London", "America/New_York", "UTC"];
 
-// 设置：面板设置、全局默认运行配置、测试通知、登录方式（passkey 与面板密码）
+// 设置：面板设置、全局默认运行配置、测试通知、登录方式（passkey 与面板密码）、API 令牌、备份
 export const SettingsPage = {
-  components: { BackupPanel, ConfigForm, ReauthDialog, TestNotification },
+  components: { ApiTokens, BackupPanel, ConfigForm, ReauthDialog, TestNotification },
   setup() {
     const panel = reactive({});
     const savingPanel = ref(false);
@@ -381,6 +382,11 @@ export const SettingsPage = {
         :disabled="loggingOutOthers || !state.session.otherSessions"
         @click="logoutOthers"
       >退出其他设备</button>
+    </section>
+
+    <section>
+      <h3>API 令牌</h3>
+      <api-tokens />
     </section>
 
     <section>

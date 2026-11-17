@@ -9,6 +9,11 @@ const { CSRF_HEADER, SESSION_COOKIE, createSessionCookies, csrfGuard, securityHe
 const { identifySession, passwordLoginState, requireSession } = require("./http/session");
 const { accountRoutes } = require("./http/routes/accounts");
 const { officialRoutes } = require("./http/routes/official");
+const { tokenRoutes } = require("./http/routes/tokens");
+const { v1Routes } = require("./http/routes/v1");
+const { createTokenAuth } = require("./http/token-auth");
+const { createAgent } = require("./agent");
+const { createTokens } = require("./tokens");
 const { authRoutes, publicAuthRoutes } = require("./http/routes/auth");
 const { BACKUP_IMPORT_PATH, backupRoutes } = require("./http/routes/backup");
 const { eventRoutes } = require("./http/routes/events");
@@ -52,6 +57,10 @@ function createPanelApp(
   const cookies = createSessionCookies(options);
   // 各组接口共用的依赖
   const ctx = { options, dataDir: path.resolve(options.dataDir), auth, store, runner, passkeys, planner, notes, reports, checkLocalBrowser, cookies };
+  // API 令牌：管理接口在面板会话下，api/v1 用令牌认证。options.tokens：测试时替换时钟
+  ctx.tokens = createTokens({ store, ...options.tokens });
+  ctx.agent = createAgent({ dataDir: ctx.dataDir, store, runner, planner, notes, reports });
+  ctx.tokenAuth = createTokenAuth({ tokens: ctx.tokens });
 
   const app = express();
   app.disable("x-powered-by");
@@ -76,6 +85,9 @@ function createPanelApp(
   router.use(identifySession(ctx));
   router.use(pageRoutes());
 
+  // 令牌认证的接口在面板接口之前：不经过面板的会话、自定义请求头与请求体检查
+  router.use("/api/v1", v1Routes(ctx));
+
   const api = express.Router();
   api.use((req, res, next) => {
     res.set("Cache-Control", "no-store");
@@ -96,6 +108,7 @@ function createPanelApp(
   api.use(statsRoutes(ctx));
   api.use(eventRoutes(ctx));
   api.use(backupRoutes(ctx));
+  api.use(tokenRoutes(ctx));
   api.use((req, res) => {
     res.status(404).json({ error: "not_found" });
   });
