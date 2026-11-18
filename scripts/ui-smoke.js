@@ -24,6 +24,7 @@ const { Protocol, Transport, VirtualAuthenticatorOptions } = require("selenium-w
 
 const { startPanel } = require(path.resolve(__dirname, "..", "src", "panel", "server"));
 const { dateInZone } = require(path.resolve(__dirname, "..", "src", "panel", "dates"));
+const { startMockOfficial } = require("./fixtures/mock-official");
 const { startMockSelenium } = require("./fixtures/mock-selenium");
 const { minutesFrom, writeRun } = require("./fixtures/run-records");
 
@@ -37,10 +38,36 @@ const NEW_PASSWORD = "new-password-123";
 
 // ---------- 面板与数据 ----------
 
+const OFFICIAL_KEY = "wrk-ui-smoke-key-123456";
+const NOTE_BOOKS = [
+  {
+    bookId: "100001",
+    title: "测试之书",
+    author: "某作者",
+    sort: 1763000000,
+    noteCount: 2,
+    reviewCount: 1,
+    readingProgress: 42,
+    chapters: [
+      { chapterUid: 1, chapterIdx: 1, title: "第一章" },
+      { chapterUid: 2, chapterIdx: 2, title: "第二章" },
+    ],
+    bookmarks: [
+      { bookmarkId: "b1", bookId: "100001", chapterUid: 1, markText: "第一段划线", createTime: 1762000000, type: 1, range: "10-20", colorStyle: 1 },
+      { bookmarkId: "b2", bookId: "100001", chapterUid: 2, markText: "第二段划线", createTime: 1762100000, type: 1, range: "5-9", colorStyle: 2 },
+    ],
+    reviews: [
+      { reviewId: "r1", content: "我的想法", abstract: "第一段划线", range: "10-20", chapterUid: 1, chapterIdx: 1, createTime: 1762000100, star: -1 },
+    ],
+  },
+];
+
 async function startSeededPanel() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ui-smoke-data-"));
   // 面板查询的 Selenium 状态来自模拟的 Selenium（运行使用桩子进程，不连接它）
   const selenium = await startMockSelenium();
+  // 微信读书官方 API 的模拟网关：笔记页面同步的数据来自这里
+  const official = await startMockOfficial({ key: OFFICIAL_KEY, data: { books: NOTE_BOOKS } });
   const panel = await startPanel({
     port: 0,
     host: "0.0.0.0",
@@ -53,6 +80,10 @@ async function startSeededPanel() {
     runner: { workerPath: STUB_WORKER, killTimeoutMs: 500 },
     // 计划器不在测试期间自动补跑，页面上的运行只来自测试步骤
     planner: { startupDelayMs: 60 * 60 * 1000 },
+    officialApi: { gatewayUrl: official.url, retryDelayMs: 1 },
+    // 全局默认配置中会填写 Bark Key：同步失败通知与每周阅读报告不真的发送
+    notes: { delayMs: 0, notify: async () => {} },
+    reports: { send: async () => {} },
   });
   const base = `http://127.0.0.1:${panel.port}/`;
   let cookie = "";
@@ -72,6 +103,7 @@ async function startSeededPanel() {
   };
   await call("POST", "api/auth/login", { password: panel.generatedPassword });
   await call("POST", "api/accounts", { id: "ok-1", name: "小明" });
+  await call("PATCH", "api/accounts/ok-1", { overrides: { wereadApiKey: OFFICIAL_KEY } });
   await call("POST", "api/accounts", { id: "qr-1", name: "扫码测试" });
   await call("POST", "api/accounts", { id: "slow-1", name: "长时间阅读" });
   await call("PUT", "api/accounts/ok-1/schedules", {
@@ -90,7 +122,7 @@ async function startSeededPanel() {
     const start = `${date}T01:00:00.000Z`;
     writeRun(dataDir, "ok-1", { queuedAt: start, marks: minutesFrom(start, day === 3 ? 3 : 68), endedAt: start });
   }
-  return { panel, selenium, dataDir, call, base: `http://${BROWSER_HOST}:${panel.port}/` };
+  return { panel, selenium, official, dataDir, call, base: `http://${BROWSER_HOST}:${panel.port}/` };
 }
 
 // ---------- 浏览器 ----------
@@ -235,7 +267,13 @@ async function login(h, base, password) {
   await h.waitFor("#login-form");
   const input = await h.waitFor("#password");
   await input.sendKeys(password, Key.ENTER);
-  await h.waitFor(".account-card");
+  await h.waitFor(".main-nav");
+}
+
+// 退出登录在右上角的账号菜单中
+async function logout(h) {
+  await h.click(await h.waitFor(".account-menu summary"));
+  await h.clickButton("退出登录", await h.waitFor(".account-menu .menu-panel"));
 }
 
 // ---------- 桌面 ----------
@@ -257,12 +295,30 @@ async function desktop(env, h, driver, results) {
   const expected = await h.consoleErrors();
   assert.ok(expected.every((line) => /api\/auth\/login .*401/.test(line)), `登录页不应有其他错误：\n${expected.join("\n")}`);
   await login(h, base, panel.generatedPassword);
+  // 登录后进入读书日记；自动阅读在“设置”中
+  await h.waitText("main .page-title", "读书日记");
+  await h.waitText(".main-nav a[aria-current=page]", "日记");
+  await h.waitText(".checkin-dot", "未打卡");
+  await h.go("#/settings/reading");
+  await h.waitText(".settings-nav a[aria-current=page]", "自动阅读");
+  await h.waitFor(".account-card");
   assert.strictEqual((await driver.findElements(By.css(".account-card"))).length, 3);
   await h.waitText(".account-card", "下次运行");
   await h.waitText(".selenium-card", "就绪");
   await h.waitText(".selenium-card", "已用 0/1 个会话");
   await h.shot("02-overview");
-  step("登录与总览：密码错误有提示；登录后显示 Selenium 状态、3 个账号卡片、今日分钟数与下次运行时间");
+  step("登录与自动阅读：密码错误有提示；登录后进入读书日记，顶栏显示打卡小圆点；设置 › 自动阅读显示 Selenium 状态、3 个账号卡片、今日分钟数与下次运行时间");
+
+  // 外观：右上角菜单中切换深色、跟随系统
+  const themeOf = () => driver.executeScript("return document.documentElement.getAttribute('data-theme')");
+  await h.click(await h.waitFor(".account-menu summary"));
+  await h.clickButton("深色", await h.waitFor(".account-menu .menu-themes"));
+  assert.strictEqual(await themeOf(), "dark");
+  await h.shot("02c-overview-dark");
+  await h.click(await h.waitFor(".account-menu summary"));
+  await h.clickButton("跟随系统", await h.waitFor(".account-menu .menu-themes"));
+  assert.strictEqual(await themeOf(), null);
+  step("外观：账号菜单中切换深色与跟随系统");
 
   assert.strictEqual((await driver.findElements(By.css(".vnc-link"))).length, 0, "未设置 noVNC 地址时不显示链接");
   selenium.state.used = 1;
@@ -292,6 +348,10 @@ async function desktop(env, h, driver, results) {
   await h.waitText(".scan-card", "扫码测试 需要扫码登录");
   await h.button("复制登录链接");
   await h.shot("03-overview-scan");
+  // 其他页面顶部提示需要扫码，点击进入该账号的实时页面
+  await h.go("#/library");
+  await h.waitText(".scan-banner", "扫码测试 需要扫码登录微信读书");
+  await h.click(await h.waitText(".scan-banner a", "去扫码"));
   await h.go("#/accounts/qr-1/live");
   await h.waitFor(".live .qr-login img.qr");
   await h.waitText(".live-status", "等待扫码");
@@ -304,7 +364,7 @@ async function desktop(env, h, driver, results) {
   await h.shot("04-live-scan");
   await h.clickButton("停止");
   await h.waitText(".live-status", "已停止");
-  step("扫码：需要扫码的账号在总览置顶显示本地生成的二维码与复制按钮，实时页面同样显示；停止后状态为已停止");
+  step("扫码：需要扫码的账号在自动阅读页置顶显示本地生成的二维码与复制按钮，其他页面顶部提示，实时页面同样显示；停止后状态为已停止");
 
   // 二维码解析不出登录链接时显示阅读浏览器中的二维码截图，没有复制按钮
   await call("POST", "api/accounts", { id: "qrimg-1", name: "截图扫码" });
@@ -366,6 +426,42 @@ async function desktop(env, h, driver, results) {
   await h.shot("09-calendar");
   step("打卡日历：按月显示每天的分钟数与打卡状态，今天高亮，显示月卡进度");
 
+  // 旧地址（账号页的“笔记”）跳到书库
+  await h.go("#/accounts/ok-1/notes");
+  await driver.wait(async () => (await driver.getCurrentUrl()).endsWith("#/library"), 10000, "旧的笔记地址应跳到书库");
+  await h.clickButton("立即同步");
+  await h.waitText(".book-list", "测试之书");
+  // 宽屏三栏：没有选书时打开第一本
+  await h.waitText(".notes-book-head", "读到 42%");
+  await h.waitText(".library-chapters", "第一章");
+  await h.type(await h.waitFor("input[aria-label='搜索笔记']"), "想法");
+  await h.waitText(".notes-search mark", "想法");
+  await h.waitText(".notes-search", "第一章");
+  await h.shot("09a-notes-search");
+  await h.click(await h.waitText(".notes-search a", "测试之书"));
+  await driver.wait(async () => (await driver.getCurrentUrl()).endsWith("#/library/100001"), 10000, "点搜索结果中的书名应打开这本书");
+  await h.waitText(".notes-chapter h3", "第一章");
+  await h.waitText(".note-entry .note-text", "第一段划线");
+  await h.waitText(".note-entry .note-review", "我的想法");
+  await h.waitText(".notes-book", "下载 Markdown");
+  // 按章节查看
+  await h.click(await h.waitText(".library-chapters .chapter-item", "第二章"));
+  await h.waitText(".notes-heading", "第二章");
+  await h.waitText(".note-entry .note-text", "第二段划线");
+  assert.strictEqual((await driver.findElements(By.css(".notes-chapter h3"))).length, 0, "只看一章时不重复显示章节标题");
+  await h.button("复制本章");
+  // 读书日记：同步后按日期显示笔记，点书名打开书库中的这本书
+  await h.go("#/");
+  await h.waitText(".journal-card .journal-text", "第一段划线");
+  await h.waitText(".journal-card .journal-thought", "我的想法");
+  await h.waitText(".journal-day .day-summary", "条");
+  assert.strictEqual((await driver.findElements(By.css(".note-heat-cell"))).length, 84, "笔记日历是最近 12 周");
+  await h.shot("09a-journal");
+  await h.click(await h.waitText(".journal-card .journal-book", "测试之书"));
+  await driver.wait(async () => (await driver.getCurrentUrl()).endsWith("#/library/100001"), 10000, "点书名应打开书库中的这本书");
+  await h.shot("09a-notes-book");
+  step("书库：立即同步后显示书单，宽屏时打开第一本；搜索划线与想法并标出关键词；点结果打开这本书，按章节显示与筛选划线与想法；读书日记按日期显示笔记与笔记日历");
+
   await h.go("#/stats/ok-1");
   await h.waitFor(".heatmap rect");
   await h.waitText(".metrics-grid", "连续打卡");
@@ -377,7 +473,7 @@ async function desktop(env, h, driver, results) {
   await driver.executeScript("document.documentElement.dataset.theme = 'dark'");
   await h.shot("09c-stats-dark");
   await driver.executeScript("delete document.documentElement.dataset.theme");
-  step("统计：概览数字、近 30 天柱状图、年度热力图与运行情况，浅色与深色主题");
+  step("报告：概览数字、近 30 天柱状图、年度热力图与运行情况，浅色与深色主题");
 
   await h.go("#/accounts/ok-1/schedules");
   await h.waitText(".schedule-rule", "每天 06:00、18:30");
@@ -418,9 +514,9 @@ async function desktop(env, h, driver, results) {
   assert.deepStrictEqual((await call("GET", "api/accounts/ok-1/goal")).goal, { enabled: true, minutes: 45, checkAt: "22:00" });
   await h.waitText(".goal-card:not(.split-card)", "今天已读");
   await h.shot("10b-goal");
-  await h.go("#/");
+  await h.go("#/settings/reading");
   await h.waitText(".account-card", "/45 分钟，22:00 检查");
-  step("每日目标：在调度页设置目标与检查时间，总览卡片显示今天的进度与检查时间");
+  step("每日目标：在调度页设置目标与检查时间，自动阅读页的账号卡片显示今天的进度与检查时间");
 
   await h.go("#/accounts/ok-1/schedules");
   await h.waitText(".split-card", "分段阅读");
@@ -475,7 +571,7 @@ async function desktop(env, h, driver, results) {
   await h.waitText("main", "页面不存在");
   step("地址中含有不完整的百分号编码时显示“页面不存在”");
 
-  await h.go("#/settings");
+  await h.go("#/settings/general");
   const concurrency = await h.waitText(".settings-grid label", "同时运行的账号数");
   await h.type(await concurrency.findElement(By.css("input")), "2");
   assert.strictEqual((await driver.findElements(By.css(".callout"))).length, 0, "未填写 noVNC 地址时不显示安全提示");
@@ -502,6 +598,7 @@ async function desktop(env, h, driver, results) {
     const placeholder = await (await h.field("Bark Key")).findElement(By.css("input")).getAttribute("placeholder");
     assert.strictEqual(placeholder, "已设置，留空不修改");
   });
+  await h.go("#/settings/security");
   const passwordForm = await h.waitText("form.narrow", "当前密码");
   const inputs = await passwordForm.findElements(By.css("input"));
   await inputs[0].sendKeys(panel.generatedPassword);
@@ -515,7 +612,7 @@ async function desktop(env, h, driver, results) {
   await h.shot("12-settings");
   step("设置：保存面板设置（填写 noVNC 地址时显示安全提示）与全局默认配置（密钥只显示已设置）；修改面板密码");
 
-  await h.go("#/");
+  await h.go("#/settings/reading");
   const vncLink = await h.waitFor(".selenium-card .vnc-link");
   assert.deepStrictEqual(
     await Promise.all(["href", "target", "rel"].map((name) => vncLink.getAttribute(name))),
@@ -524,7 +621,7 @@ async function desktop(env, h, driver, results) {
   // 同时运行的账号数为 2，3 个账号都使用这个只有 1 个会话的 Selenium
   await h.waitText(".selenium-card .alert-warn", "只有 1 个会话");
   await h.shot("12b-overview-vnc");
-  step("总览：设置 noVNC 地址后显示在新窗口打开的链接；同时运行的账号数超过 Selenium 会话数时提示");
+  step("自动阅读：设置 noVNC 地址后显示在新窗口打开的链接；同时运行的账号数超过 Selenium 会话数时提示");
 
   await h.go("#/accounts/new");
   const form = await h.waitFor("article.narrow form");
@@ -539,9 +636,9 @@ async function desktop(env, h, driver, results) {
   await h.clickButton("删除账号");
   await driver.wait(until.alertIsPresent(), 5000);
   await (await driver.switchTo().alert()).accept();
-  await driver.wait(async () => (await driver.getCurrentUrl()).endsWith("#/"), 10000, "删除后应回到总览");
+  await driver.wait(async () => (await driver.getCurrentUrl()).endsWith("#/settings/reading"), 10000, "删除后应回到自动阅读");
   assert.ok(!(await call("GET", "api/accounts")).accounts.some((account) => account.id === "new-1"));
-  step("新建账号后进入账号页面；删除账号前确认，删除后回到总览");
+  step("新建账号后进入账号页面；删除账号前确认，删除后回到自动阅读");
 
   // 浏览器资料：显示占用，确认后重置
   const profileDir = path.join(dataDir, "accounts", "ok-1", "profile", "Default");
@@ -591,7 +688,7 @@ async function desktop(env, h, driver, results) {
   assert.deepStrictEqual(errors, [], `浏览器控制台不应有错误或警告：\n${errors.join("\n")}`);
   step("浏览器控制台没有错误与警告（包括 CSP 拦截）");
 
-  await h.click(await h.waitText("header nav a", "退出"));
+  await logout(h);
   await h.waitFor("#login-form");
   step("退出后回到登录页");
 }
@@ -601,17 +698,21 @@ async function desktop(env, h, driver, results) {
 async function mobile(env, h, driver, results) {
   const { base } = env;
   await login(h, base, NEW_PASSWORD);
+  await h.go("#/settings/reading");
   await h.clickButton("仅登录", await h.card("扫码测试"));
   await h.waitFor(".scan-card img.qr");
   const pages = [
-    ["m01-overview", "#/", ".selenium-card .badge"],
+    ["m00-journal", "#/", ".journal-card"],
+    ["m01-overview", "#/settings/reading", ".selenium-card .badge"],
     ["m02-live-scan", "#/accounts/qr-1/live", ".live .qr-login img.qr"],
     ["m03-history", "#/accounts/ok-1/history", "table.history tbody tr"],
     ["m04-calendar", "#/accounts/ok-1/calendar", ".calendar .day"],
     ["m05-schedules", "#/accounts/ok-1/schedules", ".schedule-rule"],
     ["m06-config", "#/accounts/ok-1/config", ".config-form"],
-    ["m07-settings", "#/settings", ".settings-grid"],
+    ["m07-settings", "#/settings/general", ".settings-grid"],
     ["m08-stats", "#/stats/ok-1", ".heatmap rect"],
+    ["m09-notes", "#/library", ".book-list .book-item .cover"],
+    ["m10-notes-book", "#/library/100001", ".chapter-chips .chapter-item"],
   ];
   for (const [name, hash, css] of pages) {
     await h.go(hash);
@@ -644,7 +745,7 @@ async function mobile(env, h, driver, results) {
   const errors = await h.consoleErrors();
   assert.deepStrictEqual(errors, [], `浏览器控制台不应有错误或警告：\n${errors.join("\n")}`);
   results.push("手机");
-  console.log("✅ 手机宽度（390px）：总览、实时、历史、日历、调度、配置、设置、统计都没有横向滚动，控制台没有错误");
+  console.log("✅ 手机宽度（390px）：读书日记、自动阅读、实时、历史、日历、调度、配置、设置、报告、书库（封面网格与一本书）都没有横向滚动，控制台没有错误");
 }
 
 // ---------- passkey ----------
@@ -703,7 +804,7 @@ async function passkeys(h, driver, results) {
 
     await (await h.waitFor("#password")).sendKeys(password, Key.ENTER);
     await h.waitText("main", "还没有账号");
-    await h.go("#/settings");
+    await h.go("#/settings/security");
     await h.waitText("main", "还没有添加 passkey");
     const nameInput = await h.waitFor("input[placeholder='例如：我的 iPhone']");
     await nameInput.sendKeys("虚拟认证器");
@@ -729,7 +830,7 @@ async function passkeys(h, driver, results) {
     await h.shot("02-settings");
     step("passkey 设置：填写名称后添加（超过有效期时先用密码二次验证），列表显示名称与时间，可以改名");
 
-    await h.click(await h.waitText("header nav a", "退出"));
+    await logout(h);
     await h.waitFor("#passkey-button");
     await driver.wait(async () => (await h.waitFor("#passkey-login")).isDisplayed(), 10000);
     await h.click(await h.waitFor("#passkey-button"));
@@ -742,7 +843,7 @@ async function passkeys(h, driver, results) {
 
     // 关闭密码登录：确认后果后只能用 passkey 验证；之后登录页只剩 passkey
     const passwordSwitch = () => driver.findElement(By.xpath("//label[contains(., '允许用面板密码登录')]/input"));
-    await h.go("#/settings");
+    await h.go("#/settings/security");
     await h.waitText(".passkey-table", "UI 测试设备");
     await driver.sleep(3500);
     await h.click(await passwordSwitch());
@@ -758,7 +859,7 @@ async function passkeys(h, driver, results) {
     await h.waitText(".notice", "已关闭密码登录");
     assert.strictEqual(await (await passwordSwitch()).isSelected(), false);
     await h.waitText("main", "密码登录已关闭，打开后才能修改密码");
-    await h.click(await h.waitText("header nav a", "退出"));
+    await logout(h);
     await driver.wait(async () => (await h.waitFor("#passkey-login")).isDisplayed(), 10000, "应显示 passkey 登录按钮");
     assert.strictEqual(await (await h.waitFor("#login-form")).isDisplayed(), false, "密码登录关闭后不显示密码表单");
     await h.shot("05-login-passkey-only");
@@ -767,7 +868,7 @@ async function passkeys(h, driver, results) {
     step("关闭密码登录：确认后用 passkey 验证，登录页只剩 passkey，修改密码隐藏");
 
     // 打开密码登录：密码登录关闭期间只能用 passkey 验证
-    await h.go("#/settings");
+    await h.go("#/settings/security");
     await h.waitText(".passkey-table", "UI 测试设备");
     await driver.sleep(3500);
     await h.click(await passwordSwitch());
@@ -780,7 +881,7 @@ async function passkeys(h, driver, results) {
     await h.waitText("main", "面板密码由环境变量 PANEL_PASSWORD 设置");
     step("打开密码登录：用 passkey 验证后恢复，“面板密码”一节恢复原样");
 
-    await h.go("#/settings");
+    await h.go("#/settings/security");
     await h.waitText(".passkey-table", "UI 测试设备");
     // 等二次验证过期，删除时弹出验证对话框，用 passkey 验证后完成删除
     await driver.sleep(3500);
@@ -837,6 +938,7 @@ async function main() {
     }
     await env.panel.close();
     await env.selenium.stop();
+    await env.official.close();
     fs.rmSync(env.dataDir, { recursive: true, force: true });
   }
 }

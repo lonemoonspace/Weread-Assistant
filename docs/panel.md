@@ -45,6 +45,13 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/schedules.js` | 调度规则的校验、换算为 cron 表达式、计算接下来的触发时间 | 时间按面板时区解释 |
 | `src/panel/scheduler.js` | 按调度规则到点触发（croner），交给计划器加入队列 | 时区、账号启用状态或调度规则变化后重建定时任务 |
 | `src/panel/planner.js` | 计划器：失败重试、调度随机延后、分段阅读、每日目标补跑、扫码后补读、晚间断签预警、启动时恢复被中断的运行与错过的调度，见下文“重试、补跑与恢复” | 待办保存在 `planner.json`，重启不丢；时钟经参数注入，单元测试不需要真的等待 |
+| `src/official/api.js` | 微信读书官方 API 客户端：统一网关、`skill_version`、Bearer 鉴权，`errcode` 与 HTTP 错误归类（API Key 无效、网络、接口出错、格式不对），499 与 5xx 重试 2 次 | 只读；错误信息中的 API Key 替换为掩码；响应体上限 16 MB |
+| `src/official/notes.js` | 用官方 API 读取笔记本概览、一本书的划线（`/book/bookmarklist`）与想法（`/review/list/mine`），按章节整理并渲染为 Markdown | 想法按 `range` 挂到对应划线下；对不上的想法单独成条，没有章节的放在“书评与其他想法” |
+| `src/panel/notes.js` | 笔记同步：每天到 `notesSyncAt` 自动同步一次，也可手动同步；保存到账号数据目录的 `notes/` | 只重新读取最近笔记时间或数量有变化的书；同一账号同一时间只同步一次 |
+| `src/panel/journal.js` | 读书日记：把已同步的笔记摊平、按面板时区的日期分组翻页，统计笔记日历、本月数字、连续天数与往年今天 | 纯函数，只读本地已同步的笔记，不请求微信读书 |
+| `src/official/report.js` | 每周阅读报告：`/readdata/detail`（`mode=weekly`）读取某一周与前一周，统计这一周新增的笔记，渲染为通知正文 | 时长字段一律按秒处理（官方 Skill 的口径） |
+| `src/panel/reports.js` | 每周一到 `weeklyReportAt` 之后推送上周的阅读报告；预览与立即发送 | 已发送的周记在 `reports.json`，重启不重复 |
+| `src/panel/http/routes/official.js` | 官方 API 相关接口（测试 API Key、笔记同步与读取、每周阅读报告） | 网关地址可由面板选项 `officialApi` 替换，测试时指向 `scripts/fixtures/mock-official.js` |
 | `src/panel/split.js` | 分段阅读的设置校验与一天各段的排法（段数、长度、开始时间随机，段间隔 30 分钟） | |
 | `src/panel/retry.js`、`src/panel/goal.js` | 重试规则（哪些运行、哪些失败、间隔）；每日目标的校验、按挑战的建议值与检查时间太晚时的提示 | |
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
@@ -56,6 +63,10 @@ docker compose logs app | grep 面板初始密码
 | `src/reader/worker.js` | 阅读子进程入口：经 IPC 接收配置、上报事件，收到 SIGTERM 时关闭浏览器后退出 | 只由面板启动，见 `docs/reader.md` |
 | `src/panel/store.js` | `panel.json` 读写 | 串行写入、先写临时文件并刷到磁盘再重命名、权限 0600；每次修改前把上一版保存为 `panel.json.bak`；启动时把已有文件的权限收紧为 0600，改不了时拒绝启动；文件无法解析或结构不对（例如 `accounts` 不是数组、`settings` 不是对象）时视为损坏，另存为 `panel.json.corrupt-<时间>`（只保留最近 3 份）并从上一版恢复，`panel.json` 不见了而上一版还在时同样从上一版恢复，上一版也不可用时拒绝启动（重置面板需同时删除 `panel.json` 与 `panel.json.bak`）；补齐缺少的部分（旧文件自动升级） |
 | `src/panel/auth.js` | 密码哈希、会话、登录限速、修改密码、二次验证 | 密码以 scrypt 哈希保存；会话只保存令牌哈希，写入 `sessions.json`（`src/panel/session-file.js`），面板重启后恢复，见“安全”中的“会话持久化”；passkey 登录与二次验证的失败同样计入登录限速 |
+| `src/panel/tokens.js` | API 令牌：新建（权限、账号、有效期）、列出、删除、校验 | `panel.json` 的 `auth.tokens` 中只存 SHA-256 哈希；最近使用时间最多每小时写回一次 |
+| `src/panel/agent.js` | 令牌可以调用的操作（`api/v1` 与 MCP 共用）：检查权限与账号，返回挑选过的字段 | 不返回配置、密钥、cookies、登录链接与截图 |
+| `src/panel/http/token-auth.js`、`src/panel/http/routes/v1.js` | `Authorization: Bearer` 认证与 `api/v1` 接口 | 不使用 cookie，不需要 `X-WA-Request`；同一 IP 15 分钟内认证失败 20 次后暂停 |
+| `src/panel/mcp.js`、`src/panel/http/routes/mcp.js` | MCP 服务端（Streamable HTTP，无状态、只返回 JSON）：初始化、按令牌权限列出工具、调用工具 | 工具调用交给 `agent.js`；带 `Origin` 时只接受同源；不提供 SSE 流 |
 | `src/panel/passkeys.js` | passkey（WebAuthn）的添加、登录与二次验证校验、改名、删除（@simplewebauthn/server） | 域名与地址只取自 `PANEL_PUBLIC_URL`，不信任请求的 Host；challenge 一次有效（登录用的自带过期时间与 HMAC，不在服务端保存）；`panel.json` 中只保存公钥；密码登录关闭时不能删除最后一个可用的 passkey |
 | `src/panel/server.js` | 组装 Express 应用（中间件与各组接口的挂载顺序）、启动与停止面板 | 挂载顺序决定哪些接口需要登录：页面 → 不需要登录的认证接口 → 要求登录 → 其余接口 → 404 |
 | `src/panel/http/security.js` | 安全响应头与 CSP、`csrfGuard`、会话 cookie 的读写与 HTTPS 判断 | 统一安全响应头；修改类请求校验自定义请求头 |
@@ -85,9 +96,12 @@ docker compose logs app | grep 面板初始密码
 | `DELETE api/auth/passkeys/:id` | 是，需二次验证 | 删除 passkey，用它登录的其他会话立即失效（当前会话保留）；不存在 404；密码登录在设置中关闭时，不能删除当前域名下最后一个可用的 passkey，返回 409 `last_passkey` |
 | `PATCH api/auth/password-login` | 是，需二次验证 | `{ enabled }`：在设置中打开或关闭密码登录，返回 `{ passwordLogin }`。关闭要求当前域名下有可用的 passkey（否则 409 `no_usable_passkey`），并且 5 分钟内用 passkey 验证过（否则 403 `reauth_required`，带 `method: "passkey"`）；关闭后其他用密码登录的会话立即失效（当前会话保留）。打开只要求 5 分钟内验证过 |
 | `POST api/auth/logout` | 是 | 注销当前会话 |
+| `GET api/tokens` | 是 | API 令牌列表（不含哈希）与可选的权限 `{ scopes, tokens }` |
+| `POST api/tokens` | 是，需二次验证 | `{ name, scopes, accounts?, expiresInDays? }` 新建令牌，201 返回 `{ token, info }`，`token` 只在这里返回一次；`accounts` 为 null 或不填表示全部账号 |
+| `DELETE api/tokens/:id` | 是 | 删除令牌，立即失效 |
 | `POST api/auth/logout-others` | 是，需二次验证 | 退出其他设备：结束当前会话以外的所有会话（含实时推送连接），返回 `{ ended }`；5 分钟内没有登录或二次验证过时 403 `reauth_required` |
 | `POST api/auth/password` | 是 | `{ current, next }`；成功后所有会话失效，并为当前请求下发新会话；密码来自环境变量或密码登录关闭时返回 409（`password_from_env` / `password_login_disabled`）。多个请求依次处理，后到的请求按新密码校验 |
-| `GET api/schema` | 是 | 表单清单：配置分组、运行配置字段（类型、可选值、范围、是否密钥）、面板设置字段 |
+| `GET api/schema` | 是 | 表单清单：配置分组、运行配置字段（类型、可选值、范围、是否密钥、是否只能在账号中设置 `accountOnly`）、面板设置字段。`accountOnly` 的项（微信读书 API Key）在全局默认中不显示，`PATCH api/settings` 的 `defaults` 中提交时 400 |
 | `GET api/settings` | 是 | `{ settings, defaults }`：面板设置与全局默认运行配置（密钥为掩码） |
 | `PATCH api/settings` | 是 | `{ settings?, defaults? }`：只修改提交的项；任一项非法时返回 400 且整个请求不生效 |
 | `GET api/accounts` | 是 | 账号列表，含是否已有 cookies、调度规则（带接下来的触发时间）、下一次定时运行时间 `nextRunAt`、挑战设置 `challenge`、今天的阅读分钟数 `today`（`{ date, minutes, checkedIn }`）与最近一次运行 `lastRun` |
@@ -97,6 +111,16 @@ docker compose logs app | grep 面板初始密码
 | `GET api/accounts/:id/schedules` | 是 | `{ timezone, enabled, nextRunAt, nextRunJitterMinutes, schedules }`：每条规则带 `description` 与接下来 5 次触发时间 `nextRuns`；`nextRunJitterMinutes` 为下次运行那条规则的随机延后分钟数 |
 | `PUT api/accounts/:id/schedules` | 是 | `{ schedules: [...] }`：整体替换账号的调度规则，保存后立即生效；任一条非法时返回 400，`message` 指出第几条规则与原因，整个请求不生效 |
 | `GET api/accounts/:id/goal` | 是 | 每日目标：`{ timezone, goal, suggestedMinutes, warning, today, planned }`。`goal` 为 `{ enabled, minutes, checkAt }` 或 null；`suggestedMinutes` 为按挑战折算的每天分钟数：挑战进行中或未开始时为剩余天数平均每天还需读的分钟数（含校准，向上取整到 5 分钟，5–1440 分钟），已结束时按规则平均（月卡 60、年卡 50），没有挑战时为 null；`warning` 为检查时间太晚、补不满目标时的提示；`today` 同账号列表；`planned` 为计划器中的待办与今天的补跑次数 `{ pending, catchups: { count, max, blocked, waitingLogin } }`（`blocked` 为手动停止了自动运行、当天不再补跑；`waitingLogin` 为自动运行等待扫码超时，下次运行成功后补读） |
+| `GET api/accounts/:id/notes` | 否 | 笔记同步状态与书单：`{ configured, running, syncedAt, lastError, lastErrorAt, totalBookCount, totalNoteCount, books }`，书单按最近笔记时间倒序，已经没有笔记的书（`removed`）排在最后 |
+| `POST api/accounts/:id/notes/sync` | 是 | 开始同步笔记，返回 202 与同步状态；已经在同步时不重复开始；没有配置 API Key 时 400 |
+| `GET api/accounts/:id/reports/weekly` | 否 | 预览上周的阅读报告：`{ ok: true, weekStart, weekEnd, text }`，失败时 `{ ok: false, kind, error }`；没有配置 API Key 时 400 |
+| `POST api/accounts/:id/reports/weekly/send` | 是 | 生成上周的报告并立即发送到账号的通知渠道（不看 `notifyOnWeeklyReport` 开关），返回同上；没有配置 API Key 或没有启用任何通知渠道时 400 |
+| `GET api/accounts/:id/notes/search` | 否 | `?q=`（最多 100 个字）在已同步的划线与想法中搜索，不区分大小写：`{ hits: [{ bookId, title, chapter, text, reviews }], truncated }`，最多 100 条 |
+| `GET api/accounts/:id/notes/journal` | 否 | 读书日记：已同步的笔记按记下的日期（面板时区）倒序分组，`{ synced, today, days: [{ date, weekday, daysAgo, books, items: [{ id, bookId, title, author, chapter, text, reviews, createTime, date }] }], next, total }`，每页至少 40 条且同一天不拆开；`?before=YYYY-MM-DD` 取这一天之前的下一页（`next` 为空时没有更多）。第一页另有 `heat`（最近 12 周每天的 `{ date, notes, level }`，今天之后 `notes` 为 null）、`stats`（`monthNotes`、`monthBooks`、`streak`：截至今天连续有笔记的天数，今天还没有时从昨天算起）与 `onThisDay`（往年同月同日的笔记，最多 3 条，带 `yearsAgo`）。摊平后的笔记按账号缓存在内存中，同步后与时区变化后重建 |
+| `GET api/accounts/:id/notes/markdown` | 否 | 下载全部书的 Markdown，合成一份（`<账号名称>的笔记.md`）；还没有同步过时 404 |
+| `GET api/accounts/:id/notes/books/:bookId/markdown` | 否 | 下载一本书的 Markdown；没有时 404 |
+| `GET api/accounts/:id/notes/books/:bookId` | 否 | 一本书按章节整理后的划线与想法：`{ book, syncedAt, chapters, general }`；没有同步过时 404 |
+| `POST api/accounts/:id/official/test` | 是 | 用账号配置中的微信读书 API Key 读取笔记本概览的第一页：成功时 `{ ok: true, totalBookCount, totalNoteCount, upgradeInfo }`，失败时 `{ ok: false, kind, error }`（`kind` 为 `key`、`network`、`api` 或 `format`）；没有配置 API Key 时 400 |
 | `GET api/accounts/:id/split` | 是 | 分段阅读：`{ timezone, split, gapMinutes, today, plan }`。`split` 为 `{ enabled, minutes, from, to, minSegment, maxSegment }` 或 null；`gapMinutes` 为相邻两段的最小间隔；`today` 同账号列表；`plan` 为今天排好的各段 `{ date, segments: [{ at, minutes, status }] }`（`status` 为 `planned`、`started`、`skipped` 或 `cancelled`），没有时为 null |
 | `PUT api/accounts/:id/split` | 是 | `{ split: { enabled?, minutes, from, to, minSegment, maxSegment } \| null }`：保存分段阅读，`minutes` 为 1–1440，`from`、`to` 为 `HH:MM`（面板时区，`to` 晚于 `from`，不跨零点），`minSegment`、`maxSegment` 为 5–240 且前者不大于后者；按每段最长与段间隔在时段内排不下 `minutes` 时返回 400 并说明最多能读多少。null 表示不使用。保存后立即按新设置重新排今天剩下的段；返回同上 |
 | `PUT api/accounts/:id/goal` | 是 | `{ goal: { enabled?, minutes, checkAt } \| null }`：保存每日目标，`minutes` 为 1–1440，`checkAt` 为 `HH:MM`（面板时区），null 表示不设置；返回同上 |
@@ -125,18 +149,24 @@ docker compose logs app | grep 面板初始密码
 
 面板页面免构建：Vue 3（包含模板编译器的 ES 模块版本）、Pico.css 与 qrcode-generator 放在 `assets/vendor/`，页面代码是 `assets/app/` 下的 ES 模块，地址使用 hash 路由（`#/accounts/me/live`），部署在子路径下时相对路径始终正确。
 
+页面以笔记为主：顶栏是“书库 / 报告 / 设置”（手机宽度下固定在屏幕底部，图标加文字），右侧是当前账号的打卡小圆点（已打卡、运行中或未打卡，点击进入该账号的实时页面）与账号菜单（切换书库显示的账号、账号配置、新建账号、外观、退出登录）。当前账号与外观保存在浏览器的 localStorage 中（`wa-account`、`wa-theme`），没有选过时用第一个启用的账号。外观有浅色（暖白纸色底）与深色（夜读配色）两套，默认跟随系统；`assets/theme.js` 在页面渲染前按保存的选择设置 `data-theme`，避免闪烁。只使用系统自带的字体，不加载网络字体。自动阅读与各账号的运行、调度、配置都在“设置”中；有账号需要扫码登录时，其他页面顶部提示并链接到该账号的实时页面。
+
 | 页面 | 地址 | 内容 |
 | --- | --- | --- |
 | 登录 | `login` | 面板密码登录；passkey 可用且页面在 `PANEL_PUBLIC_URL` 的地址上打开时显示“使用 passkey 登录”，在其他地址（例如内网 IP）打开时提示到哪个地址使用 passkey；密码登录关闭时只显示 passkey 按钮，用不了 passkey 时说明应急恢复的办法 |
-| 统计 | `#/stats`、`#/stats/<id>` | 全部账号或某个账号：连续打卡天数与最长记录，本周、本月、今年累计与打卡天数，近 30 天日均；近 30 / 90 / 365 天每日分钟柱状图（标出每日目标线与未打卡的日子）；最近一年热力图（手机宽度下最近半年，可横向滚动，点有阅读的日子跳到当天的运行历史）；运行情况；设置了挑战时显示挑战进度 |
-| 总览 | `#/` | 顶部浏览器状态（内置浏览器的版本，或 Selenium 是否就绪、已用/总会话数；不可用时的提示与处理办法）与 noVNC 链接；需要扫码的账号置顶并直接显示二维码；运行队列；每个账号一张卡片：运行状态或上次运行结果、今天的阅读分钟与是否打卡、连续打卡天数（点击进入该账号的统计）、下次运行时间、立即运行 / 仅登录 / 停止 |
+| 读书日记 | `#/` | 首页。当前账号的划线与想法按记下的日期（面板时区）排成时间线：每天一组（日期、“今天 · 在 2 本书里记了 3 条”），每条显示书名（点击打开书库中的这本书）、划线、想法与章节，“更早的笔记”翻页；本月笔记数、连续记笔记天数与总数。右侧（窄屏时只在时间线前显示往年今天）：往年今天（往年同月同日的笔记，最多 3 条）、笔记日历（最近 12 周每天的笔记条数，5 档颜色）与本月记过的书、导出全部笔记。没有配置 API Key 时说明到账号配置中填写；没有账号时引导新建账号 |
+| 书库 | `#/library`、`#/library/<bookId>` | 当前账号的笔记。宽屏时三栏：书（封面色块、作者、笔记条数、最近笔记时间，可按最近笔记 / 笔记最多 / 书名排序，已没有笔记的书标出并排在最后）\| 章节（每章条数，书评与其他想法单独一项）\| 笔记（划线用衬线大字与荧光笔底色，想法放在浅色框中；“复制全部 / 复制本章”与“下载 Markdown”），没有选书时打开第一本。窄屏时先是 3 列封面网格，点开一本书后章节横向排列。搜索框同时按书名、作者筛选书单，并在划线与想法中搜索（标出关键词，点书名打开这本书）。书单下方是同步状态（上次同步时间、最近一次失败的原因）、“立即同步”与“下载全部 Markdown”。没有配置 API Key 时说明到账号配置中填写；没有账号时引导新建账号。旧地址 `#/accounts/<id>/notes[/<bookId>]` 切换到该账号后跳到这里 |
+| 报告 | `#/stats`、`#/stats/<id>` | 全部账号或某个账号：连续打卡天数与最长记录，本周、本月、今年累计与打卡天数，近 30 天日均；近 30 / 90 / 365 天每日分钟柱状图（标出每日目标线与未打卡的日子）；最近一年热力图（手机宽度下最近半年，可横向滚动，点有阅读的日子跳到当天的运行历史）；运行情况；设置了挑战时显示挑战进度 |
+| 设置 · 自动阅读 | `#/settings`、`#/settings/reading` | 左侧是设置的分组，自动阅读下列出各账号（点击进入账号页面）。顶部浏览器状态（内置浏览器的版本，或 Selenium 是否就绪、已用/总会话数；不可用时的提示与处理办法）与 noVNC 链接；需要扫码的账号置顶并直接显示二维码；运行队列；每个账号一张卡片：运行状态或上次运行结果、今天的阅读分钟与是否打卡、连续打卡天数（点击进入该账号的统计）、下次运行时间、立即运行 / 仅登录 / 停止 |
 | 账号 · 实时 | `#/accounts/<id>/live` | 状态、“正在读《书名》第 23/68 分钟”与进度条、二维码与“复制登录链接”、最新截图、实时日志；运行进行中且设置了 noVNC 地址时显示查看浏览器画面的链接 |
 | 账号 · 历史 | `#/accounts/<id>/history`、`#/accounts/<id>/history/<YYYY-MM-DD>` | 运行列表（带日期时只显示当天及以前的）（开始时间、时长、触发方式、结果、阅读分钟），展开查看日志与截图，下载日志，加载更多 |
 | 账号 · 打卡日历 | `#/accounts/<id>/calendar` | 按月显示每天的阅读分钟与打卡状态（已打卡、不足 5 分钟、今天未打卡高亮），本月合计；挑战进度与设置 |
 | 账号 · 调度 | `#/accounts/<id>/schedules` | 编辑多条规则（每天固定时间 / 每 N 小时 / cron），单独启停，预览接下来的运行时间，保存后立即生效；可选的分段阅读（每天多少分钟、时段、每段长短，显示今天排好的各段与状态）；每日目标。总览的“待办”包括今天下一段分段阅读 |
 | 账号 · 配置 | `#/accounts/<id>/config` | 名称与启用状态；运行配置的每一项可“继承全局”或“单独设置”；发送测试通知；删除账号（可选同时删除数据） |
 | 新建账号 | `#/accounts/new` | 账号 ID 与名称，创建后进入账号页面并提示扫码 |
-| 设置 | `#/settings` | 面板设置（时区、并发数、保留策略、noVNC 地址，填写 noVNC 地址时显示安全提示）；全局默认配置与测试通知；登录方式：passkey 列表（添加、改名、删除，在当前域名下不可用的标出）、“允许用面板密码登录”开关（关闭前确认后果并用 passkey 验证；设置中关闭而实际仍允许时说明原因）与修改面板密码（密码登录关闭时隐藏） |
+| 设置 · 面板与默认配置 | `#/settings/general` | 面板设置（时区、并发数、保留策略、noVNC 地址，填写 noVNC 地址时显示安全提示）；全局默认配置与测试通知 |
+| 设置 · 登录与安全 | `#/settings/security` | 登录方式：passkey 列表（添加、改名、删除，在当前域名下不可用的标出）、“允许用面板密码登录”开关（关闭前确认后果并用 passkey 验证；设置中关闭而实际仍允许时说明原因）与修改面板密码（密码登录关闭时隐藏）；API 令牌（新建时选择权限、账号与有效期，令牌只显示一次；列表显示最近使用与过期时间，可以删除） |
+| 设置 · 备份与迁移 | `#/settings/backup` | 导出与导入备份；关于 |
 
 | 规则 | 说明 |
 | --- | --- |
@@ -275,6 +305,40 @@ docker compose logs app | grep 面板初始密码
 清理在面板启动时、每次运行结束后、修改这两项设置后以及每 6 小时执行一次；进行中的运行不清理。已删除账号留下的运行记录同样按此清理。同时删除账号数据目录中一天以前的残留文件：发送邮件时没删掉的 `email-*.png` 与写入中断留下的 `*.tmp`。
 
 内置浏览器的资料目录 `accounts/<id>/profile/` 在每次运行开始前整理：超过 300 MB 时清空其中的缓存（HTTP 缓存本身限制为 50 MB）。在账号“配置”页可以查看占用并重置，见 `docs/reader.md` 的“浏览器资料目录”。
+
+### 笔记同步
+
+在账号的“配置”中填写微信读书 API Key（在微信读书 App 中申请）后，面板每天到全局设置“每天同步笔记的时间”（`notesSyncAt`，默认 04:30，面板时区）为启用的账号同步一次，也可以随时手动同步。只读取本人的划线与想法（含书评），口径与官方 Skill 的笔记导出一致；书签只有数量。
+
+```
+accounts/<id>/notes/
+  index.json             # 有笔记的书、各书的数量、最近一次同步的时间与错误
+  books/<bookId>.json    # 一本书的章节、划线与想法（官方回包整理后的字段）
+  markdown/<书名>.md      # 同一内容的 Markdown：按章节，划线为引用，想法紧随其后；书名重复时加上 bookId
+```
+
+- 增量：笔记本概览中最近笔记时间（`sort`）、划线数与想法数都没变的书不重新读取；逐本读取，间隔 300 毫秒。
+- 在微信读书中删光了笔记的书不删除文件，在 `index.json` 中标记 `removed`，作为备份保留。
+- 失败时（API Key 失效、网络或接口出错）保留上一次的结果，在 `index.json` 中记下原因与时间；每日自动同步失败时按账号的通知配置发送失败通知，当天不再自动重试。
+- 在“书库”中浏览、搜索与下载，见“页面”。
+- 文件只在面板数据目录中，备份配置（“备份与迁移”）不包含笔记；需要时直接备份 `accounts/<id>/notes/`。
+
+### 每周阅读报告
+
+账号配置“微信读书 API”分组中的“每周阅读报告”（`notifyOnWeeklyReport`，默认开，可以放在全局默认里）在填写了 API Key 时生效：每周一到全局设置“每周一发送阅读报告的时间”（`weeklyReportAt`，默认 09:00，面板时区）之后，经账号的通知渠道推送一次 `weeklyReport`，内容为：
+
+```
+11-10 至 11-16 阅读 5 小时 12 分钟，读了 6 天，日均 44 分钟
+比前一周多 1 小时 3 分钟（+25%）
+读得最多：《置身事内》2 小时 10 分钟；《人类简史》1 小时 5 分钟
+新增划线 12 条、想法 3 条（2 本书）
+数据来自微信读书 API，包含在手机上的阅读。
+```
+
+- 周按面板时区的周一到周日；读取官方统计时取那一周周四正午作为 `baseTime`，避开时区差异。时长、天数与日均来自官方回包（`totalReadTime`、`readDays`、`dayAverageReadTime`，单位秒），包括在手机上的阅读，与面板自己的运行统计不是同一口径。
+- 新增划线与想法按已同步笔记中的创建时间统计，没有同步过笔记时不写这一行。笔记每天 04:30 同步，早于默认的报告时间。
+- 发过的周记在 `reports.json`，重启后不重复；周一没发出去（面板停机、接口出错）时，本周之后的日子每天再试一次。账号停用时不发送。
+- 账号“配置”页可以预览上周的报告，或立即发送到本账号的通知渠道（不看开关）。
 
 ### 备份与迁移
 
@@ -423,6 +487,8 @@ data/
   panel.json.pre-import-* # 导入配置备份前的 panel.json（0600，保留最近 3 份），见“备份与迁移”
   accounts/<id>/          # 账号数据（0700）：cookies.json、login.png、login-qr.png（0600；命令行运行时的截图也在这里）
   accounts/<id>/profile/  # 内置浏览器的资料目录（0700）：缓存、本地存储与登录状态，备份时可以排除；profile.broken/ 为最近一次重置前的目录
+  accounts/<id>/notes/    # 同步的笔记（0700，文件 0600），见“笔记同步”
+  reports.json            # 每周阅读报告：各账号已发送的周（0600）
   planner.json            # 计划器的待办与当天的补跑次数（0600），见“重试、补跑与恢复”
   runs/<id>/<runId>/      # 每次运行（目录 0700，启动时收紧旧目录）：meta.json、output.log、screenshot-*.png、error.png（0600）
 ```
@@ -455,6 +521,8 @@ data/
     "maxConcurrentRuns": 1,
     "logRetentionDays": 30,
     "screenshotRetentionRuns": 3,
+    "notesSyncAt": "04:30",
+    "weeklyReportAt": "09:00",
     "vncUrl": ""
   },
   "defaults": { "duration": 68 },
@@ -534,6 +602,69 @@ data/
 | passkey 已同步到 iCloud 钥匙串、Google 密码管理器等 | 在新设备上登录同一个账号即可，不受影响。这类 passkey 的安全性取决于这些账号，建议为它们开启两步验证 |
 | 换了域名 | 旧的 passkey 全部不可用，密码登录自动恢复；用密码登录后在新域名下重新添加，再关闭密码登录 |
 
+### API 令牌与 api/v1
+
+给脚本、快捷指令、Home Assistant 与 AI 助手用的长期凭据，在“设置 → API 令牌”中新建：
+
+| 权限（scope） | 可以做的事 |
+| --- | --- |
+| `read` | 查看账号状态（今天的分钟数与是否打卡、连续打卡天数、正在进行与最近一次运行、下次运行时间、每日目标与挑战进度、计划器的待办）与运行记录 |
+| `run` | 开始阅读或仅登录、停止运行 |
+| `notes` | 读取笔记的同步状态、书单、一本书的笔记与 Markdown、搜索，立即同步笔记，生成上周的阅读报告 |
+
+令牌还可以限定账号（不能访问的账号与不存在的一样返回 404）与有效期。令牌不能修改设置、配置与调度，看不到配置、密钥、cookies、登录链接与截图。
+
+请求时带上 `Authorization: Bearer wat_…`，返回 JSON（Markdown 接口为 `text/markdown`），错误为 `{ error, message }`：401 令牌无效或过期，403 没有权限，404 账号不存在或不能访问，429 认证失败过多。
+
+| 方法与路径（相对子路径） | 权限 | 说明 |
+| --- | --- | --- |
+| `GET api/v1/me` | 任意 | 令牌的名称、权限与能访问的账号 |
+| `GET api/v1/accounts` | `read` | 能访问的账号的状态 |
+| `GET api/v1/accounts/:id` | `read` | 一个账号的状态，另含 `goal`、`challenge`（挑战进度）与 `planned`（待办、今天的分段） |
+| `GET api/v1/accounts/:id/runs` | `read` | 最近的运行，`?limit=`（1–50，默认 10） |
+| `POST api/v1/accounts/:id/runs` | `run` | `{ mode?: "read" \| "login" }` 立即运行，202；已在运行或排队时 409 |
+| `POST api/v1/accounts/:id/stop` | `run` | 停止当前的运行，202 |
+| `GET api/v1/accounts/:id/notes` | `notes` | 笔记同步状态与书单 |
+| `POST api/v1/accounts/:id/notes/sync` | `notes` | 立即同步笔记，202；没有配置 API Key 时 400 |
+| `GET api/v1/accounts/:id/notes/search` | `notes` | `?q=` 搜索划线与想法 |
+| `GET api/v1/accounts/:id/notes/books/:bookId` | `notes` | 一本书按章节整理的划线与想法 |
+| `GET api/v1/accounts/:id/notes/markdown`、`…/notes/books/:bookId/markdown` | `notes` | 全部书或一本书的 Markdown |
+| `GET api/v1/accounts/:id/reports/weekly` | `notes` | 上周的阅读报告 `{ weekStart, weekEnd, text }` |
+
+例如在 iOS 快捷指令或 cron 中立即读一次：
+
+```sh
+curl -X POST -H "Authorization: Bearer wat_…" -H "Content-Type: application/json" \
+  -d '{"mode":"read"}' https://example.com/weread/api/v1/accounts/me/runs
+```
+
+### MCP
+
+支持 MCP（Model Context Protocol）的 AI 助手可以连接子路径下的 `mcp`（例如 `https://example.com/weread/mcp`），用 API 令牌认证（`Authorization: Bearer wat_…`），让助手查询打卡状态、开始阅读、读取与搜索笔记。例如 Claude Code：
+
+```sh
+claude mcp add --transport http weread https://example.com/weread/mcp --header "Authorization: Bearer wat_…"
+```
+
+| 工具 | 权限 | 说明 |
+| --- | --- | --- |
+| `list_accounts` | `read` | 能访问的账号的今日阅读、打卡、连续天数、运行与下次运行时间 |
+| `get_account_status` | `read` | 一个账号的详细状态（同 `GET api/v1/accounts/:id`） |
+| `list_recent_runs` | `read` | 最近的运行（`limit` 1–50） |
+| `start_reading` | `run` | 开始阅读或仅登录（`mode`） |
+| `stop_run` | `run` | 停止当前的运行 |
+| `list_note_books` | `notes` | 笔记同步状态与有笔记的书 |
+| `get_book_notes` | `notes` | 一本书的笔记（Markdown） |
+| `search_notes` | `notes` | 搜索划线与想法 |
+| `sync_notes` | `notes` | 立即同步笔记 |
+| `get_weekly_report` | `notes` | 上周的阅读报告 |
+
+- 工具按令牌的权限列出，没有权限的工具看不到也不能调用；`account_id` 在令牌只能访问一个账号时可以不填。
+- 结果同时有文本（JSON 或 Markdown）与 `structuredContent`；没有权限、账号不存在、已在运行等作为工具错误（`isError: true`）返回，助手能读到原因。
+- 传输：只支持 `POST`（`GET`、`DELETE` 返回 405，不提供服务端推送流），不使用 `Mcp-Session-Id`；协议版本 `2025-06-18` 与 `2025-03-26`，`MCP-Protocol-Version` 为其他值时 400；支持批量请求（最多 20 条）。
+- 带 `Origin` 请求头（浏览器发起）时只接受与面板同源或 `PANEL_PUBLIC_URL` 的，防止 DNS 重绑定。
+- 面板前面有 Cloudflare Access 等登录网关时，`api/v1/` 与 `mcp` 需要放行（它们用令牌认证），否则脚本与助手会被网关挡住。
+
 ### 安全
 
 | 项目 | 做法 |
@@ -547,6 +678,7 @@ data/
 | 关闭密码登录 | 可选，见上文“关闭密码登录”；关闭后密码泄露也不能用来登录 |
 | 登录限速 | 同一 IP 连续失败 5 次后锁定 30 秒，之后每次失败锁定时长翻倍，最长 15 分钟；上次失败 15 分钟后（且不在锁定中）从头计数。正在校验的请求预先占用失败名额：同一 IP 同时校验的请求数不超过距离锁定剩余的失败次数（锁定刚结束时为 1），并发突发不能多试，超出的请求 429（`retryAfter` 为 1 秒）；所有 IP 在 15 分钟内累计失败 100 次后暂停 15 分钟，暂停期间只有本次启动以来、最近 30 天内登录或二次验证成功过的 IP 可以用密码登录（仍按 IP 限速），未认证的请求不能借此挡住这些 IP；passkey 登录（含申请登录参数）与已登录会话的二次验证不受暂停影响，只按 IP 限速：passkey 猜不中，暂停只为分散的密码猜测而设。这份名单与暂停都只在内存中，面板重启后或管理员换了 IP 时密码登录仍可能被暂停挡住，用 passkey 登录或重启面板即可。密码与 passkey 的登录、二次验证以及修改密码时的当前密码共用同一套按 IP 的失败计数与锁定；只有密码登录与修改密码时的当前密码计入全局上限 |
 | 密码哈希 | `panel.json` 中的哈希格式或参数无效（例如被手工改坏）时拒绝启动并提示恢复办法，校验时一律不通过 |
+| API 令牌 | 见“API 令牌与 api/v1”：32 字节随机数，`panel.json` 中只存 SHA-256 哈希，只能访问 `api/v1` 与 `mcp`，按权限与账号限定；面板的管理接口（设置、配置、密钥、备份、令牌、passkey）只接受面板会话。修改面板密码与退出其他设备不影响令牌，不用的令牌请在设置中删除 |
 | 跨站请求伪造 | 修改类请求必须带 `X-WA-Request: 1` 请求头且为 JSON，配合 `SameSite=Strict` |
 | 响应头 | `Content-Security-Policy`（只允许同源脚本、样式与连接，禁止被嵌入；面板主页面额外允许 `'unsafe-eval'`，见“页面”）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`、`Permissions-Policy`（关闭摄像头、麦克风、定位等用不到的能力）；经 HTTPS 访问时（判断方式与会话 cookie 的 `Secure` 相同）`Strict-Transport-Security: max-age=15552000`（不含子域名）；接口响应与面板主页面、登录页 `Cache-Control: no-store` |
 | 文件 | 新建的数据目录 0700（已有的不改）；`panel.json` 权限 0600，已有文件在启动时收紧；账号数据目录 0700，`cookies.json` 与登录二维码图片 0600（等同于登录状态）；初始密码不写入日志文件 |

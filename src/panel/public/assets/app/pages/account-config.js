@@ -19,6 +19,40 @@ export const ConfigTab = {
     // 内置浏览器的资料目录：null 表示还没有读到
     const profile = ref(null);
     const resettingProfile = ref(false);
+    // 测试微信读书 API Key 的结果
+    const officialTest = ref(null);
+    const testingOfficial = ref(false);
+    const hasApiKey = computed(() => Boolean(props.account.overrides && props.account.overrides.wereadApiKey));
+
+    // 每周阅读报告的预览：{ ok, weekStart, weekEnd, text } 或 { ok: false, error }
+    const report = ref(null);
+    const reportBusy = ref("");
+
+    async function weeklyReport(send) {
+      reportBusy.value = send ? "send" : "preview";
+      try {
+        report.value = await api(`accounts/${props.account.id}/reports/weekly${send ? "/send" : ""}`, send ? { method: "POST", body: {} } : undefined);
+        if (send && report.value.ok) {
+          notify("已发送到通知渠道");
+        }
+      } catch (error) {
+        report.value = { ok: false, error: error.message };
+      } finally {
+        reportBusy.value = "";
+      }
+    }
+
+    async function testOfficial() {
+      testingOfficial.value = true;
+      officialTest.value = null;
+      try {
+        officialTest.value = await api(`accounts/${props.account.id}/official/test`, { method: "POST", body: {} });
+      } catch (error) {
+        officialTest.value = { ok: false, error: error.message };
+      } finally {
+        testingOfficial.value = false;
+      }
+    }
 
     // 继承的值：全局默认，未设置时为内置默认
     const inherited = computed(() =>
@@ -77,7 +111,7 @@ export const ConfigTab = {
         await api(`accounts/${props.account.id}`, { method: "DELETE", body: { deleteData: deleteData.value } });
         await refreshAccounts();
         notify("账号已删除");
-        go("/");
+        go("/settings/reading");
       } catch (error) {
         notify(error.message, "error");
       } finally {
@@ -124,6 +158,13 @@ export const ConfigTab = {
       inherited,
       profile,
       resettingProfile,
+      officialTest,
+      report,
+      reportBusy,
+      weeklyReport,
+      testingOfficial,
+      hasApiKey,
+      testOfficial,
       formatBytes,
       saveInfo,
       saveConfig,
@@ -160,6 +201,28 @@ export const ConfigTab = {
     <section>
       <h3>测试通知</h3>
       <test-notification :account-id="account.id" />
+    </section>
+
+    <section>
+      <h3>微信读书 API</h3>
+      <p class="muted">
+        在上面的“微信读书 API”分组中填写本人的 API Key 后，可以同步笔记与划线、读取阅读统计。API Key 在电脑浏览器登录微信读书网页版后，打开
+        <a href="https://weread.qq.com/r/weread-skills" target="_blank" rel="noopener noreferrer">weread.qq.com/r/weread-skills</a> 获取，只发给微信读书。
+      </p>
+      <button type="button" class="secondary" :aria-busy="testingOfficial" :disabled="testingOfficial || !hasApiKey" @click="testOfficial">测试 API Key</button>
+      <p v-if="!hasApiKey" class="muted">还没有填写 API Key。</p>
+      <p v-if="officialTest && officialTest.ok" class="muted">
+        可以使用：有笔记的书 {{ officialTest.totalBookCount }} 本，笔记 {{ officialTest.totalNoteCount }} 条。<template v-if="officialTest.upgradeInfo">（{{ officialTest.upgradeInfo }}）</template>
+      </p>
+      <p v-else-if="officialTest" class="error-text">{{ officialTest.error }}</p>
+      <h4>每周阅读报告</h4>
+      <p class="muted">每周一推送上周的阅读统计（开关在上面的“微信读书 API”分组，时间在“设置”中调整）。可以先预览，或立即发送到本账号的通知渠道。</p>
+      <div class="notes-actions">
+        <button type="button" class="secondary" :aria-busy="reportBusy === 'preview'" :disabled="Boolean(reportBusy) || !hasApiKey" @click="weeklyReport(false)">预览上周报告</button>
+        <button type="button" class="secondary" :aria-busy="reportBusy === 'send'" :disabled="Boolean(reportBusy) || !hasApiKey" @click="weeklyReport(true)">立即发送</button>
+      </div>
+      <pre v-if="report && report.ok" class="weekly-report">{{ report.text }}</pre>
+      <p v-else-if="report" class="error-text">{{ report.error }}</p>
     </section>
 
     <section>
