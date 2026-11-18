@@ -6,14 +6,13 @@ import { CalendarTab } from "./account-calendar.js";
 import { ConfigTab } from "./account-config.js";
 import { HistoryTab } from "./account-history.js";
 import { LiveTab } from "./account-live.js";
-import { NotesTab } from "./account-notes.js";
 import { SchedulesTab } from "./account-schedules.js";
 
-const TABS = ["live", "history", "calendar", "notes", "schedules", "config"].map((name) => [name, ACCOUNT_TAB_LABELS[name]]);
+const TABS = ["live", "history", "calendar", "schedules", "config"].map((name) => [name, ACCOUNT_TAB_LABELS[name]]);
 
 export const AccountPage = {
-  components: { CalendarTab, ConfigTab, HistoryTab, LiveTab, NotesTab, SchedulesTab, StatusBadge },
-  props: { id: String, tab: String, date: String, book: String },
+  components: { CalendarTab, ConfigTab, HistoryTab, LiveTab, SchedulesTab, StatusBadge },
+  props: { id: String, tab: String, date: String },
   setup(props) {
     const account = computed(() => state.accounts.find((item) => item.id === props.id));
     const run = computed(() => state.runs[props.id]);
@@ -35,12 +34,11 @@ export const AccountPage = {
       <live-tab v-if="tab === 'live'" :account="account" />
       <history-tab v-else-if="tab === 'history'" :key="'h-' + account.id + date" :account="account" :date="date" />
       <calendar-tab v-else-if="tab === 'calendar'" :key="'c-' + account.id" :account="account" />
-      <notes-tab v-else-if="tab === 'notes'" :key="'n-' + account.id" :account="account" :book="book" />
       <schedules-tab v-else-if="tab === 'schedules'" :key="'s-' + account.id" :account="account" />
       <config-tab v-else-if="tab === 'config'" :key="'o-' + account.id" :account="account" />
     </template>
     <article v-else>
       <p>账号不存在：{{ id }}</p>
-      <a href="#/">返回总览</a>
+      <a href="#/settings/reading">返回自动阅读</a>
     </article>`,
 };

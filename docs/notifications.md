@@ -83,7 +83,7 @@
 | `done` | 阅读完成时通知（`notifyOnDone`，开） | 阅读完成 | 阅读完成 | `active` / `success` |
 | `failure` | 等待扫码超时或运行出错时通知（`notifyOnFailure`，开） | 等待扫码超时或运行出错 | 运行失败 | `critical` / `alarm` |
 | `checkinWarning` | 晚间还没打卡时提醒（`notifyOnCheckinWarning`，开；时间 `checkinWarningAt`，默认 `21:30`） | 由面板的计划器发送：到提醒时间（面板时区）今天还不到 5 分钟，且没有正在进行、待执行或今天还会进行的运行（定时、重试、每日目标补跑），只提醒有启用的调度规则、每日目标或分段阅读的账号，每个账号每天最多一次；配置了 `PANEL_PUBLIC_URL` 时附账号页面的链接 | 今天还没打卡 | `timeSensitive` / `alarm` |
-| `weeklyReport` | 每周阅读报告（`notifyOnWeeklyReport`，开；在“微信读书 API”分组，需要填写 API Key） | 由面板发送：每周一到面板设置 `weeklyReportAt`（默认 `09:00`，面板时区）之后，用微信读书 API 读取上周与前一周的阅读统计：阅读时长与天数、自然日均、与前一周相比、读得最多的 3 本书，以及上周新增的划线与想法（来自已同步的笔记）。每个账号每周一次；配置了 `PANEL_PUBLIC_URL` 时附账号笔记页面的链接 | 上周阅读报告 | `passive` / `success` |
+| `weeklyReport` | 每周阅读报告（`notifyOnWeeklyReport`，开；在“微信读书 API”分组，需要填写 API Key） | 由面板发送：每周一到面板设置 `weeklyReportAt`（默认 `09:00`，面板时区）之后，用微信读书 API 读取上周与前一周的阅读统计：阅读时长与天数、自然日均、与前一周相比、读得最多的 3 本书，以及上周新增的划线与想法（来自已同步的笔记）。每个账号每周一次；配置了 `PANEL_PUBLIC_URL` 时附账号笔记的链接（打开后切换到该账号的书库） | 上周阅读报告 | `passive` / `success` |
 
 ### 登录链接推送
 

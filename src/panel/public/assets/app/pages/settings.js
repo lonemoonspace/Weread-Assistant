@@ -13,6 +13,8 @@ const COMMON_TIMEZONES = ["Asia/Shanghai", "Asia/Hong_Kong", "Asia/Taipei", "Asi
 // 设置：面板设置、全局默认运行配置、测试通知、登录方式（passkey 与面板密码）
 export const SettingsPage = {
   components: { BackupPanel, ConfigForm, ReauthDialog, TestNotification },
+  // general：面板与全局默认配置；security：登录方式；backup：备份与迁移、关于
+  props: { section: { type: String, default: "general" } },
   setup() {
     const panel = reactive({});
     const savingPanel = ref(false);
@@ -272,8 +274,8 @@ export const SettingsPage = {
     };
   },
   template: `
-    <h2>设置</h2>
-
+    <template v-if="section === 'general'">
+    <h2>面板与默认配置</h2>
     <section>
       <h3>面板</h3>
       <form @submit.prevent="savePanel">
@@ -306,7 +308,10 @@ export const SettingsPage = {
       <h4>测试通知</h4>
       <test-notification />
     </section>
+    </template>
 
+    <template v-else-if="section === 'security'">
+    <h2>登录与安全</h2>
     <section>
       <h3>登录方式</h3>
       <h4>passkey</h4>
@@ -382,14 +387,17 @@ export const SettingsPage = {
         @click="logoutOthers"
       >退出其他设备</button>
     </section>
+    </template>
 
+    <template v-else-if="section === 'backup'">
+    <h2>备份与迁移</h2>
     <section>
-      <h3>备份与迁移</h3>
       <backup-panel />
     </section>
 
     <section>
       <h3>关于</h3>
       <p>WeReadAssistant {{ state.session.version }}。非微信读书官方工具，与腾讯无关；打卡统计按本工具的运行记录计算，非微信读书官方数据。</p>
-    </section>`,
+    </section>
+    </template>`,
 };

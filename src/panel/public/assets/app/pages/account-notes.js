@@ -61,7 +61,7 @@ const NotesBook = {
   },
   template: `
     <section class="notes-book">
-      <p><a :href="'#/accounts/' + account.id + '/notes'">← 返回书单</a></p>
+      <p><a href="#/library">← 返回书单</a></p>
       <p v-if="error" class="error-text">{{ error }}</p>
       <p v-else-if="!data" aria-busy="true">正在读取…</p>
       <template v-else>
@@ -227,7 +227,7 @@ export const NotesTab = {
             <tbody>
               <tr v-for="item in books" :key="item.bookId" :class="{ 'notes-removed': item.removed }">
                 <td data-label="书">
-                  <a :href="'#/accounts/' + account.id + '/notes/' + item.bookId">{{ item.title }}</a>
+                  <a :href="'#/library/' + item.bookId">{{ item.title }}</a>
                   <br><small class="muted">{{ item.author }}<template v-if="item.finished"> · 已读完</template><template v-else-if="item.readingProgress"> · 读到 {{ item.readingProgress }}%</template><template v-if="item.removed"> · 已没有笔记（保留备份）</template></small>
                 </td>
                 <td data-label="划线">{{ item.highlightCount ?? "-" }}</td>
@@ -244,7 +244,7 @@ export const NotesTab = {
         <template v-if="results">
           <p v-if="!results.hits.length && !searching" class="muted">没有找到。</p>
           <article v-for="(hit, index) in results.hits" :key="index" class="note-entry">
-            <small class="muted"><a :href="'#/accounts/' + account.id + '/notes/' + hit.bookId">《{{ hit.title }}》</a><template v-if="hit.chapter"> · {{ hit.chapter }}</template></small>
+            <small class="muted"><a :href="'#/library/' + hit.bookId">《{{ hit.title }}》</a><template v-if="hit.chapter"> · {{ hit.chapter }}</template></small>
             <blockquote v-if="hit.text"><highlighted :text="hit.text" :query="query" /></blockquote>
             <p v-for="(review, i) in hit.reviews" :key="i" class="note-review"><highlighted :text="review" :query="query" /></p>
           </article>
