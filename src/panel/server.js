@@ -8,6 +8,7 @@ const { cleanupRuns } = require("./history");
 const { CSRF_HEADER, SESSION_COOKIE, createSessionCookies, csrfGuard, securityHeaders } = require("./http/security");
 const { identifySession, passwordLoginState, requireSession } = require("./http/session");
 const { accountRoutes } = require("./http/routes/accounts");
+const { officialRoutes } = require("./http/routes/official");
 const { authRoutes, publicAuthRoutes } = require("./http/routes/auth");
 const { BACKUP_IMPORT_PATH, backupRoutes } = require("./http/routes/backup");
 const { eventRoutes } = require("./http/routes/events");
@@ -19,6 +20,8 @@ const { acquirePanelLock } = require("./lock");
 const { passkeyRelyingParty } = require("./options");
 const { createPasskeys } = require("./passkeys");
 const { createPlanner } = require("./planner");
+const { createNotesService } = require("./notes");
+const { createReportService } = require("./reports");
 const { createRunner } = require("./runner");
 const { cleanupRunTempDirs } = require("./runner/process");
 const { markInterruptedRuns, restrictRunDirs } = require("./runs");
@@ -35,11 +38,20 @@ const KEEP_ALIVE_TIMEOUT_MS = 95000;
 // 组装面板应用。各组接口见 http/routes/：中间件的先后决定哪些接口需要登录，挂载顺序不能随意调整
 function createPanelApp(
   options,
-  { auth, store, runner, passkeys, planner = null, checkLocalBrowser = createLocalBrowserChecker(process.env, { timeoutMs: options.browserVersionTimeoutMs }) }
+  {
+    auth,
+    store,
+    runner,
+    passkeys,
+    planner = null,
+    notes = null,
+    reports = null,
+    checkLocalBrowser = createLocalBrowserChecker(process.env, { timeoutMs: options.browserVersionTimeoutMs }),
+  }
 ) {
   const cookies = createSessionCookies(options);
   // 各组接口共用的依赖
-  const ctx = { options, dataDir: path.resolve(options.dataDir), auth, store, runner, passkeys, planner, checkLocalBrowser, cookies };
+  const ctx = { options, dataDir: path.resolve(options.dataDir), auth, store, runner, passkeys, planner, notes, reports, checkLocalBrowser, cookies };
 
   const app = express();
   app.disable("x-powered-by");
@@ -79,6 +91,7 @@ function createPanelApp(
   api.use(authRoutes(ctx));
   api.use(settingsRoutes(ctx));
   api.use(accountRoutes(ctx));
+  api.use(officialRoutes(ctx));
   api.use(runRoutes(ctx));
   api.use(statsRoutes(ctx));
   api.use(eventRoutes(ctx));
@@ -121,6 +134,8 @@ async function startPanel(options) {
   let runner;
   let scheduler;
   let planner;
+  let notes;
+  let reports;
   let cleanupTimer;
   let auth;
   try {
@@ -196,7 +211,11 @@ async function startPanel(options) {
         setImmediate(cleanup);
       }
     });
-    const app = createPanelApp(options, { auth, store, runner, passkeys, planner, checkLocalBrowser });
+    // options.notes：测试时替换时钟、去掉请求间隔
+    notes = createNotesService({ dataDir: options.dataDir, store, officialOptions: options.officialApi, ...options.notes });
+    // options.reports：测试时替换时钟与发送
+    reports = createReportService({ dataDir: options.dataDir, store, notes, officialOptions: options.officialApi, publicUrl: options.publicUrl, ...options.reports });
+    const app = createPanelApp(options, { auth, store, runner, passkeys, planner, notes, reports, checkLocalBrowser });
     scheduler = createScheduler({ store, runner, onFire: (accountId, rule) => planner.fireSchedule(accountId, rule) });
     server = http.createServer(app);
     // 面板通常在 cloudflared、nginx 等反向代理之后：空闲连接的保持时间要长于代理的（常见为 60–90 秒），
@@ -217,6 +236,8 @@ async function startPanel(options) {
     // 启动后在后台检查一次内置浏览器，之后的运行直接使用这次的结果
     checkLocalBrowser().catch(() => {});
     planner.start();
+    notes.start();
+    reports.start();
 
     // 停止：不再接受新连接；结束进行中的运行（期间实时推送仍可送达）；断开剩余连接后释放锁
     let closing = null;
@@ -228,6 +249,8 @@ async function startPanel(options) {
       planner.beginClose();
       await runner.close();
       planner.close();
+      await notes.close();
+      await reports.close();
       server.closeAllConnections();
       await serverClosed;
       auth.close();
@@ -239,6 +262,8 @@ async function startPanel(options) {
       runner,
       scheduler,
       planner,
+      notes,
+      reports,
       port: server.address().port,
       generatedPassword,
       close: () => {
@@ -253,6 +278,12 @@ async function startPanel(options) {
     }
     if (planner) {
       planner.close();
+    }
+    if (notes) {
+      notes.close();
+    }
+    if (reports) {
+      reports.close();
     }
     if (auth) {
       auth.close();

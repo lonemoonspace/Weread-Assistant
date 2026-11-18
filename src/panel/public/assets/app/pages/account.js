@@ -39,6 +39,6 @@ export const AccountPage = {
     </template>
     <article v-else>
       <p>账号不存在：{{ id }}</p>
-      <a href="#/">返回总览</a>
+      <a href="#/settings/reading">返回自动阅读</a>
     </article>`,
 };
