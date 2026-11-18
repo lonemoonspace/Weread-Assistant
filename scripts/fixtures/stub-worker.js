@@ -48,7 +48,7 @@ async function exit(code) {
   process.exit(code);
 }
 
-process.once("message", async ({ mode, config, screenshotDir, panelLink, browserStatus, retry, goalDeficit }) => {
+process.once("message", async ({ mode, config, screenshotDir, panelLink, browserStatus, retry, goalDeficit, resumeAfterLogin }) => {
   const id = path.basename(config.dataDir);
   if (browserStatus) {
     log(`面板下发的内置浏览器：${browserStatus.message}`);
@@ -70,7 +70,7 @@ process.once("message", async ({ mode, config, screenshotDir, panelLink, browser
   log(`环境变量: ${JSON.stringify(Object.keys(process.env).sort())}`);
   log(`TMPDIR=${process.env.TMPDIR}`);
   log(`barkKey 已下发: ${Boolean(config.barkKey)}`);
-  log(`retry=${JSON.stringify(retry || null)} duration=${config.duration} goalDeficit=${goalDeficit || 0}`);
+  log(`retry=${JSON.stringify(retry || null)} duration=${config.duration} goalDeficit=${goalDeficit || 0} resumeAfterLogin=${resumeAfterLogin === true}`);
   // 模拟子进程不小心打印了密钥与登录链接，面板写入日志前应替换为掩码
   log(`模拟泄露: https://api.day.app/${config.barkKey} https://weread.qq.com/web/confirm?uid=${id}-uid&from=stub`);
   send("started", { version: "stub" });
