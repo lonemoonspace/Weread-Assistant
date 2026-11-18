@@ -4,7 +4,7 @@
 
 | 组件 | 职责 | 输入 | 输出 | 依赖 | 关键约束 |
 | --- | --- | --- | --- | --- | --- |
-| `scripts/runtime-smoke.js docker` | 验证当前 `Dockerfile` 构建出的镜像：CLI 可运行，面板健康检查通过、以 `node` 用户在 tini 下运行、内置浏览器可用、数据文件属主正确、能及时停止 | 当前仓库源码、Docker daemon | 构建日志、通过/失败状态 | Docker | 不依赖扫码登录或 Selenium |
+| `scripts/runtime-smoke.js docker` | 验证当前 `Dockerfile` 构建出的镜像：CLI 可运行，镜像中没有 npm/npx/corepack/yarn，面板健康检查通过、以 `node` 用户在 tini 下运行、内置浏览器可用、数据文件属主正确、能及时停止 | 当前仓库源码、Docker daemon | 构建日志、通过/失败状态 | Docker | 不依赖扫码登录或 Selenium |
 
 ### 流程
 
@@ -15,7 +15,8 @@ flowchart TD
   B -->|已设置| D[使用已有镜像]
   C --> E[docker run 执行 node src/cli.js help 并校验输出]
   D --> E
-  E --> F[挂载 root 属主的临时目录启动面板容器]
+  E --> E2[检查镜像中没有 npm、npx、corepack、yarn]
+  E2 --> F[挂载 root 属主的临时目录启动面板容器]
   F --> G[等待健康检查通过]
   G --> H[检查进程用户与 tini、内置浏览器版本、panel.json 属主与权限、初始密码日志]
   H --> I[docker stop 并计时]
@@ -29,6 +30,7 @@ flowchart TD
 | 验证边界 | 只验证镜像入口与面板启动，不做真实登录、扫码或阅读 |
 | 容器来源 | 默认基于当前工作树里的 `Dockerfile` 本地构建；设置 `RUNTIME_SMOKE_IMAGE` 时直接使用该镜像，结束后不删除 |
 | 架构 | 设置 `RUNTIME_SMOKE_ARCH`（如 `arm64`）时，镜像的架构与容器内 Node.js 报告的架构都必须与之一致（Node.js 把 amd64 报告为 `x64`）；CI 与发布流程在 amd64、arm64 的原生 runner 上各运行一次，用它确认检查的确实是本架构的镜像 |
+| 包管理器 | 运行时只需要 `node`：`npm`、`npx`、`corepack`、`yarn`、`yarnpkg` 都不能在 PATH 中，`/usr/local/lib/node_modules` 下不能有 `npm`、`corepack`、`yarn`（#55）；只检查这几个名字，基础镜像带别的全局包不算失败 |
 | 校验关键字 | 帮助输出需包含 `src/cli.js run`、`help`、`SELENIUM_URL` 与 `PANEL_PORT` |
 | 安全选项 | 与 `docker-compose.yml` 一致，以 `--security-opt no-new-privileges:true` 启动面板容器：入口脚本用 su-exec 降权，不依赖 setuid 程序 |
 | 健康检查 | 运行时把检查间隔缩短为 2 秒，60 秒内需变为 `healthy` |
