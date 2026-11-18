@@ -17,7 +17,7 @@ const EDITABLE_FIELDS = CONFIG_SCHEMA.filter((field) => !PANEL_MANAGED_KEYS.has(
 const FIELD_BY_KEY = new Map(EDITABLE_FIELDS.map((field) => [field.key, field]));
 
 function describeField(field) {
-  const { key, type, group, label, description, options, min, max, secret } = field;
+  const { key, type, group, label, description, options, min, max, secret, accountOnly } = field;
   return {
     key,
     type,
@@ -29,6 +29,7 @@ function describeField(field) {
     min: min === undefined ? null : min,
     max: max === undefined ? null : max,
     secret: Boolean(secret),
+    accountOnly: Boolean(accountOnly),
   };
 }
 
@@ -127,7 +128,8 @@ function validateFormat(field, value) {
 
 // 按 patch 修改一组配置值（全局默认或账号覆盖）并返回新对象。
 // null 或空字符串表示删除该项、回到上一级的值；密钥字段提交空字符串或掩码表示不修改
-function applyConfigPatch(current, patch) {
+// scope 为 "defaults" 时拒绝只能在账号中设置的项
+function applyConfigPatch(current, patch, { scope = "account" } = {}) {
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
     throw badRequest("配置必须是对象");
   }
@@ -136,6 +138,9 @@ function applyConfigPatch(current, patch) {
     const field = FIELD_BY_KEY.get(key);
     if (!field) {
       throw badRequest(`未知的配置项：${key}`);
+    }
+    if (scope === "defaults" && field.accountOnly && rawValue !== null && rawValue !== "") {
+      throw badRequest(`${field.label}只能在账号中设置`);
     }
     if (field.secret && (rawValue === "" || rawValue === SECRET_MASK)) {
       continue;

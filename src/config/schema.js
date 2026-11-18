@@ -1,6 +1,7 @@
 // 运行配置项清单：面板表单与配置校验都以此为准。key 为配置对象中的字段名，label 用于表单与错误提示。
 // format: "url" 表示 http(s) 地址，hosts 限定域名；pattern 为取值须匹配的正则，patternHint 为不匹配时的提示。
-// 这两类校验只在面板保存时进行，已保存的旧值与环境变量照常加载，运行时再由原有逻辑报错
+// 这两类校验只在面板保存时进行，已保存的旧值与环境变量照常加载，运行时再由原有逻辑报错。
+// accountOnly 表示只能在账号中设置（与具体用户绑定，例如微信读书 API Key），全局默认中不显示也不接受
 const CONFIG_GROUPS = [
   { id: "reading", label: "阅读" },
   { id: "browser", label: "浏览器" },
@@ -10,6 +11,7 @@ const CONFIG_GROUPS = [
   { id: "telegram", label: "Telegram" },
   { id: "email", label: "邮件通知" },
   { id: "events", label: "通知事件" },
+  { id: "official", label: "微信读书 API" },
   { id: "advanced", label: "高级" },
 ];
 
@@ -393,6 +395,28 @@ const CONFIG_SCHEMA = [
     default: "21:30",
     pattern: /^(?:[01]\d|2[0-3]):[0-5]\d$/,
     patternHint: "格式为 HH:MM，例如 21:30",
+  },
+  {
+    key: "wereadApiKey",
+    type: "string",
+    group: "official",
+    label: "微信读书 API Key",
+    description:
+      "微信读书官方提供的只读 API Key（wrk-…），在电脑浏览器登录微信读书网页版后打开 weread.qq.com/r/weread-skills 获取。用于同步本人的笔记与划线、阅读统计；只发给微信读书，只在账号中填写，不要放在全局默认里。",
+    secret: true,
+    accountOnly: true,
+    default: "",
+    pattern: /^wrk-[!-~]{8,200}$/,
+    patternHint: "形如 wrk-xxxxxxxx",
+  },
+  {
+    key: "notifyOnWeeklyReport",
+    type: "boolean",
+    group: "official",
+    label: "每周阅读报告",
+    description:
+      "填写了 API Key 时，每周一（时间在面板设置中调整，默认 09:00）经通知渠道推送上周的阅读统计：阅读时长与天数、与前一周相比、读得最多的书，以及上周新增的划线与想法（来自已同步的笔记）。数据来自微信读书，包含在手机上的阅读。只在面板中生效。",
+    default: true,
   },
   {
     key: "accountName",

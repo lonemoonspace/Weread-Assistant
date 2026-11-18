@@ -187,7 +187,7 @@ export const StatsPage = {
   template: `
     <section class="stats-page">
       <div class="stats-head">
-        <h2>统计</h2>
+        <h1 class="page-title">阅读报告</h1>
         <div class="stats-controls">
           <select aria-label="统计范围" :value="target" @change="chooseAccount">
             <option value="all">全部账号</option>
