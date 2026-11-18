@@ -111,7 +111,7 @@ export const ConfigTab = {
         await api(`accounts/${props.account.id}`, { method: "DELETE", body: { deleteData: deleteData.value } });
         await refreshAccounts();
         notify("账号已删除");
-        go("/");
+        go("/settings/reading");
       } catch (error) {
         notify(error.message, "error");
       } finally {

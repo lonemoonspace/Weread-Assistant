@@ -6,6 +6,7 @@ const { fetchBookNotes, fetchNotebooks, organizeNotes, renderBookMarkdown } = re
 const { ensurePrivateDir, writeFileAtomic } = require("../shared/files");
 const { accountDataDir, resolveAccountConfig } = require("./config");
 const { dateInZone } = require("./dates");
+const { buildJournal, flattenNotes } = require("./journal");
 
 /**
  * 笔记同步：用账号的微信读书 API Key 读取本人的笔记，保存到账号数据目录的 notes/ 中：
@@ -197,6 +198,24 @@ function createNotesService({ dataDir, store, officialOptions = {}, clock = syst
       .filter((saved) => saved && Array.isArray(saved.highlights) && Array.isArray(saved.reviews));
   }
 
+  // 读书日记：按日期排列的笔记。摊平后的笔记按账号缓存，同步（成功或失败）后与时区变化后重建
+  const journalCache = new Map();
+  function journal(accountId, { before = "" } = {}) {
+    const index = readIndex(accountId);
+    const { timezone } = store.get().settings;
+    const today = dateInZone(new Date(clock.now()), timezone);
+    if (!index || !index.syncedAt) {
+      return { synced: false, ...buildJournal([], { today, before }) };
+    }
+    const key = `${index.syncedAt}|${index.lastErrorAt || ""}|${timezone}`;
+    let cached = journalCache.get(accountId);
+    if (!cached || cached.key !== key) {
+      cached = { key, items: flattenNotes(syncedBooks(accountId) || [], timezone) };
+      journalCache.set(accountId, cached);
+    }
+    return { synced: true, ...buildJournal(cached.items, { today, before }) };
+  }
+
   // 全部书的 Markdown 合成一份（按书单顺序，已没有笔记的书在最后）；还没有同步过时为 null
   function allMarkdown(accountId) {
     const index = readIndex(accountId);
@@ -350,6 +369,7 @@ function createNotesService({ dataDir, store, officialOptions = {}, clock = syst
     markdownText,
     search,
     syncedBooks,
+    journal,
     sync,
     tick,
     isRunning: (accountId) => running.has(accountId),
