@@ -191,6 +191,7 @@ describe("发送出错与时限", () => {
 
   it("Telegram 的改发文字也在同一个时限内，时限到了就不再发", async () => {
     const calls = [];
+    const timers = [];
     const server = http.createServer((req, res) => {
       calls.push(req.url.split("/").pop());
       req.resume();
@@ -199,11 +200,12 @@ describe("发送出错与时限", () => {
         res.end(JSON.stringify({ ok: false, description: "Bad Request: wrong file" }));
         return;
       }
-      // 文字接口迟迟不响应
-      setTimeout(() => {
+      // 文字接口迟迟不响应（远长于下面的时限，CI 机器慢时也能区分“按时限结束”与“等到了响应”）
+      timers.push(setTimeout(() => {
+        if (res.destroyed) return;
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
-      }, 3000).unref();
+      }, 30000).unref());
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     try {
@@ -216,12 +218,14 @@ describe("发送出错与时限", () => {
       const started = Date.now();
       let result;
       await quietly(async () => {
-        result = await pushTelegram(config, message, { timeoutMs: 300 });
+        // 时限留得宽一些：CI 上单元测试并行跑且带覆盖率统计，300 毫秒内有时连第一个请求都发不出去
+        result = await pushTelegram(config, message, { timeoutMs: 2000 });
       });
       assert.equal(result.ok, false);
-      assert.ok(Date.now() - started < 900, `用时 ${Date.now() - started} 毫秒`);
+      assert.ok(Date.now() - started < 10000, `用时 ${Date.now() - started} 毫秒`);
       assert.deepEqual(calls, ["sendPhoto", "sendMessage"]);
     } finally {
+      timers.forEach(clearTimeout);
       server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
     }

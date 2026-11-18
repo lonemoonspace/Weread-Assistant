@@ -244,6 +244,7 @@ export const StatsPage = {
             <template v-else>累计时长已满足，</template>
             还能漏 {{ data.challenge.missesLeft }} 天（已漏 {{ data.challenge.missedDays }} 天）
           </p>
+          <p v-if="data.challenge.calibration" class="muted">含 {{ data.challenge.calibration.asOf }} 的 App 校准值</p>
         </article>
 
         <article class="chart-card">
