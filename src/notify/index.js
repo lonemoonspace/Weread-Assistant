@@ -20,6 +20,8 @@ const NOTIFY_EVENTS = {
   failure: { toggle: "notifyOnFailure", subtitle: "运行失败", level: "critical", sound: "alarm" },
   // 由面板的计划器发送
   checkinWarning: { toggle: "notifyOnCheckinWarning", subtitle: "今天还没打卡", level: "timeSensitive", sound: "alarm" },
+  // 由面板的每周阅读报告发送
+  weeklyReport: { toggle: "notifyOnWeeklyReport", subtitle: "上周阅读报告", level: "passive", sound: "success" },
 };
 
 const PANEL_ONLY_TEXT = "需要扫码登录，但未能从二维码中解析出登录链接，请在面板中扫码。";
