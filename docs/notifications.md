@@ -82,7 +82,7 @@
 | `loginSuccess` | 登录成功时通知（`notifyOnLoginSuccess`，关） | 登录成功并打开书籍（仅登录模式下为保存 cookies 后） | 登录成功 | `active` / `birdsong` |
 | `done` | 阅读完成时通知（`notifyOnDone`，开） | 阅读完成 | 阅读完成 | `active` / `success` |
 | `failure` | 等待扫码超时或运行出错时通知（`notifyOnFailure`，开） | 等待扫码超时或运行出错 | 运行失败 | `critical` / `alarm` |
-| `checkinWarning` | 晚间还没打卡时提醒（`notifyOnCheckinWarning`，开；时间 `checkinWarningAt`，默认 `21:30`） | 由面板的计划器发送：到提醒时间（面板时区）今天还不到 5 分钟，且没有正在进行、待执行或今天还会进行的运行（定时、重试、每日目标补跑），每个账号每天最多一次；配置了 `PANEL_PUBLIC_URL` 时附账号页面的链接 | 今天还没打卡 | `timeSensitive` / `alarm` |
+| `checkinWarning` | 晚间还没打卡时提醒（`notifyOnCheckinWarning`，开；时间 `checkinWarningAt`，默认 `21:30`） | 由面板的计划器发送：到提醒时间（面板时区）今天还不到 5 分钟，且没有正在进行、待执行或今天还会进行的运行（定时、重试、每日目标补跑），只提醒有启用的调度规则、每日目标或分段阅读的账号，每个账号每天最多一次；配置了 `PANEL_PUBLIC_URL` 时附账号页面的链接 | 今天还没打卡 | `timeSensitive` / `alarm` |
 
 ### 登录链接推送
 
