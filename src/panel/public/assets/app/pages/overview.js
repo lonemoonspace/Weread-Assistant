@@ -84,6 +84,7 @@ const AccountCard = {
       </p>
       <p class="muted">下次运行：{{ account.nextRunAt ? formatNextRun(account.nextRunAt, account.nextRunJitterMinutes, tz) : "未设置调度" }}</p>
       <p v-if="planned" class="muted">待办：{{ formatPlanned(planned, tz) }}</p>
+      <p v-if="account.planned && account.planned.catchups.waitingLogin" class="callout callout-warn" role="note">自动运行扫码超时，点「仅登录」重新登录后会自动补读</p>
       <footer>
         <run-buttons :account="account" />
       </footer>
