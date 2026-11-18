@@ -199,6 +199,25 @@ describe("计划器中的分段阅读", () => {
     again.close();
   });
 
+  it("只开了分段阅读的账号也算每天应该打卡：今天的段都过去了还没打卡时提醒", async () => {
+    await store.update((data) => {
+      data.accounts[0].split = normalizeSplit({ ...SPLIT, minutes: 30, from: "07:00", to: "12:00" });
+    });
+    const warnings = [];
+    const planner = createPlanner({ dataDir, store, runner, clock, warn: async (config, body) => warnings.push(body) });
+    now = at("06:00");
+    quietly(() => planner.recover());
+    for (const segment of planner.accountStatus("a1").split.segments) {
+      now = Date.parse(segment.at);
+      quietly(() => planner.tick());
+    }
+    assert.ok(planner.accountStatus("a1").split.segments.every((segment) => segment.status !== "planned"));
+    now = at("21:30");
+    quietly(() => planner.tick());
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /^今天只读了 0 分钟/);
+  });
+
   it("还有没开始的段时不发断签预警", async () => {
     const warnings = [];
     now = at("21:30");
