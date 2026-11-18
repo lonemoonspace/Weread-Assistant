@@ -9,7 +9,7 @@ const { ensurePrivateDir } = require("../../shared/files");
 const { findAccount } = require("../accounts");
 const { accountDataDir, resolveAccountConfig } = require("../config");
 const { PanelError, badRequest } = require("../errors");
-const { retriesLeftFor } = require("../retry");
+const { AUTO_TRIGGERS, retriesLeftFor } = require("../retry");
 const { newRunId, runDir, writeRunMeta } = require("../runs");
 const { applyWorkerEvent, exitOutcome, fillMinuteMarks } = require("./events");
 const {
@@ -298,7 +298,8 @@ function createRunner({
     // 配置了面板外网地址时，扫码推送附带该账号实时页面的链接
     const panelLink = publicUrl ? `${publicUrl}#/accounts/${run.accountId}/live` : "";
     const browserStatus = config.seleniumUrl ? null : localBrowserStatus();
-    // retry：子进程据此决定失败时是否发送通知（还会重试时不发）；goalDeficit：补跑时当天还差的分钟数，写进扫码超时的通知
+    // retry：子进程据此决定失败时是否发送通知（还会重试时不发）；goalDeficit：补跑时当天还差的分钟数，写进扫码超时的通知；
+    // resumeAfterLogin：自动触发的阅读扫码超时后，计划器会在重新登录后补读（planner.js 的 waitForLogin），通知里提示
     const retry = { attempt: run.attempt, retriesLeft: run.retriesLeft };
     child.send({
       type: "start",
@@ -309,6 +310,7 @@ function createRunner({
       browserStatus,
       retry,
       goalDeficit: run.goalDeficit,
+      resumeAfterLogin: run.mode === "read" && AUTO_TRIGGERS.includes(run.trigger),
       ...startOptions,
     });
 
