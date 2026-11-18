@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { PanelError, badRequest, rejectUnsafeName } = require("./errors");
 const { normalizeChallenge } = require("./challenge");
+const { dateInZone } = require("./dates");
 const { ACCOUNT_ID_PATTERN, accountDataDir, applyConfigPatch, maskValues } = require("./config");
 const { nextRunInfo, publicSchedule } = require("./schedules");
 const { ensurePrivateDir } = require("../shared/files");
@@ -113,7 +114,7 @@ async function updateAccount(store, id, body = {}) {
       account.overrides = applyConfigPatch(account.overrides, body.overrides);
     }
     if (body.challenge !== undefined) {
-      account.challenge = normalizeChallenge(body.challenge);
+      account.challenge = normalizeChallenge(body.challenge, { today: dateInZone(new Date(), draft.settings.timezone) });
     }
   });
   return findAccount(data, id);
