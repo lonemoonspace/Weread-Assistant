@@ -38,7 +38,7 @@ function accountRoutes({ dataDir, store, runner, planner }) {
   };
   const goalView = (account, timezone) => ({
     timezone,
-    ...publicGoal(account.goal, account.challenge),
+    ...publicGoal(account.goal, account.challenge, challengeProgress(dataDir, account, { timezone })),
     today: todayStats(dataDir, account.id, { timezone }),
     planned: plannedView(account.id, timezone),
   });
