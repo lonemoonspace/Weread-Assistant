@@ -5,6 +5,7 @@ const os = require("os");
 const path = require("path");
 const { PanelError } = require("../../src/panel/errors");
 const { catchupWindowMinutes, normalizeGoal, publicGoal, storedGoal, suggestedGoalMinutes } = require("../../src/panel/goal");
+const { normalizeChallenge, storedChallenge } = require("../../src/panel/challenge");
 const { createPlanner, zonedTime } = require("../../src/panel/planner");
 const { retriesLeftFor, retryDelayMs } = require("../../src/panel/retry");
 const { describeSchedule, nextRunInfo, normalizeSchedules } = require("../../src/panel/schedules");
@@ -62,6 +63,27 @@ describe("每日目标", () => {
     assert.equal(suggestedGoalMinutes({ type: "month" }), 60);
     assert.equal(suggestedGoalMinutes({ type: "year" }), 50);
     assert.equal(suggestedGoalMinutes(null), null);
+  });
+
+  it("有挑战进度（含校准）时按剩余天数建议，至少 5 分钟；已结束时按规则平均", () => {
+    const challenge = { type: "month" };
+    const progress = (status, minutesPerDayNeeded) => ({ status, minutesPerDayNeeded });
+    assert.equal(publicGoal(null, challenge, progress("active", 71)).suggestedMinutes, 75);
+    assert.equal(publicGoal(null, challenge, progress("active", 0)).suggestedMinutes, 5, "时长已够时只需打卡");
+    assert.equal(publicGoal(null, challenge, progress("ended", null)).suggestedMinutes, 60);
+    assert.equal(publicGoal(null, challenge).suggestedMinutes, 60);
+    assert.equal(publicGoal(null, challenge, progress("active", 5000)).suggestedMinutes, 1440, "不超过每日目标的上限");
+  });
+
+  it("校准日期不能晚于今天（保存时）；panel.json 中无效的校准加载时去掉", () => {
+    const raw = { type: "month", startDate: "2026-04-01", calibration: { asOf: "2026-04-10", minutes: 60, checkedDays: 2 } };
+    assert.throws(() => normalizeChallenge(raw, { today: "2026-04-09" }), /不能晚于今天（2026-04-09）/);
+    assert.deepEqual(normalizeChallenge(raw, { today: "2026-04-10" }).calibration, raw.calibration);
+    assert.deepEqual(normalizeChallenge(raw).calibration, raw.calibration, "备份导入不按当天校验");
+    const broken = { type: "month", startDate: "2026-04-01", calibration: { asOf: "2026-04-10", minutes: -1, checkedDays: 2 } };
+    assert.deepEqual(storedChallenge(broken), { type: "month", startDate: "2026-04-01" });
+    assert.deepEqual(storedChallenge(raw), raw);
+    assert.equal(storedChallenge("month"), null);
   });
 });
 
