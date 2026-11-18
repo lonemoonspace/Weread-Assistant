@@ -1,6 +1,30 @@
-import { reactive } from "../vendor/vue.esm-browser.prod.js";
+import { computed, reactive } from "../vendor/vue.esm-browser.prod.js";
 import { api, apiText } from "./api.js";
 import { msUntilMidnight } from "./format.js";
+
+const ACCOUNT_KEY = "wa-account";
+const THEME_KEY = "wa-theme";
+
+// 浏览器禁止访问 localStorage（隐私模式等）时不保存，只在本次打开的页面中生效
+function readStored(key) {
+  try {
+    return localStorage.getItem(key) || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function writeStored(key, value) {
+  try {
+    if (value) {
+      localStorage.setItem(key, value);
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch (_) {
+    // 同上
+  }
+}
 
 // 全局状态：会话、表单清单、设置、账号，以及经实时推送维护的运行状态
 export const state = reactive({
@@ -19,9 +43,38 @@ export const state = reactive({
   notice: null,
   // 账号 ID → 运行或停止请求在途，期间按钮不可点，避免双击时第二次请求报错
   pending: {},
+  // 日记、书库与顶栏打卡状态显示的账号（右上角菜单中切换，保存在本浏览器）
+  accountId: readStored(ACCOUNT_KEY),
+  // 外观：system（跟随系统）、light、dark
+  theme: readStored(THEME_KEY) || "system",
 });
 
 const LOG_LINES = 500;
+
+// 当前账号：选过且仍存在的账号，否则是第一个启用的账号，再否则是第一个账号；没有账号时为 null
+export const currentAccount = computed(
+  () =>
+    state.accounts.find((item) => item.id === state.accountId) ||
+    state.accounts.find((item) => item.enabled) ||
+    state.accounts[0] ||
+    null
+);
+
+export function selectAccount(id) {
+  state.accountId = id;
+  writeStored(ACCOUNT_KEY, id);
+}
+
+// 切换外观：跟随系统时去掉 data-theme，由样式表按系统设置显示（与 assets/theme.js 一致）
+export function setTheme(theme) {
+  state.theme = theme;
+  writeStored(THEME_KEY, theme === "system" ? "" : theme);
+  if (theme === "system") {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.setAttribute("data-theme", theme);
+  }
+}
 
 export function timezone() {
   return state.settings ? state.settings.timezone : undefined;
