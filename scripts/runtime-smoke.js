@@ -173,11 +173,17 @@ function runDockerSmoke() {
     const helpOutput = runCommand('docker', ['run', '--rm', imageTag, 'node', 'src/cli.js', 'help']);
     assertHelpOutput(helpOutput, 'docker run <image> node src/cli.js help');
     console.log('Smoke passed: Docker image entrypoint is runnable.');
-    // 运行时只需要 node：npm、corepack 等包管理器在构建时已删除（#55）
-    const leftovers = runCommand('docker', [
+    // 运行时只需要 node：npm、corepack 等包管理器在构建时已删除（#55）。
+    // 只检查这几个名字，基础镜像将来再带别的全局包不算失败；只读标准输出，理由同上方的架构检查
+    const probe = spawnSync('docker', [
       'run', '--rm', imageTag, 'sh', '-c',
-      'for t in npm npx corepack yarn yarnpkg; do command -v "$t"; done; ls -A /usr/local/lib/node_modules 2>/dev/null; true',
-    ], { quiet: true });
+      'for t in npm npx corepack yarn yarnpkg; do command -v "$t"; done; '
+        + 'for d in npm corepack yarn; do [ -e "/usr/local/lib/node_modules/$d" ] && echo "/usr/local/lib/node_modules/$d"; done; true',
+    ], { encoding: 'utf8', stdio: 'pipe' });
+    if (probe.status !== 0) {
+      throw new Error(`Package manager probe failed (exit ${probe.status}): ${(probe.stderr || '').trim()}`);
+    }
+    const leftovers = (probe.stdout || '').trim();
     if (leftovers) {
       throw new Error(`Package managers should not be in the runtime image: ${leftovers.split('\n').join(', ')}`);
     }
