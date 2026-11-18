@@ -24,6 +24,7 @@ const { Protocol, Transport, VirtualAuthenticatorOptions } = require("selenium-w
 
 const { startPanel } = require(path.resolve(__dirname, "..", "src", "panel", "server"));
 const { dateInZone } = require(path.resolve(__dirname, "..", "src", "panel", "dates"));
+const { startMockOfficial } = require("./fixtures/mock-official");
 const { startMockSelenium } = require("./fixtures/mock-selenium");
 const { minutesFrom, writeRun } = require("./fixtures/run-records");
 
@@ -37,10 +38,36 @@ const NEW_PASSWORD = "new-password-123";
 
 // ---------- 面板与数据 ----------
 
+const OFFICIAL_KEY = "wrk-ui-smoke-key-123456";
+const NOTE_BOOKS = [
+  {
+    bookId: "100001",
+    title: "测试之书",
+    author: "某作者",
+    sort: 1763000000,
+    noteCount: 2,
+    reviewCount: 1,
+    readingProgress: 42,
+    chapters: [
+      { chapterUid: 1, chapterIdx: 1, title: "第一章" },
+      { chapterUid: 2, chapterIdx: 2, title: "第二章" },
+    ],
+    bookmarks: [
+      { bookmarkId: "b1", bookId: "100001", chapterUid: 1, markText: "第一段划线", createTime: 1762000000, type: 1, range: "10-20", colorStyle: 1 },
+      { bookmarkId: "b2", bookId: "100001", chapterUid: 2, markText: "第二段划线", createTime: 1762100000, type: 1, range: "5-9", colorStyle: 2 },
+    ],
+    reviews: [
+      { reviewId: "r1", content: "我的想法", abstract: "第一段划线", range: "10-20", chapterUid: 1, chapterIdx: 1, createTime: 1762000100, star: -1 },
+    ],
+  },
+];
+
 async function startSeededPanel() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ui-smoke-data-"));
   // 面板查询的 Selenium 状态来自模拟的 Selenium（运行使用桩子进程，不连接它）
   const selenium = await startMockSelenium();
+  // 微信读书官方 API 的模拟网关：笔记页面同步的数据来自这里
+  const official = await startMockOfficial({ key: OFFICIAL_KEY, data: { books: NOTE_BOOKS } });
   const panel = await startPanel({
     port: 0,
     host: "0.0.0.0",
@@ -53,6 +80,8 @@ async function startSeededPanel() {
     runner: { workerPath: STUB_WORKER, killTimeoutMs: 500 },
     // 计划器不在测试期间自动补跑，页面上的运行只来自测试步骤
     planner: { startupDelayMs: 60 * 60 * 1000 },
+    officialApi: { gatewayUrl: official.url, retryDelayMs: 1 },
+    notes: { delayMs: 0 },
   });
   const base = `http://127.0.0.1:${panel.port}/`;
   let cookie = "";
@@ -72,6 +101,7 @@ async function startSeededPanel() {
   };
   await call("POST", "api/auth/login", { password: panel.generatedPassword });
   await call("POST", "api/accounts", { id: "ok-1", name: "小明" });
+  await call("PATCH", "api/accounts/ok-1", { overrides: { wereadApiKey: OFFICIAL_KEY } });
   await call("POST", "api/accounts", { id: "qr-1", name: "扫码测试" });
   await call("POST", "api/accounts", { id: "slow-1", name: "长时间阅读" });
   await call("PUT", "api/accounts/ok-1/schedules", {
@@ -90,7 +120,7 @@ async function startSeededPanel() {
     const start = `${date}T01:00:00.000Z`;
     writeRun(dataDir, "ok-1", { queuedAt: start, marks: minutesFrom(start, day === 3 ? 3 : 68), endedAt: start });
   }
-  return { panel, selenium, dataDir, call, base: `http://${BROWSER_HOST}:${panel.port}/` };
+  return { panel, selenium, official, dataDir, call, base: `http://${BROWSER_HOST}:${panel.port}/` };
 }
 
 // ---------- 浏览器 ----------
@@ -366,6 +396,22 @@ async function desktop(env, h, driver, results) {
   await h.shot("09-calendar");
   step("打卡日历：按月显示每天的分钟数与打卡状态，今天高亮，显示月卡进度");
 
+  await h.go("#/accounts/ok-1/notes");
+  await h.clickButton("立即同步");
+  await h.waitText("table.notes-books", "测试之书");
+  await h.waitText("table.notes-books", "读到 42%");
+  await h.type(await h.waitFor("input[aria-label='搜索笔记']"), "想法");
+  await h.waitText(".notes-search mark", "想法");
+  await h.waitText(".notes-search", "第一章");
+  await h.shot("09a-notes-search");
+  await h.click(await h.waitText("table.notes-books a, .notes-search a", "测试之书"));
+  await h.waitText(".notes-chapter h4", "第一章");
+  await h.waitText(".note-entry blockquote", "第一段划线");
+  await h.waitText(".note-entry .note-review", "我的想法");
+  await h.waitText(".notes-book", "下载 Markdown");
+  await h.shot("09a-notes-book");
+  step("笔记：立即同步后显示书单；搜索划线与想法并标出关键词；打开一本书按章节显示划线与想法");
+
   await h.go("#/stats/ok-1");
   await h.waitFor(".heatmap rect");
   await h.waitText(".metrics-grid", "连续打卡");
@@ -612,6 +658,7 @@ async function mobile(env, h, driver, results) {
     ["m06-config", "#/accounts/ok-1/config", ".config-form"],
     ["m07-settings", "#/settings", ".settings-grid"],
     ["m08-stats", "#/stats/ok-1", ".heatmap rect"],
+    ["m09-notes", "#/accounts/ok-1/notes", "table.notes-books tbody tr"],
   ];
   for (const [name, hash, css] of pages) {
     await h.go(hash);
@@ -644,7 +691,7 @@ async function mobile(env, h, driver, results) {
   const errors = await h.consoleErrors();
   assert.deepStrictEqual(errors, [], `浏览器控制台不应有错误或警告：\n${errors.join("\n")}`);
   results.push("手机");
-  console.log("✅ 手机宽度（390px）：总览、实时、历史、日历、调度、配置、设置、统计都没有横向滚动，控制台没有错误");
+  console.log("✅ 手机宽度（390px）：总览、实时、历史、日历、调度、配置、设置、统计、笔记都没有横向滚动，控制台没有错误");
 }
 
 // ---------- passkey ----------
@@ -837,6 +884,7 @@ async function main() {
     }
     await env.panel.close();
     await env.selenium.stop();
+    await env.official.close();
     fs.rmSync(env.dataDir, { recursive: true, force: true });
   }
 }

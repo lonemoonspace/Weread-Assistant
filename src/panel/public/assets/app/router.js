@@ -1,17 +1,19 @@
 import { reactive } from "../vendor/vue.esm-browser.prod.js";
 
 // 基于 hash 的路由：页面地址不变，部署在子路径下时相对路径始终正确
-export const ACCOUNT_TABS = ["live", "history", "calendar", "config", "schedules"];
-export const ACCOUNT_TAB_LABELS = { live: "实时", history: "历史", calendar: "打卡日历", schedules: "调度", config: "配置" };
+export const ACCOUNT_TABS = ["live", "history", "calendar", "notes", "config", "schedules"];
+export const ACCOUNT_TAB_LABELS = { live: "实时", history: "历史", calendar: "打卡日历", notes: "笔记", schedules: "调度", config: "配置" };
 
 export const route = reactive({ name: "overview", params: {} });
 
 const ROUTES = [
   [/^\/?$/, () => ({ name: "overview", params: {} })],
   [/^\/accounts\/new$/, () => ({ name: "new-account", params: {} })],
+  // 笔记中的一本书：#/accounts/<id>/notes/<bookId>
+  [/^\/accounts\/([a-z0-9-]+)\/notes\/([\w-]{1,64})$/, (m) => ({ name: "account", params: { id: m[1], tab: "notes", date: "", book: m[2] } })],
   [
     /^\/accounts\/([a-z0-9-]+)(?:\/([a-z]+))?(?:\/(\d{4}-\d{2}-\d{2}))?$/,
-    (m) => ({ name: "account", params: { id: m[1], tab: ACCOUNT_TABS.includes(m[2]) ? m[2] : "live", date: m[2] === "history" ? m[3] || "" : "" } }),
+    (m) => ({ name: "account", params: { id: m[1], tab: ACCOUNT_TABS.includes(m[2]) ? m[2] : "live", date: m[2] === "history" ? m[3] || "" : "", book: "" } }),
   ],
   [/^\/stats(?:\/([a-z0-9-]+))?$/, (m) => ({ name: "stats", params: { account: m[1] || "" } })],
   [/^\/settings$/, () => ({ name: "settings", params: {} })],
