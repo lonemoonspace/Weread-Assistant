@@ -8,6 +8,7 @@ const { cleanupRuns } = require("./history");
 const { CSRF_HEADER, SESSION_COOKIE, createSessionCookies, csrfGuard, securityHeaders } = require("./http/security");
 const { identifySession, passwordLoginState, requireSession } = require("./http/session");
 const { accountRoutes } = require("./http/routes/accounts");
+const { officialRoutes } = require("./http/routes/official");
 const { authRoutes, publicAuthRoutes } = require("./http/routes/auth");
 const { BACKUP_IMPORT_PATH, backupRoutes } = require("./http/routes/backup");
 const { eventRoutes } = require("./http/routes/events");
@@ -79,6 +80,7 @@ function createPanelApp(
   api.use(authRoutes(ctx));
   api.use(settingsRoutes(ctx));
   api.use(accountRoutes(ctx));
+  api.use(officialRoutes(ctx));
   api.use(runRoutes(ctx));
   api.use(statsRoutes(ctx));
   api.use(eventRoutes(ctx));

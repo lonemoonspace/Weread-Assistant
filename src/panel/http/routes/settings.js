@@ -29,7 +29,7 @@ function settingsRoutes({ options, dataDir, store, runner, checkLocalBrowser }) 
         draft.settings = applySettingsPatch(draft.settings, body.settings);
       }
       if (body.defaults !== undefined) {
-        draft.defaults = applyConfigPatch(draft.defaults, body.defaults);
+        draft.defaults = applyConfigPatch(draft.defaults, body.defaults, { scope: "defaults" });
       }
     });
     // 调大并发数后立即启动排队中的运行
