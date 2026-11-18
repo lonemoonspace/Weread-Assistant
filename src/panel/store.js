@@ -4,6 +4,7 @@ const { writeFileAtomic } = require("../shared/files");
 const { ACCOUNT_ID_PATTERN } = require("./config");
 const { storedChallenge } = require("./challenge");
 const { storedGoal } = require("./goal");
+const { storedSplit } = require("./split");
 const { sanitizeSettings } = require("./settings");
 
 const STORE_VERSION = 1;
@@ -72,6 +73,7 @@ function normalizeData(raw, seedDefaults) {
       schedules: account.schedules || [],
       challenge: storedChallenge(account.challenge),
       goal: storedGoal(account.goal),
+      split: storedSplit(account.split),
     })),
     // 已完成的一次性升级迁移，避免每次启动重复执行
     migrations: Array.isArray(raw.migrations) ? raw.migrations.filter((name) => typeof name === "string") : [],

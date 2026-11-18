@@ -1,4 +1,4 @@
-// 面板 smoke：计划器（失败重试、代发失败通知、启动恢复、错过的调度、随机延后、每日目标补跑、扫码后补读、晚间断签预警）
+// 面板 smoke：计划器（失败重试、代发失败通知、启动恢复、错过的调度、随机延后、每日目标补跑、扫码后补读、晚间断签预警、分段阅读）
 
 const assert = require("assert");
 const fs = require("fs");
@@ -386,5 +386,53 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
     } finally {
       await bark.close();
     }
+  });
+
+  await scenario("分段阅读：接口校验；到点以 split 加入队列，读满后取消剩下的段；关闭后删除计划", async () => {
+    const options = plannerOptions();
+    const today = dateInZone(new Date(), TIMEZONE);
+    const setClock = (time) => {
+      options.clock.offset = zonedTime(today, time, TIMEZONE) - Date.now();
+    };
+    setClock("23:00");
+    const panel = await startAuthed({ planner: options });
+    await panel.call("POST", "api/accounts", { id: "goal-s" });
+    await panel.call("PATCH", "api/accounts/goal-s", { overrides: { duration: 30 } });
+
+    const bad = [
+      { minutes: 0, from: "07:00", to: "23:00", minSegment: 15, maxSegment: 35 },
+      { minutes: 30, from: "23:00", to: "07:00", minSegment: 15, maxSegment: 35 },
+      { minutes: 300, from: "07:00", to: "10:00", minSegment: 15, maxSegment: 35 },
+      { minutes: 30, from: "07:00", to: "23:00", minSegment: 15, maxSegment: 35, x: 1 },
+    ];
+    for (const split of bad) {
+      assert.strictEqual((await panel.call("PUT", "api/accounts/goal-s/split", { split })).status, 400, JSON.stringify(split));
+    }
+    assert.strictEqual((await panel.call("PUT", "api/accounts/goal-s/split", {})).status, 400);
+
+    // 23:00 开启，23:10–23:59 之间读 10 分钟、每段 5 分钟：排成两段
+    const saved = await panel.call("PUT", "api/accounts/goal-s/split", { split: { minutes: 10, from: "23:10", to: "23:59", minSegment: 5, maxSegment: 5 } });
+    assert.strictEqual(saved.status, 200);
+    assert.deepStrictEqual(saved.json.split, { enabled: true, minutes: 10, from: "23:10", to: "23:59", minSegment: 5, maxSegment: 5 });
+    const plan = saved.json.plan;
+    assert.deepStrictEqual(plan.segments.map((segment) => [segment.minutes, segment.status]), [[5, "planned"], [5, "planned"]]);
+    assert.strictEqual((await panel.call("GET", "api/accounts/goal-s")).json.account.split.minutes, 10);
+
+    // 到第一段的时间：加入队列读 5 分钟，读完后今天 5 分钟
+    options.clock.offset = Date.parse(plan.segments[0].at) - Date.now();
+    const [first] = await settle(panel, "goal-s", 1, "第一段应加入队列");
+    assert.deepStrictEqual([first.trigger, first.plannedMinutes, first.minutes, first.status], ["split", 5, 5, "success"]);
+    // 手动再读 5 分钟（配置时长改为 5）：今天读满 10 分钟，下一次检查取消第二段
+    await panel.call("PATCH", "api/accounts/goal-s", { overrides: { duration: 5 } });
+    await panel.call("POST", "api/accounts/goal-s/runs", { mode: "read" });
+    await settle(panel, "goal-s", 2);
+    await until(() => panel.planner.accountStatus("goal-s").split.segments[1].status === "cancelled", { message: "读满后应取消剩下的段" });
+    options.clock.offset = Date.parse(plan.segments[1].at) - Date.now() + 60000;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.strictEqual(accountRuns(panel, "goal-s").length, 2, "取消的段不应运行");
+
+    await panel.call("PUT", "api/accounts/goal-s/split", { split: null });
+    await until(() => panel.planner.accountStatus("goal-s").split === null, { message: "关闭后应删除计划" });
+    assert.strictEqual((await panel.call("GET", "api/accounts/goal-s/split")).json.split, null);
   });
 };

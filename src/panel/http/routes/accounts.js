@@ -6,6 +6,7 @@ const { createAccount, deleteAccount, findAccount, publicAccount, updateAccount 
 const { accountDataDir, publicEffectiveConfig, resolveAccountConfig } = require("../../config");
 const { PanelError, badRequest, requireObject } = require("../../errors");
 const { normalizeGoal, publicGoal } = require("../../goal");
+const { SEGMENT_GAP_MINUTES, normalizeSplit } = require("../../split");
 const { lastRun } = require("../../history");
 const { accountStreak, calendar, challengeProgress, dropAccountDays, todayStats } = require("../../stats");
 const { nextRunInfo, normalizeSchedules, publicSchedule } = require("../../schedules");
@@ -164,6 +165,43 @@ function accountRoutes({ dataDir, store, runner, planner }) {
     });
     console.info(`每日目标已更新：账号 ${req.params.id}，${goal ? `${goal.enabled ? "" : "（未启用）"}${goal.minutes} 分钟，${goal.checkAt} 检查` : "不设置"}`);
     res.json(goalView(findAccount(data, req.params.id), data.settings.timezone));
+  });
+
+  // 分段阅读：设置、今天的分钟数与今天排好的各段
+  const splitView = (account, timezone) => ({
+    timezone,
+    split: account.split || null,
+    gapMinutes: SEGMENT_GAP_MINUTES,
+    today: todayStats(dataDir, account.id, { timezone }),
+    plan: planner ? planner.accountStatus(account.id, timezone).split : null,
+  });
+
+  router.get("/accounts/:id/split", (req, res) => {
+    const data = store.get();
+    res.json(splitView(findAccount(data, req.params.id), data.settings.timezone));
+  });
+
+  // { split: { enabled, minutes, from, to, minSegment, maxSegment } | null }：保存分段阅读，null 表示不使用。
+  // 保存后计划器在下一次检查时按新设置重新排今天剩下的段
+  router.put("/accounts/:id/split", async (req, res) => {
+    const body = requireObject(req.body);
+    const unknown = Object.keys(body).filter((key) => key !== "split");
+    if (unknown.length > 0 || body.split === undefined) {
+      throw badRequest("只能提交 { split: {...} | null }");
+    }
+    const split = normalizeSplit(body.split);
+    const data = await store.update((draft) => {
+      findAccount(draft, req.params.id).split = split;
+    });
+    console.info(
+      `分段阅读已更新：账号 ${req.params.id}，${
+        split ? `${split.enabled ? "" : "（未启用）"}每天 ${split.minutes} 分钟，${split.from}–${split.to}，每段 ${split.minSegment}–${split.maxSegment} 分钟` : "不使用"
+      }`
+    );
+    if (planner) {
+      planner.refreshSplit(req.params.id);
+    }
+    res.json(splitView(findAccount(data, req.params.id), data.settings.timezone));
   });
 
   // { schedules: [...] }：校验规则并预览接下来的触发时间，不保存

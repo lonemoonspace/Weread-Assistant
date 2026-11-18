@@ -44,7 +44,8 @@ docker compose logs app | grep 面板初始密码
 | `src/panel/runner/` | 运行队列：`index.js` 排队、并发与对外方法；`process.js` fork 阅读子进程、环境变量白名单、结束进程组、删除 Selenium 会话；`events.js` 处理子进程事件与判定结果；`view.js` 对外的运行信息、运行记录与日志脱敏 | 同一账号同时只有一个运行；并发数取面板设置，修改后立即生效 |
 | `src/panel/schedules.js` | 调度规则的校验、换算为 cron 表达式、计算接下来的触发时间 | 时间按面板时区解释 |
 | `src/panel/scheduler.js` | 按调度规则到点触发（croner），交给计划器加入队列 | 时区、账号启用状态或调度规则变化后重建定时任务 |
-| `src/panel/planner.js` | 计划器：失败重试、调度随机延后、每日目标补跑、扫码后补读、晚间断签预警、启动时恢复被中断的运行与错过的调度，见下文“重试、补跑与恢复” | 待办保存在 `planner.json`，重启不丢；时钟经参数注入，单元测试不需要真的等待 |
+| `src/panel/planner.js` | 计划器：失败重试、调度随机延后、分段阅读、每日目标补跑、扫码后补读、晚间断签预警、启动时恢复被中断的运行与错过的调度，见下文“重试、补跑与恢复” | 待办保存在 `planner.json`，重启不丢；时钟经参数注入，单元测试不需要真的等待 |
+| `src/panel/split.js` | 分段阅读的设置校验与一天各段的排法（段数、长度、开始时间随机，段间隔 30 分钟） | |
 | `src/panel/retry.js`、`src/panel/goal.js` | 重试规则（哪些运行、哪些失败、间隔）；每日目标的校验、按挑战的建议值与检查时间太晚时的提示 | |
 | `src/panel/runs.js` | 运行目录与运行记录（`meta.json`）的读写，启动时标记中断 | 运行 ID 与账号 ID 校验格式后才拼接路径 |
 | `src/panel/history.js` | 运行历史的读取、按保留策略清理 | 运行记录（`meta.json`）永久保留 |
@@ -96,6 +97,8 @@ docker compose logs app | grep 面板初始密码
 | `GET api/accounts/:id/schedules` | 是 | `{ timezone, enabled, nextRunAt, nextRunJitterMinutes, schedules }`：每条规则带 `description` 与接下来 5 次触发时间 `nextRuns`；`nextRunJitterMinutes` 为下次运行那条规则的随机延后分钟数 |
 | `PUT api/accounts/:id/schedules` | 是 | `{ schedules: [...] }`：整体替换账号的调度规则，保存后立即生效；任一条非法时返回 400，`message` 指出第几条规则与原因，整个请求不生效 |
 | `GET api/accounts/:id/goal` | 是 | 每日目标：`{ timezone, goal, suggestedMinutes, warning, today, planned }`。`goal` 为 `{ enabled, minutes, checkAt }` 或 null；`suggestedMinutes` 为按挑战折算的每天分钟数：挑战进行中或未开始时为剩余天数平均每天还需读的分钟数（含校准，向上取整到 5 分钟，5–1440 分钟），已结束时按规则平均（月卡 60、年卡 50），没有挑战时为 null；`warning` 为检查时间太晚、补不满目标时的提示；`today` 同账号列表；`planned` 为计划器中的待办与今天的补跑次数 `{ pending, catchups: { count, max, blocked, waitingLogin } }`（`blocked` 为手动停止了自动运行、当天不再补跑；`waitingLogin` 为自动运行等待扫码超时，下次运行成功后补读） |
+| `GET api/accounts/:id/split` | 是 | 分段阅读：`{ timezone, split, gapMinutes, today, plan }`。`split` 为 `{ enabled, minutes, from, to, minSegment, maxSegment }` 或 null；`gapMinutes` 为相邻两段的最小间隔；`today` 同账号列表；`plan` 为今天排好的各段 `{ date, segments: [{ at, minutes, status }] }`（`status` 为 `planned`、`started`、`skipped` 或 `cancelled`），没有时为 null |
+| `PUT api/accounts/:id/split` | 是 | `{ split: { enabled?, minutes, from, to, minSegment, maxSegment } \| null }`：保存分段阅读，`minutes` 为 1–1440，`from`、`to` 为 `HH:MM`（面板时区，`to` 晚于 `from`，不跨零点），`minSegment`、`maxSegment` 为 5–240 且前者不大于后者；按每段最长与段间隔在时段内排不下 `minutes` 时返回 400 并说明最多能读多少。null 表示不使用。保存后立即按新设置重新排今天剩下的段；返回同上 |
 | `PUT api/accounts/:id/goal` | 是 | `{ goal: { enabled?, minutes, checkAt } \| null }`：保存每日目标，`minutes` 为 1–1440，`checkAt` 为 `HH:MM`（面板时区），null 表示不设置；返回同上 |
 | `DELETE api/accounts/:id/profile` | 是 | 重置浏览器资料：删除账号的 `profile/` 与 `profile.broken/`，返回 `{ profile }`；下次运行从 cookies.json 恢复登录；账号正在运行或排队时 409 `account_busy` |
 | `POST api/backup/export` | 是，需二次验证 | `{ includeSecrets?, includeCookies?, passphrase? }`：返回备份文件（JSON，带 `Content-Disposition` 文件名），见下文“备份与迁移”；包含密钥或登录状态而没有至少 8 位的备份密码时 400 `backup_passphrase_required` |
@@ -181,7 +184,7 @@ docker compose logs app | grep 面板初始密码
 | 文件 | 内容 |
 | --- | --- |
 | `output.log` | 子进程的标准输出与标准错误，加上面板写入的 `[PANEL]` 行（加入队列、启动、停止请求、强制结束、退出码、运行结束）。写入与实时推送前，把本次运行配置中的密钥值（Bark Key、ntfy 主题、Token 与密码、SMTP 密码，4 个字符以上）以及微信读书登录链接中的 uid 替换为 `••••••`；子进程上报的错误信息同样处理 |
-| `meta.json` | `id`、`accountId`、`accountName`、`mode`、`trigger`（`manual`、`schedule`、`retry`、`catchup` 或 `resume`）、`scheduleId`、`errorKind`（失败类别：`login-timeout`、`error`、`timeout`、`crash`、`config`、`account`，其他状态为空）、`attempt`（第几次尝试，从 1 开始）、`originRunId`（重试或恢复对应的最初那次运行）、`delayedMinutes`（随机延后或补触发造成的延迟）、`status`、`queuedAt`、`startedAt`、`endedAt`、`book`、`readingStartedAt`、`minutes`、`plannedMinutes`、`screenshot`、`minuteMarks`（每一分钟阅读完成的时间，按天统计使用；接口中不返回）、`error`、`exitCode`、`exitSignal`；状态变化与每分钟进度都会更新；不保存登录链接 |
+| `meta.json` | `id`、`accountId`、`accountName`、`mode`、`trigger`（`manual`、`schedule`、`split`、`retry`、`catchup` 或 `resume`）、`scheduleId`、`errorKind`（失败类别：`login-timeout`、`error`、`timeout`、`crash`、`config`、`account`，其他状态为空）、`attempt`（第几次尝试，从 1 开始）、`originRunId`（重试或恢复对应的最初那次运行）、`delayedMinutes`（随机延后或补触发造成的延迟）、`status`、`queuedAt`、`startedAt`、`endedAt`、`book`、`readingStartedAt`、`minutes`、`plannedMinutes`、`screenshot`、`minuteMarks`（每一分钟阅读完成的时间，按天统计使用；接口中不返回）、`error`、`exitCode`、`exitSignal`；状态变化与每分钟进度都会更新；不保存登录链接 |
 | `screenshot-<分钟>.png` | 阅读截图，子进程直接写入运行目录（按保留策略清理） |
 | `error.png` | 阅读流程出错时的页面截图（浏览器还连着、不是手动停止时），同样按保留策略清理，历史页的截图中排在最后 |
 
@@ -243,7 +246,7 @@ docker compose logs app | grep 面板初始密码
   "runs": {
     "total": 27,
     "byStatus": { "success": 23, "failed": 4, "stopped": 0, "interrupted": 0 },
-    "byTrigger": { "manual": 6, "schedule": 10, "retry": 6, "catchup": 5, "resume": 0 },
+    "byTrigger": { "manual": 6, "schedule": 10, "split": 0, "retry": 6, "catchup": 5, "resume": 0 },
     "rescued": 5,
     "catchups": 5,
     "loginPrompted": 1
@@ -323,7 +326,7 @@ docker compose logs app | grep 面板初始密码
 
 ### 重试、补跑与恢复
 
-计划器（`src/panel/planner.js`）负责调度器到点触发之外的自动运行。自动触发指定时（`schedule`）、补跑（`catchup`）、恢复（`resume`）与重试（`retry`）；手动启动的运行不重试、不恢复。
+计划器（`src/panel/planner.js`）负责调度器到点触发之外的自动运行。自动触发指定时（`schedule`）、分段阅读（`split`）、补跑（`catchup`）、恢复（`resume`）与重试（`retry`）；手动启动的运行不重试、不恢复。
 
 | 项目 | 规则 |
 | --- | --- |
@@ -331,10 +334,11 @@ docker compose logs app | grep 面板初始密码
 | 失败通知 | 面板随启动消息下发 `retry: { attempt, retriesLeft }`。还会重试时子进程不发失败通知；最后一次失败的通知写明“已重试 N 次”。不再重试时由面板按账号的通知配置代发失败通知的情况：子进程崩溃或超时被结束，来不及发；子进程启动时还有重试次数、出错时没有发通知，但结束时没有安排重试（运行中调小了重试次数、停用了账号、面板正在停止，或已经读满） |
 | 每日目标 | 账号的 `goal: { enabled, minutes, checkAt }`。每天到 `checkAt`（面板时区）之后，当天累计分钟数（与总览同一口径）低于目标时补跑差额：补跑时长不超过到当天 23:57 剩余的分钟数，每个账号每天最多 3 次（加入队列成功才计数）；账号正在运行或还有待办时等它们结束后再检查，之后该账号每有一次运行结束都会再检查。手动停止了自动运行后，当天不再补跑；自动运行需要扫码而超时后，重新登录之前不补跑（见下一行），扫码超时的补跑通知写明“今天还差 N 分钟，在面板中扫码登录（「仅登录」即可）后会自动补读”。目标由用户填写，不随挑战变化；设置了挑战时页面给出建议值（月卡每天 60 分钟，年卡约 50 分钟） |
 | 扫码后补读 | 自动运行因扫码超时失败后，计划器记下这次运行（同一天再次超时以最近的一次为准），当天的每日目标补跑先停下。之后同一天里这个账号任何一次运行成功（说明已经重新登录）就解除：成功的是「仅登录」时接着补读，已过每日目标检查时间的按目标补差额（计入每天 3 次），否则以 `retry` 补读失败那次剩下的分钟（`attempt` 加 1、`originRunId` 指向最初那次运行；没开始阅读时按配置的时长）；成功的是阅读时不另外补读，结束后照常检查每日目标。面板刚启动、启动恢复还没完成时登录成功的，补读记成立即到期的待办，恢复完成后执行。第二天不再等待。自动触发的阅读扫码超时的通知写明“在面板中扫码登录（「仅登录」即可）后会自动补读”；页面上每日目标卡片显示“等扫码登录后补读”，总览的账号卡片也给出提示 |
-| 晚间断签预警 | 账号配置 `notifyOnCheckinWarning`（默认开）与 `checkinWarningAt`（`HH:MM`，面板时区，默认 `21:30`，可以按账号覆盖）。到这个时间后，今天的分钟数（与总览同一口径）不到 5 分钟，账号没有正在运行或排队、没有待办，启用的调度规则今天也不再触发、每日目标的检查时间已过（或今天不能再补跑、已读够目标）时，经账号的通知渠道发送一次 `checkinWarning`，正文写明今天读了多少分钟，以及是在等扫码还是手动停止过；配置了 `PANEL_PUBLIC_URL` 时附账号实时页面的链接。每个账号每天最多一次，发过的日期记在 `planner.json` 的 `checkinWarned` 中，重启后不重复；账号停用时不提醒。只提醒“每天应该打卡”的账号：有启用的调度规则或启用的每日目标，只手动运行的账号不提醒 |
+| 分段阅读 | 账号的 `split`（可选，与调度规则同时使用时两者叠加）。计划器每天第一次检查时为每个开启的账号排好当天的各段：在 `from`–`to` 之间读 `minutes` 减去今天已读的分钟数，段数在“按每段最长需要的段数”与“按每段最短最多的段数”之间随机，每段长度在 `minSegment`–`maxSegment` 之间随机；分不成每段都在这个范围内时（例如每段固定 20 分钟、一天 50 分钟），前面各段读满 `maxSegment`，只有最后一段读剩下的、短于 `minSegment`，相邻两段至少间隔 30 分钟，开始时间随机；时段不够时（例如当天中途开启）少读一些。计划写入 `planner.json` 的 `splits`。到点时：今天已读满 `minutes` 就取消剩下的段；账号正在运行、排队或还有待办时等到下一次检查，晚了 2 小时仍没开始就跳过；否则以 `split` 加入队列，读这一段的分钟数（不超过今天还差的），记录 `delayedMinutes`。失败时与定时运行一样重试，面板停止时被中断的也会恢复；与定时运行一样，手动停止某一段只停这一段（当天不再做每日目标补跑），后面的段照常运行。`planner.json` 中日期、时间或分钟数无效的计划与段加载时丢弃。修改设置后立即重新排今天剩下的段，已经开始的段不受影响；关闭或删除账号后删除计划；还有没开始的段时不发晚间断签预警 |
+| 晚间断签预警 | 账号配置 `notifyOnCheckinWarning`（默认开）与 `checkinWarningAt`（`HH:MM`，面板时区，默认 `21:30`，可以按账号覆盖）。到这个时间后，今天的分钟数（与总览同一口径）不到 5 分钟，账号没有正在运行或排队、没有待办，启用的调度规则今天也不再触发、每日目标的检查时间已过（或今天不能再补跑、已读够目标）时，经账号的通知渠道发送一次 `checkinWarning`，正文写明今天读了多少分钟，以及是在等扫码还是手动停止过；配置了 `PANEL_PUBLIC_URL` 时附账号实时页面的链接。每个账号每天最多一次，发过的日期记在 `planner.json` 的 `checkinWarned` 中，重启后不重复；账号停用时不提醒。只提醒“每天应该打卡”的账号：有启用的调度规则、启用的每日目标或开启的分段阅读，只手动运行的账号不提醒 |
 | 启动恢复 | 面板启动 2 分钟后处理停机期间的遗留，只处理补触发宽限时间（面板设置 `catchupGraceMinutes`，0–720 分钟，默认 120；0 为不恢复也不补触发）以内的：① 被中断的自动运行（面板停止时由运行队列标记，或崩溃后启动时标记）以 `resume` 补读剩余分钟（排队时被中断的按配置的时长，已经读满的不恢复），每次被中断的运行只恢复一次，恢复出来的运行再被中断时不再恢复；② 停机期间错过的调度，在上次检查时间与宽限时间的起点之间找出每条规则最近错过的一次，补触发一次（启动恢复完成之前调度器照常触发，但不更新检查时间，这时再次崩溃也不会漏掉）（`delayedMinutes` 为晚了多少分钟），超过宽限时间的只记录日志；③ 停机期间到期的重试与随机延后的定时运行，超过宽限时间的丢弃；④ 停机跨过了每日目标的检查时间时补做一次检查 |
 | 时长随机增加 | 运行配置 `durationJitter`（0–30 分钟，默认 0）：普通运行的实际时长为设定时长加 0 到该值之间的随机分钟数，只增不减；重试、补跑与恢复按计划器给出的分钟数读，不再增加 |
-| 状态文件 | `planner.json`（0600，原子写入）：最近一次检查的时间 `lastCheckAt`、待办 `pending`（重试、随机延后的定时运行、待恢复的运行）、每个账号当天的补跑次数 `catchups` 与最近一次发断签预警的日期 `checkinWarned`。文件丢失或损坏时当作没有待办，到期时间无效的待办丢弃，不影响启动 |
+| 状态文件 | `planner.json`（0600，原子写入）：最近一次检查的时间 `lastCheckAt`、待办 `pending`（重试、随机延后的定时运行、待恢复的运行）、每个账号当天的补跑次数 `catchups`、最近一次发断签预警的日期 `checkinWarned` 与当天的分段计划 `splits`。文件丢失或损坏时当作没有待办，到期时间无效的待办丢弃，不影响启动 |
 | 面板停止 | 不再安排新的重试与补跑；已有待办留在文件里，下次启动时按上面的规则处理 |
 
 ### 实时推送
