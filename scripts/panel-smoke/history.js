@@ -168,7 +168,26 @@ module.exports = async function historyScenarios({ scenario, startAuthed }) {
       missesLeft: 0,
       minutesPerDayNeeded: 73,
       achieved: false,
+      calibration: null,
     });
+
+    // 校准：截至 4 月 5 日 App 显示 200 分钟、打卡 4 天，之后按面板记录（6 日至 10 日每天 30 分钟）
+    const calibration = { asOf: "2026-04-05", minutes: 200, checkedDays: 4 };
+    const calibrated = challengeProgress(dataDir, { id: "ch", challenge: { ...account.challenge, calibration } }, { timezone, now: new Date("2026-04-10T04:00:00.000Z") });
+    assert.deepStrictEqual(
+      [calibrated.checkedDays, calibrated.totalMinutes, calibrated.missedDays, calibrated.minutesPerDayNeeded, calibrated.calibration],
+      [9, 350, 1, 70, calibration]
+    );
+    // 截至今天：今天的打卡算在校准值里，今天之后面板读的不重复计入
+    const todayCalibrated = challengeProgress(
+      dataDir,
+      { id: "ch", challenge: { ...account.challenge, calibration: { asOf: "2026-04-10", minutes: 400, checkedDays: 10 } } },
+      { timezone, now: new Date("2026-04-10T04:00:00.000Z") }
+    );
+    assert.deepStrictEqual([todayCalibrated.checkedDays, todayCalibrated.totalMinutes, todayCalibrated.missedDays], [10, 400, 0]);
+    // panel.json 中被手工改坏的校准当作没有
+    const broken = challengeProgress(dataDir, { id: "ch", challenge: { ...account.challenge, calibration: { asOf: "2026-04-05", minutes: -1, checkedDays: 4 } } }, { timezone, now: new Date("2026-04-10T04:00:00.000Z") });
+    assert.deepStrictEqual([broken.totalMinutes, broken.calibration], [273, null]);
     const before = at("2026-03-20T00:00:00.000Z");
     assert.deepStrictEqual([before.status, before.dayNumber, before.checkedDays, before.totalMinutes, before.missedDays], ["not-started", 0, 0, 0, 0]);
     const after = at("2026-05-15T00:00:00.000Z");
@@ -194,7 +213,29 @@ module.exports = async function historyScenarios({ scenario, startAuthed }) {
       assert.strictEqual((await panel.call("PATCH", "api/accounts/me", { challenge })).status, 400, JSON.stringify(challenge));
     }
     const today = dateInZone(new Date(), "Asia/Shanghai");
-    const saved = await panel.call("PATCH", "api/accounts/me", { challenge: { type: "month", startDate: today } });
+    for (const calibration of [
+      { asOf: "2026-03-31", minutes: 0, checkedDays: 0 },
+      { asOf: "2026-05-01", minutes: 0, checkedDays: 0 },
+      { asOf: "2026-04-05", minutes: 60, checkedDays: 6 },
+      { asOf: "2026-04-05", minutes: -1, checkedDays: 1 },
+      { asOf: "2026-04-05", minutes: 1.5, checkedDays: 1 },
+      { asOf: "2026-04-05", minutes: 60, checkedDays: 1, hours: 1 },
+      "2026-04-05",
+    ]) {
+      const res = await panel.call("PATCH", "api/accounts/me", { challenge: { type: "month", startDate: "2026-04-01", calibration } });
+      assert.strictEqual(res.status, 400, JSON.stringify(calibration));
+    }
+    // 校准日期不能晚于今天
+    const tomorrow = dateInZone(new Date(Date.now() + 86400000), "Asia/Shanghai");
+    const future = await panel.call("PATCH", "api/accounts/me", { challenge: { type: "month", startDate: today, calibration: { asOf: tomorrow, minutes: 0, checkedDays: 0 } } });
+    assert.strictEqual(future.status, 400);
+    assert.match(future.json.message, /不能晚于今天/);
+    const withCalibration = { type: "month", startDate: today, calibration: { asOf: today, minutes: 125, checkedDays: 1 } };
+    assert.deepStrictEqual((await panel.call("PATCH", "api/accounts/me", { challenge: withCalibration })).json.account.challenge, withCalibration);
+    const goal = (await panel.call("GET", "api/accounts/me/goal")).json;
+    // 30 天共需 1800 分钟，已读 125：剩余 30 天（含今天）平均每天 59 分钟，建议 60
+    assert.strictEqual(goal.suggestedMinutes, 60);
+    const saved = await panel.call("PATCH", "api/accounts/me", { challenge: { type: "month", startDate: today, calibration: null } });
     assert.deepStrictEqual(saved.json.account.challenge, { type: "month", startDate: today });
     const detail = (await panel.call("GET", "api/accounts/me")).json;
     assert.deepStrictEqual([detail.challengeProgress.status, detail.challengeProgress.dayNumber, detail.challengeProgress.missedDays], ["active", 1, 0]);
