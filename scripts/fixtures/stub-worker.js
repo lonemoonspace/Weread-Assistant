@@ -13,6 +13,7 @@
 //   skip-*      进度从第 1 分钟跳到第 5 分钟，最后上报一个远超阅读时长的分钟数
 //   flaky-*     第 1 次尝试读 1 分钟后上报 error；之后的尝试（重试）读完 config.duration 分钟后上报 done
 //   goal-*      读完 config.duration 分钟（每分钟 30 毫秒）后上报 done
+//   relogin-*   还没扫过码时阅读上报 login-timeout；仅登录时扫码成功并在数据目录记下，之后阅读同 goal-*
 const fs = require("fs");
 const path = require("path");
 const { PNG } = require("pngjs");
@@ -47,7 +48,7 @@ async function exit(code) {
   process.exit(code);
 }
 
-process.once("message", async ({ mode, config, screenshotDir, panelLink, browserStatus, retry, goalDeficit }) => {
+process.once("message", async ({ mode, config, screenshotDir, panelLink, browserStatus, retry, goalDeficit, resumeAfterLogin }) => {
   const id = path.basename(config.dataDir);
   if (browserStatus) {
     log(`面板下发的内置浏览器：${browserStatus.message}`);
@@ -69,7 +70,7 @@ process.once("message", async ({ mode, config, screenshotDir, panelLink, browser
   log(`环境变量: ${JSON.stringify(Object.keys(process.env).sort())}`);
   log(`TMPDIR=${process.env.TMPDIR}`);
   log(`barkKey 已下发: ${Boolean(config.barkKey)}`);
-  log(`retry=${JSON.stringify(retry || null)} duration=${config.duration} goalDeficit=${goalDeficit || 0}`);
+  log(`retry=${JSON.stringify(retry || null)} duration=${config.duration} goalDeficit=${goalDeficit || 0} resumeAfterLogin=${resumeAfterLogin === true}`);
   // 模拟子进程不小心打印了密钥与登录链接，面板写入日志前应替换为掩码
   log(`模拟泄露: https://api.day.app/${config.barkKey} https://weread.qq.com/web/confirm?uid=${id}-uid&from=stub`);
   send("started", { version: "stub" });
@@ -108,6 +109,24 @@ process.once("message", async ({ mode, config, screenshotDir, panelLink, browser
     return;
   }
 
+  if (kind === "relogin") {
+    const scanned = path.join(config.dataDir, "stub-scanned");
+    if (mode === "login" || !fs.existsSync(scanned)) {
+      send("login-required", { url: `https://weread.qq.com/web/confirm?uid=${id}` });
+      await sleep(150);
+      if (mode !== "login") {
+        send("login-timeout");
+        await exit(0);
+        return;
+      }
+      fs.writeFileSync(scanned, "");
+      send("login-ok");
+      send("done", { minutes: 0 });
+      await exit(0);
+      return;
+    }
+  }
+
   if (kind === "fail") {
     send("error", { message: config.barkKey ? `模拟的页面错误 ${config.barkKey}` : "模拟的页面错误" });
     await exit(0);
@@ -127,7 +146,7 @@ process.once("message", async ({ mode, config, screenshotDir, panelLink, browser
     await exit(0);
     return;
   }
-  if (kind === "flaky" || kind === "goal") {
+  if (kind === "flaky" || kind === "goal" || kind === "relogin") {
     for (let minute = 1; minute <= config.duration; minute += 1) {
       await sleep(30);
       send("reading-minute", { minute, total: config.duration, screenshot: "" });

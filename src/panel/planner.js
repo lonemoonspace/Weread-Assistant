@@ -16,6 +16,8 @@ const { describeSchedule, jitterOf, nextRuns } = require("./schedules");
  * - 失败重试：自动触发的运行因出错、超时或子进程异常退出而失败时，按 5、15、30 分钟的间隔重试，只读剩余的分钟（retry.js）
  * - 调度随机延后：规则带 jitterMinutes 时，到点后随机延后 0 到该值分钟再加入队列
  * - 每日目标：每天到账号的 goal.checkAt，当天分钟数不够时补跑差额（不跨过零点，每天最多 3 次）
+ * - 扫码后补读：自动运行因扫码超时失败后，当天先不补跑；之后同一天里任何一次运行成功（说明已重新登录）就解除，
+ *   成功的是「仅登录」时接着补读：已过目标检查时间的按每日目标补差额，否则补读失败那次剩下的分钟
  * - 启动时恢复：面板启动 startupDelayMs 后，恢复上次停止时被中断的自动运行、补触发停机期间错过的调度、执行过期的待办，
  *   都只处理宽限时间（面板设置 catchupGraceMinutes）以内的
  *
@@ -171,6 +173,7 @@ function createPlanner({
 
   const settings = () => store.get().settings;
   const graceMs = () => settings().catchupGraceMinutes * 60000;
+  const todayOf = () => dateInZone(new Date(clock.now()), settings().timezone);
   const findAccount = (data, id) => data.accounts.find((account) => account.id === id) || null;
 
   function addPending(item) {
@@ -233,6 +236,9 @@ function createPlanner({
   // 运行队列每次运行结束后调用
   // config 为这次运行实际使用的配置；retriesLeft 为启动时下发给子进程的剩余重试次数（还有时子进程出错不发通知）
   function handleFinished(run, { config = null, retriesLeft = 0 } = {}) {
+    if (run.status === "success") {
+      loginSucceeded(run);
+    }
     if (run.mode !== "read") {
       return;
     }
@@ -278,8 +284,8 @@ function createPlanner({
     const attempt = run.attempt || 1;
     const left = retriesLeftFor(run.trigger, attempt, data.settings.retryCount);
     if (run.errorKind === "login-timeout" && AUTO_TRIGGERS.includes(run.trigger)) {
-      // 需要人扫码：当天不再补跑
-      blockCatchups(run.accountId);
+      // 需要人扫码：重新登录之前不补跑
+      waitForLogin(run);
     }
     const minutes = remainingMinutes(run);
     if (RETRYABLE_ERROR_KINDS.includes(run.errorKind) && left > 0 && minutes === 0) {
@@ -310,14 +316,82 @@ function createPlanner({
   // ---------- 每日目标 ----------
 
   function blockCatchups(accountId) {
-    const today = dateInZone(new Date(clock.now()), settings().timezone);
+    const today = todayOf();
     state.catchups[accountId] = { ...catchupsOf(accountId, today), blocked: true };
     save();
   }
 
   function catchupsOf(accountId, today) {
     const record = state.catchups[accountId];
-    return record && record.date === today ? record : { date: today, count: 0, blocked: false };
+    return isPlainObject(record) && record.date === today ? record : { date: today, count: 0, blocked: false };
+  }
+
+  // 自动运行因扫码超时失败：记下要补读的运行，等重新登录。同一天再次超时时以最近的一次为准
+  function waitForLogin(run) {
+    const today = todayOf();
+    state.catchups[run.accountId] = {
+      ...catchupsOf(run.accountId, today),
+      loginWait: {
+        runId: run.id,
+        originRunId: run.originRunId || run.id,
+        attempt: run.attempt || 1,
+        minutes: remainingMinutes(run),
+      },
+    };
+    save();
+  }
+
+  // 任何一次运行成功都说明登录有效：解除当天的等待。成功的是「仅登录」时接着补读；
+  // 成功的是阅读时不另外补读，结束后照常检查每日目标
+  function loginSucceeded(run) {
+    const today = todayOf();
+    const { loginWait, ...record } = catchupsOf(run.accountId, today);
+    if (!isPlainObject(loginWait)) {
+      return;
+    }
+    state.catchups[run.accountId] = record;
+    save();
+    console.info(`账号 ${run.accountId} 已重新登录，解除今天的补跑等待`);
+    if (run.mode !== "login" || closing) {
+      return;
+    }
+    const data = store.get();
+    const account = findAccount(data, run.accountId);
+    if (!account || !account.enabled) {
+      return;
+    }
+    const { goal } = account;
+    if (goal && goal.enabled && clock.now() >= zonedTime(today, goal.checkAt, data.settings.timezone)) {
+      // 已过目标检查时间：按每日目标补差额（计入每天的补跑次数）；面板刚启动时由恢复完成后的第一次检查补
+      if (ready) {
+        checkGoal(run.accountId);
+      }
+      return;
+    }
+    if (loginWait.minutes === 0) {
+      return;
+    }
+    const attempt = Number.isInteger(loginWait.attempt) && loginWait.attempt > 0 ? loginWait.attempt : 1;
+    const originRunId = typeof loginWait.originRunId === "string" ? loginWait.originRunId : loginWait.runId;
+    if (!ready) {
+      // 面板刚启动、恢复还没完成：记成立即到期的重试待办，恢复完成后的第一次检查就会执行
+      addPending({
+        kind: "retry",
+        accountId: run.accountId,
+        failedRunId: loginWait.runId,
+        originRunId,
+        attempt: attempt + 1,
+        minutes: Number.isInteger(loginWait.minutes) ? loginWait.minutes : null,
+        dueAt: formatTime(clock.now()),
+      });
+      console.info(`扫码登录后补读：面板启动恢复完成后执行（账号 ${run.accountId}，最初运行 ${originRunId}）`);
+      return;
+    }
+    enqueue(
+      run.accountId,
+      { trigger: "retry", minutes: minutesOption(loginWait.minutes), attempt: attempt + 1, originRunId },
+      `扫码登录后补读（最初运行 ${originRunId}${loginWait.minutes > 0 ? `，补读 ${loginWait.minutes} 分钟` : ""}）`
+    );
   }
 
   function checkGoal(accountId) {
@@ -337,7 +411,7 @@ function createPlanner({
       return;
     }
     const record = catchupsOf(accountId, today);
-    if (record.blocked || record.count >= MAX_CATCHUPS_PER_DAY) {
+    if (record.blocked || record.loginWait || record.count >= MAX_CATCHUPS_PER_DAY) {
       return;
     }
     const window = Math.floor((zonedTime(today, DAY_END_TIME, timezone) - now) / 60000);
@@ -560,8 +634,8 @@ function createPlanner({
         .filter((item) => item.accountId === accountId && item.kind !== "resume")
         .map(({ kind, dueAt, attempt, minutes, scheduleId }) => ({ kind, dueAt, attempt, minutes, scheduleId }))
         .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
-      const { count, blocked } = catchupsOf(accountId, today);
-      return { pending, catchups: { count, max: MAX_CATCHUPS_PER_DAY, blocked } };
+      const { count, blocked, loginWait } = catchupsOf(accountId, today);
+      return { pending, catchups: { count, max: MAX_CATCHUPS_PER_DAY, blocked: Boolean(blocked), waitingLogin: Boolean(loginWait) } };
     },
 
     // 面板开始停止：不再安排新的重试与补跑，被中断的运行仍会记下

@@ -308,7 +308,7 @@ describe("createPlanner", () => {
       planner.tick();
     });
     assert.equal(enqueued.length, 3, "每天最多补跑 3 次");
-    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 3, max: 3, blocked: false });
+    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 3, max: 3, blocked: false, waitingLogin: false });
   });
 
   it("每日目标：加入队列失败时不计入当天的次数", async () => {
@@ -319,7 +319,99 @@ describe("createPlanner", () => {
     const planner = createPlanner({ dataDir, store, runner: failing, clock });
     now = zonedTime("2026-11-15", "23:20", "Asia/Shanghai");
     quietly(() => planner.recover());
-    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 0, max: 3, blocked: false });
+    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 0, max: 3, blocked: false, waitingLogin: false });
+  });
+
+  it("扫码超时后先不补跑；之后「仅登录」成功时补读失败那次剩下的分钟", async () => {
+    await store.update((data) => {
+      data.accounts[0].goal = { enabled: true, minutes: 60, checkAt: "23:00" };
+    });
+    const planner = createPlanner({ dataDir, store, runner, clock });
+    now = zonedTime("2026-11-15", "07:05", "Asia/Shanghai");
+    quietly(() => {
+      planner.recover();
+      planner.handleFinished(failedRun({ errorKind: "login-timeout", minutes: 0 }));
+    });
+    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 0, max: 3, blocked: false, waitingLogin: true });
+    assert.equal(planner.accountStatus("a1").pending.length, 0, "扫码超时不重试");
+
+    // 到了检查时间也不补跑，等重新登录
+    now = zonedTime("2026-11-15", "07:30", "Asia/Shanghai");
+    const loginRun = { id: "20261115T000000000Z-login", accountId: "a1", mode: "login", trigger: "manual", status: "success" };
+    // 「仅登录」失败不解除
+    quietly(() => planner.handleFinished({ ...loginRun, status: "failed", errorKind: "login-timeout" }));
+    assert.equal(planner.accountStatus("a1").catchups.waitingLogin, true);
+    const logs = quietly(() => planner.handleFinished(loginRun));
+    assert.ok(logs.some((line) => line.includes("已重新登录")));
+    assert.deepEqual(enqueued, [
+      { accountId: "a1", mode: "read", trigger: "retry", minutes: 30, attempt: 2, originRunId: "20261115T000000000Z-aaaa" },
+    ]);
+    assert.equal(planner.accountStatus("a1").catchups.waitingLogin, false);
+    // 只补读一次
+    quietly(() => planner.handleFinished(loginRun));
+    assert.equal(enqueued.length, 1);
+  });
+
+  it("面板刚启动、恢复完成之前「仅登录」成功：补读记成待办，恢复完成后执行", async () => {
+    await store.update((data) => {
+      data.accounts[0].goal = { enabled: true, minutes: 60, checkAt: "23:00" };
+    });
+    const first = createPlanner({ dataDir, store, runner, clock });
+    now = zonedTime("2026-11-15", "07:05", "Asia/Shanghai");
+    quietly(() => {
+      first.recover();
+      first.handleFinished(failedRun({ errorKind: "login-timeout", minutes: 0 }));
+    });
+    quietly(() => first.close());
+
+    // 重启后、启动恢复之前登录成功
+    const planner = createPlanner({ dataDir, store, runner, clock });
+    now = zonedTime("2026-11-15", "07:30", "Asia/Shanghai");
+    const loginRun = { id: "20261115T000000000Z-login", accountId: "a1", mode: "login", trigger: "manual", status: "success" };
+    quietly(() => planner.handleFinished(loginRun));
+    assert.equal(enqueued.length, 0, "恢复完成之前不入队");
+    assert.equal(planner.accountStatus("a1").catchups.waitingLogin, false);
+    assert.deepEqual(
+      planner.accountStatus("a1").pending.map(({ kind, attempt, minutes }) => ({ kind, attempt, minutes })),
+      [{ kind: "retry", attempt: 2, minutes: 30 }]
+    );
+    quietly(() => planner.recover());
+    assert.deepEqual(enqueued, [
+      { accountId: "a1", mode: "read", trigger: "retry", minutes: 30, attempt: 2, originRunId: "20261115T000000000Z-aaaa" },
+    ]);
+  });
+
+  it("扫码超时后：过了检查时间再登录按每日目标补差额；阅读成功只解除不另外补读；第二天不再等", async () => {
+    await store.update((data) => {
+      data.accounts[0].goal = { enabled: true, minutes: 60, checkAt: "21:00" };
+    });
+    const planner = createPlanner({ dataDir, store, runner, clock });
+    now = zonedTime("2026-11-15", "21:00", "Asia/Shanghai");
+    quietly(() => planner.recover());
+    assert.deepEqual(enqueued.map((item) => item.trigger), ["catchup"]);
+    quietly(() => planner.handleFinished(failedRun({ trigger: "catchup", errorKind: "login-timeout", plannedMinutes: 60, minutes: 0 })));
+    now = zonedTime("2026-11-15", "21:10", "Asia/Shanghai");
+    quietly(() => planner.tick());
+    assert.equal(enqueued.length, 1, "等待扫码时不补跑");
+    const loginRun = { id: "20261115T000000000Z-login", accountId: "a1", mode: "login", trigger: "manual", status: "success" };
+    quietly(() => planner.handleFinished(loginRun));
+    assert.deepEqual(enqueued[1], { accountId: "a1", mode: "read", trigger: "catchup", minutes: 60, goalDeficit: 60 });
+    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 2, max: 3, blocked: false, waitingLogin: false });
+
+    // 手动阅读成功：解除等待，不另外安排补读（之后照常检查每日目标）
+    quietly(() => planner.handleFinished(failedRun({ trigger: "catchup", errorKind: "login-timeout", plannedMinutes: 60, minutes: 0 })));
+    active.add("a1");
+    quietly(() => planner.handleFinished({ ...failedRun({ trigger: "manual" }), status: "success", errorKind: "" }));
+    assert.equal(planner.accountStatus("a1").catchups.waitingLogin, false);
+    assert.equal(enqueued.length, 2);
+    active.clear();
+
+    // 前一天的等待不影响第二天
+    quietly(() => planner.handleFinished(failedRun({ trigger: "catchup", errorKind: "login-timeout", plannedMinutes: 60, minutes: 0 })));
+    now = zonedTime("2026-11-16", "21:00", "Asia/Shanghai");
+    quietly(() => planner.tick());
+    assert.equal(enqueued.at(-1).trigger, "catchup");
+    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 1, max: 3, blocked: false, waitingLogin: false });
   });
 
   it("planner.json 中到期时间无效的待办在加载时丢弃", () => {
