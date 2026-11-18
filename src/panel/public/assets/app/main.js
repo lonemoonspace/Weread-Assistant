@@ -3,6 +3,7 @@ import { AppHeader } from "./components/app-header.js";
 import { NoticeBar } from "./components/common.js";
 import { SettingsLayout } from "./components/settings-layout.js";
 import { AccountPage } from "./pages/account.js";
+import { JournalPage } from "./pages/journal.js";
 import { LibraryPage } from "./pages/library.js";
 import { NewAccountPage } from "./pages/new-account.js";
 import { OverviewPage } from "./pages/overview.js";
@@ -14,7 +15,7 @@ import { loadAll, selectAccount, state } from "./store.js";
 const SETTINGS_ROUTES = ["settings", "account", "new-account"];
 
 const App = {
-  components: { AccountPage, AppHeader, LibraryPage, NewAccountPage, NoticeBar, OverviewPage, SettingsLayout, SettingsPage, StatsPage },
+  components: { AccountPage, AppHeader, JournalPage, LibraryPage, NewAccountPage, NoticeBar, OverviewPage, SettingsLayout, SettingsPage, StatsPage },
   setup() {
     // 需要扫码登录的运行：自动阅读移到了设置中，在每个页面顶部提示
     const waiting = computed(() => Object.values(state.runs).filter((run) => run.status === "waiting-login"));
@@ -50,7 +51,8 @@ const App = {
       </article>
       <p v-else-if="!state.ready" aria-busy="true">加载中…</p>
       <template v-else>
-        <library-page v-if="route.name === 'library'" :book="route.params.book" />
+        <journal-page v-if="route.name === 'journal'" />
+        <library-page v-else-if="route.name === 'library'" :book="route.params.book" />
         <stats-page v-else-if="route.name === 'stats'" :account="route.params.account" />
         <settings-layout v-else-if="inSettings" :section="settingsSection" :account-id="settingsAccount">
           <overview-page v-if="route.name === 'settings' && route.params.section === 'reading'" />
@@ -58,7 +60,7 @@ const App = {
           <new-account-page v-else-if="route.name === 'new-account'" />
           <account-page v-else :id="route.params.id" :tab="route.params.tab" :date="route.params.date" />
         </settings-layout>
-        <article v-else-if="route.name !== 'legacy-notes'"><p>页面不存在。</p><a href="#/">返回书库</a></article>
+        <article v-else-if="route.name !== 'legacy-notes'"><p>页面不存在。</p><a href="#/">返回读书日记</a></article>
       </template>
     </main>
     <footer class="container muted app-footer">
@@ -82,7 +84,7 @@ watch(
 );
 
 // 页面标题随路由变化，多个标签页、浏览器历史中便于区分
-const PAGE_TITLES = { library: "书库", "new-account": "新建账号", stats: "报告", "not-found": "页面不存在" };
+const PAGE_TITLES = { journal: "读书日记", library: "书库", "new-account": "新建账号", stats: "报告", "not-found": "页面不存在" };
 watchEffect(() => {
   let title = PAGE_TITLES[route.name] || "";
   if (route.name === "settings") {

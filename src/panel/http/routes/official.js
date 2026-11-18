@@ -71,6 +71,16 @@ function officialRoutes({ dataDir, store, options, notes, reports }) {
     res.json(result);
   });
 
+  // 读书日记：按日期排列的笔记；before=YYYY-MM-DD 取这一天之前的下一页
+  router.get("/accounts/:id/notes/journal", (req, res) => {
+    findAccount(store.get(), req.params.id);
+    const before = typeof req.query.before === "string" ? req.query.before : "";
+    if (before && !/^\d{4}-\d{2}-\d{2}$/.test(before)) {
+      throw badRequest("before 应为 YYYY-MM-DD");
+    }
+    res.json(notes.journal(req.params.id, { before }));
+  });
+
   // 每周阅读报告：预览上周的报告，或立即发送到账号的通知渠道
   async function weeklyReport(req, res, action) {
     findAccount(store.get(), req.params.id);

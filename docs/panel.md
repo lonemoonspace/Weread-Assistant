@@ -48,6 +48,7 @@ docker compose logs app | grep 面板初始密码
 | `src/official/api.js` | 微信读书官方 API 客户端：统一网关、`skill_version`、Bearer 鉴权，`errcode` 与 HTTP 错误归类（API Key 无效、网络、接口出错、格式不对），499 与 5xx 重试 2 次 | 只读；错误信息中的 API Key 替换为掩码；响应体上限 16 MB |
 | `src/official/notes.js` | 用官方 API 读取笔记本概览、一本书的划线（`/book/bookmarklist`）与想法（`/review/list/mine`），按章节整理并渲染为 Markdown | 想法按 `range` 挂到对应划线下；对不上的想法单独成条，没有章节的放在“书评与其他想法” |
 | `src/panel/notes.js` | 笔记同步：每天到 `notesSyncAt` 自动同步一次，也可手动同步；保存到账号数据目录的 `notes/` | 只重新读取最近笔记时间或数量有变化的书；同一账号同一时间只同步一次 |
+| `src/panel/journal.js` | 读书日记：把已同步的笔记摊平、按面板时区的日期分组翻页，统计笔记日历、本月数字、连续天数与往年今天 | 纯函数，只读本地已同步的笔记，不请求微信读书 |
 | `src/official/report.js` | 每周阅读报告：`/readdata/detail`（`mode=weekly`）读取某一周与前一周，统计这一周新增的笔记，渲染为通知正文 | 时长字段一律按秒处理（官方 Skill 的口径） |
 | `src/panel/reports.js` | 每周一到 `weeklyReportAt` 之后推送上周的阅读报告；预览与立即发送 | 已发送的周记在 `reports.json`，重启不重复 |
 | `src/panel/http/routes/official.js` | 官方 API 相关接口（测试 API Key、笔记同步与读取、每周阅读报告） | 网关地址可由面板选项 `officialApi` 替换，测试时指向 `scripts/fixtures/mock-official.js` |
@@ -108,6 +109,7 @@ docker compose logs app | grep 面板初始密码
 | `GET api/accounts/:id/reports/weekly` | 否 | 预览上周的阅读报告：`{ ok: true, weekStart, weekEnd, text }`，失败时 `{ ok: false, kind, error }`；没有配置 API Key 时 400 |
 | `POST api/accounts/:id/reports/weekly/send` | 是 | 生成上周的报告并立即发送到账号的通知渠道（不看 `notifyOnWeeklyReport` 开关），返回同上；没有配置 API Key 或没有启用任何通知渠道时 400 |
 | `GET api/accounts/:id/notes/search` | 否 | `?q=`（最多 100 个字）在已同步的划线与想法中搜索，不区分大小写：`{ hits: [{ bookId, title, chapter, text, reviews }], truncated }`，最多 100 条 |
+| `GET api/accounts/:id/notes/journal` | 否 | 读书日记：已同步的笔记按记下的日期（面板时区）倒序分组，`{ synced, today, days: [{ date, weekday, daysAgo, books, items: [{ id, bookId, title, author, chapter, text, reviews, createTime, date }] }], next, total }`，每页至少 40 条且同一天不拆开；`?before=YYYY-MM-DD` 取这一天之前的下一页（`next` 为空时没有更多）。第一页另有 `heat`（最近 12 周每天的 `{ date, notes, level }`，今天之后 `notes` 为 null）、`stats`（`monthNotes`、`monthBooks`、`streak`：截至今天连续有笔记的天数，今天还没有时从昨天算起）与 `onThisDay`（往年同月同日的笔记，最多 3 条，带 `yearsAgo`）。摊平后的笔记按账号缓存在内存中，同步后与时区变化后重建 |
 | `GET api/accounts/:id/notes/markdown` | 否 | 下载全部书的 Markdown，合成一份（`<账号名称>的笔记.md`）；还没有同步过时 404 |
 | `GET api/accounts/:id/notes/books/:bookId/markdown` | 否 | 下载一本书的 Markdown；没有时 404 |
 | `GET api/accounts/:id/notes/books/:bookId` | 否 | 一本书按章节整理后的划线与想法：`{ book, syncedAt, chapters, general }`；没有同步过时 404 |
@@ -145,7 +147,8 @@ docker compose logs app | grep 面板初始密码
 | 页面 | 地址 | 内容 |
 | --- | --- | --- |
 | 登录 | `login` | 面板密码登录；passkey 可用且页面在 `PANEL_PUBLIC_URL` 的地址上打开时显示“使用 passkey 登录”，在其他地址（例如内网 IP）打开时提示到哪个地址使用 passkey；密码登录关闭时只显示 passkey 按钮，用不了 passkey 时说明应急恢复的办法 |
-| 书库 | `#/`、`#/library`、`#/library/<bookId>` | 当前账号的笔记。宽屏时三栏：书（封面色块、作者、笔记条数、最近笔记时间，可按最近笔记 / 笔记最多 / 书名排序，已没有笔记的书标出并排在最后）\| 章节（每章条数，书评与其他想法单独一项）\| 笔记（划线用衬线大字与荧光笔底色，想法放在浅色框中；“复制全部 / 复制本章”与“下载 Markdown”），没有选书时打开第一本。窄屏时先是 3 列封面网格，点开一本书后章节横向排列。搜索框同时按书名、作者筛选书单，并在划线与想法中搜索（标出关键词，点书名打开这本书）。书单下方是同步状态（上次同步时间、最近一次失败的原因）、“立即同步”与“下载全部 Markdown”。没有配置 API Key 时说明到账号配置中填写；没有账号时引导新建账号。旧地址 `#/accounts/<id>/notes[/<bookId>]` 切换到该账号后跳到这里 |
+| 读书日记 | `#/` | 首页。当前账号的划线与想法按记下的日期（面板时区）排成时间线：每天一组（日期、“今天 · 在 2 本书里记了 3 条”），每条显示书名（点击打开书库中的这本书）、划线、想法与章节，“更早的笔记”翻页；本月笔记数、连续记笔记天数与总数。右侧（窄屏时只在时间线前显示往年今天）：往年今天（往年同月同日的笔记，最多 3 条）、笔记日历（最近 12 周每天的笔记条数，5 档颜色）与本月记过的书、导出全部笔记。没有配置 API Key 时说明到账号配置中填写；没有账号时引导新建账号 |
+| 书库 | `#/library`、`#/library/<bookId>` | 当前账号的笔记。宽屏时三栏：书（封面色块、作者、笔记条数、最近笔记时间，可按最近笔记 / 笔记最多 / 书名排序，已没有笔记的书标出并排在最后）\| 章节（每章条数，书评与其他想法单独一项）\| 笔记（划线用衬线大字与荧光笔底色，想法放在浅色框中；“复制全部 / 复制本章”与“下载 Markdown”），没有选书时打开第一本。窄屏时先是 3 列封面网格，点开一本书后章节横向排列。搜索框同时按书名、作者筛选书单，并在划线与想法中搜索（标出关键词，点书名打开这本书）。书单下方是同步状态（上次同步时间、最近一次失败的原因）、“立即同步”与“下载全部 Markdown”。没有配置 API Key 时说明到账号配置中填写；没有账号时引导新建账号。旧地址 `#/accounts/<id>/notes[/<bookId>]` 切换到该账号后跳到这里 |
 | 报告 | `#/stats`、`#/stats/<id>` | 全部账号或某个账号：连续打卡天数与最长记录，本周、本月、今年累计与打卡天数，近 30 天日均；近 30 / 90 / 365 天每日分钟柱状图（标出每日目标线与未打卡的日子）；最近一年热力图（手机宽度下最近半年，可横向滚动，点有阅读的日子跳到当天的运行历史）；运行情况；设置了挑战时显示挑战进度 |
 | 设置 · 自动阅读 | `#/settings`、`#/settings/reading` | 左侧是设置的分组，自动阅读下列出各账号（点击进入账号页面）。顶部浏览器状态（内置浏览器的版本，或 Selenium 是否就绪、已用/总会话数；不可用时的提示与处理办法）与 noVNC 链接；需要扫码的账号置顶并直接显示二维码；运行队列；每个账号一张卡片：运行状态或上次运行结果、今天的阅读分钟与是否打卡、连续打卡天数（点击进入该账号的统计）、下次运行时间、立即运行 / 仅登录 / 停止 |
 | 账号 · 实时 | `#/accounts/<id>/live` | 状态、“正在读《书名》第 23/68 分钟”与进度条、二维码与“复制登录链接”、最新截图、实时日志；运行进行中且设置了 noVNC 地址时显示查看浏览器画面的链接 |

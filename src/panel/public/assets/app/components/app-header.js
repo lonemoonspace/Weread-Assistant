@@ -5,6 +5,7 @@ import { currentAccount, logout, selectAccount, setTheme, state } from "../store
 
 // 顶部导航（手机宽度下固定在屏幕底部）。图标是线条风格的内联 SVG
 const NAV = [
+  { name: "journal", href: "#/", label: "日记", icon: ["M12 20h9", "M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"] },
   { name: "library", href: "#/library", label: "书库", icon: ["M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z", "M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"] },
   { name: "stats", href: "#/stats", label: "报告", icon: ["M3 3v18h18", "m7 15 4-4 3 3 5-6"] },
   {
@@ -16,7 +17,7 @@ const NAV = [
 ];
 
 // 设置中的页面（账号的运行、配置等）也属于“设置”
-const SECTION_OF = { library: "library", stats: "stats", settings: "settings", account: "settings", "new-account": "settings" };
+const SECTION_OF = { journal: "journal", library: "library", stats: "stats", settings: "settings", account: "settings", "new-account": "settings" };
 
 const THEMES = [
   ["system", "跟随系统"],
@@ -93,7 +94,7 @@ export const AppHeader = {
   template: `
     <header class="app-header">
       <div class="container app-bar">
-        <a href="#/library" class="brand">
+        <a href="#/" class="brand">
           <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M2 4h6a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2z"></path>
             <path d="M22 4h-6a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h7z"></path>

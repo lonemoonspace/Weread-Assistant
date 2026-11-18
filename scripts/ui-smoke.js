@@ -295,9 +295,9 @@ async function desktop(env, h, driver, results) {
   const expected = await h.consoleErrors();
   assert.ok(expected.every((line) => /api\/auth\/login .*401/.test(line)), `登录页不应有其他错误：\n${expected.join("\n")}`);
   await login(h, base, panel.generatedPassword);
-  // 登录后进入书库；自动阅读在“设置”中
-  await h.waitText("main .page-title", "书库");
-  await h.waitText(".main-nav a[aria-current=page]", "书库");
+  // 登录后进入读书日记；自动阅读在“设置”中
+  await h.waitText("main .page-title", "读书日记");
+  await h.waitText(".main-nav a[aria-current=page]", "日记");
   await h.waitText(".checkin-dot", "未打卡");
   await h.go("#/settings/reading");
   await h.waitText(".settings-nav a[aria-current=page]", "自动阅读");
@@ -307,7 +307,7 @@ async function desktop(env, h, driver, results) {
   await h.waitText(".selenium-card", "就绪");
   await h.waitText(".selenium-card", "已用 0/1 个会话");
   await h.shot("02-overview");
-  step("登录与自动阅读：密码错误有提示；登录后进入书库，顶栏显示打卡小圆点；设置 › 自动阅读显示 Selenium 状态、3 个账号卡片、今日分钟数与下次运行时间");
+  step("登录与自动阅读：密码错误有提示；登录后进入读书日记，顶栏显示打卡小圆点；设置 › 自动阅读显示 Selenium 状态、3 个账号卡片、今日分钟数与下次运行时间");
 
   // 外观：右上角菜单中切换深色、跟随系统
   const themeOf = () => driver.executeScript("return document.documentElement.getAttribute('data-theme')");
@@ -450,8 +450,17 @@ async function desktop(env, h, driver, results) {
   await h.waitText(".note-entry .note-text", "第二段划线");
   assert.strictEqual((await driver.findElements(By.css(".notes-chapter h3"))).length, 0, "只看一章时不重复显示章节标题");
   await h.button("复制本章");
+  // 读书日记：同步后按日期显示笔记，点书名打开书库中的这本书
+  await h.go("#/");
+  await h.waitText(".journal-card .journal-text", "第一段划线");
+  await h.waitText(".journal-card .journal-thought", "我的想法");
+  await h.waitText(".journal-day .day-summary", "条");
+  assert.strictEqual((await driver.findElements(By.css(".note-heat-cell"))).length, 84, "笔记日历是最近 12 周");
+  await h.shot("09a-journal");
+  await h.click(await h.waitText(".journal-card .journal-book", "测试之书"));
+  await driver.wait(async () => (await driver.getCurrentUrl()).endsWith("#/library/100001"), 10000, "点书名应打开书库中的这本书");
   await h.shot("09a-notes-book");
-  step("书库：立即同步后显示书单，宽屏时打开第一本；搜索划线与想法并标出关键词；点结果打开这本书，按章节显示与筛选划线与想法");
+  step("书库：立即同步后显示书单，宽屏时打开第一本；搜索划线与想法并标出关键词；点结果打开这本书，按章节显示与筛选划线与想法；读书日记按日期显示笔记与笔记日历");
 
   await h.go("#/stats/ok-1");
   await h.waitFor(".heatmap rect");
@@ -693,6 +702,7 @@ async function mobile(env, h, driver, results) {
   await h.clickButton("仅登录", await h.card("扫码测试"));
   await h.waitFor(".scan-card img.qr");
   const pages = [
+    ["m00-journal", "#/", ".journal-card"],
     ["m01-overview", "#/settings/reading", ".selenium-card .badge"],
     ["m02-live-scan", "#/accounts/qr-1/live", ".live .qr-login img.qr"],
     ["m03-history", "#/accounts/ok-1/history", "table.history tbody tr"],
@@ -735,7 +745,7 @@ async function mobile(env, h, driver, results) {
   const errors = await h.consoleErrors();
   assert.deepStrictEqual(errors, [], `浏览器控制台不应有错误或警告：\n${errors.join("\n")}`);
   results.push("手机");
-  console.log("✅ 手机宽度（390px）：自动阅读、实时、历史、日历、调度、配置、设置、报告、书库（封面网格与一本书）都没有横向滚动，控制台没有错误");
+  console.log("✅ 手机宽度（390px）：读书日记、自动阅读、实时、历史、日历、调度、配置、设置、报告、书库（封面网格与一本书）都没有横向滚动，控制台没有错误");
 }
 
 // ---------- passkey ----------

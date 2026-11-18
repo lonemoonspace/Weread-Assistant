@@ -67,7 +67,7 @@ module.exports = async function officialScenarios({ scenario, startAuthed }) {
     }
   });
 
-  await scenario("笔记同步：写入 index.json、每本书的 JSON 与 Markdown；只重新读取有变化的书；删光笔记的书保留并标记；失败时记下原因；搜索与下载 Markdown", async () => {
+  await scenario("笔记同步：写入 index.json、每本书的 JSON 与 Markdown；只重新读取有变化的书；删光笔记的书保留并标记；失败时记下原因；搜索、读书日记与下载 Markdown", async () => {
     const books = JSON.parse(JSON.stringify(BOOKS));
     books.push({ ...JSON.parse(JSON.stringify(BOOKS[0])), bookId: "100002", title: "另一本/书", sort: 1762000000, noteCount: 1, reviewCount: 0, bookmarkCount: 0, reviews: [] });
     books[1].bookmarks = [books[1].bookmarks[0]];
@@ -77,6 +77,11 @@ module.exports = async function officialScenarios({ scenario, startAuthed }) {
       await panel.call("POST", "api/accounts", { id: "me" });
       assert.strictEqual((await panel.call("POST", "api/accounts/me/notes/sync", {})).status, 400, "没有 API Key 时 400");
       assert.strictEqual((await panel.call("GET", "api/accounts/me/notes/markdown")).status, 404, "没有同步过时没有可下载的内容");
+      assert.deepStrictEqual(
+        (({ synced, days, total }) => ({ synced, days, total }))((await panel.call("GET", "api/accounts/me/notes/journal")).json),
+        { synced: false, days: [], total: 0 },
+        "没有同步过时读书日记为空"
+      );
       await panel.call("PATCH", "api/accounts/me", { overrides: { wereadApiKey: KEY } });
 
       const started = await panel.call("POST", "api/accounts/me/notes/sync", {});
@@ -119,6 +124,20 @@ module.exports = async function officialScenarios({ scenario, startAuthed }) {
       assert.match(all.text, /^# 测试之书\n[\s\S]*\n---\n\n# 另一本\/书\n/);
       assert.match(all.headers.get("content-disposition"), /attachment/);
 
+      // 读书日记：按日期排列的笔记，带笔记日历与本月数字；before 翻页；格式不对时 400
+      const journal = (await panel.call("GET", "api/accounts/me/notes/journal")).json;
+      const journalItems = journal.days.flatMap((day) => day.items);
+      assert.deepStrictEqual([journal.synced, journal.total, journalItems.length, journal.heat.length], [true, 3, 3, 84]);
+      assert.deepStrictEqual(
+        journalItems.find((item) => item.text === "第一段划线"),
+        { ...journalItems.find((item) => item.text === "第一段划线"), bookId: "100001", title: "测试之书", chapter: "第一章", reviews: ["我的想法"] }
+      );
+      assert.ok(journalItems.every((item, i) => i === 0 || journalItems[i - 1].createTime >= item.createTime), "按时间倒序");
+      const lastDay = journal.days[journal.days.length - 1].date;
+      const older = (await panel.call("GET", `api/accounts/me/notes/journal?before=${lastDay}`)).json;
+      assert.deepStrictEqual([older.days, older.heat], [[], undefined]);
+      assert.strictEqual((await panel.call("GET", "api/accounts/me/notes/journal?before=yesterday")).status, 400);
+
       // 再同步一次：没有变化的书不再读取；第二本删光了笔记：保留并标记 removed
       const before = gateway.requests.length;
       gateway.data.books.pop();
@@ -140,6 +159,8 @@ module.exports = async function officialScenarios({ scenario, startAuthed }) {
         ["/user/notebooks", "/book/bookmarklist", "/review/list/mine"]
       );
       assert.match(fs.readFileSync(path.join(notesDir, "markdown", "测试之书.md"), "utf8"), /## 书评与其他想法\n\n新想法/);
+      const refreshed = (await panel.call("GET", "api/accounts/me/notes/journal")).json;
+      assert.deepStrictEqual([refreshed.total, refreshed.days[0].items[0].reviews], [4, ["新想法"]], "同步后读书日记重新整理");
 
       // API Key 失效：记下原因，保留已同步的内容
       await panel.call("PATCH", "api/accounts/me", { overrides: { wereadApiKey: "wrk-expired-key-1234" } });

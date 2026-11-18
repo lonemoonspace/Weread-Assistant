@@ -7,11 +7,11 @@ export const ACCOUNT_TAB_LABELS = { live: "实时", history: "历史", calendar:
 export const SETTINGS_SECTIONS = ["reading", "general", "security", "backup"];
 export const SETTINGS_LABELS = { reading: "自动阅读", general: "面板与默认配置", security: "登录与安全", backup: "备份与迁移" };
 
-export const route = reactive({ name: "library", params: {} });
+export const route = reactive({ name: "journal", params: {} });
 
 const ROUTES = [
-  // 书库：当前账号有笔记的书；#/library/<bookId> 打开一本书
-  [/^\/?$/, () => ({ name: "library", params: { book: "" } })],
+  // 首页是读书日记；书库：当前账号有笔记的书，#/library/<bookId> 打开一本书
+  [/^\/?$/, () => ({ name: "journal", params: {} })],
   [/^\/library(?:\/([\w-]{1,64}))?$/, (m) => ({ name: "library", params: { book: m[1] || "" } })],
   [/^\/accounts\/new$/, () => ({ name: "new-account", params: {} })],
   // 旧地址：账号页的“笔记”已移到书库。切换到该账号后跳转（main.js）
