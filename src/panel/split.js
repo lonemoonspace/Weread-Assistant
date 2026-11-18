@@ -4,7 +4,7 @@ const { TIME_PATTERN } = require("./schedules");
 /**
  * 分段阅读：在手写的调度规则之外可选的另一种调度方式。账号的 split 为
  * { enabled, minutes, from, to, minSegment, maxSegment }：每天在 from–to（面板时区）之间读 minutes 分钟，
- * 由计划器在每天第一次检查时排成几段，每段 minSegment–maxSegment 分钟，开始时间与长度随机，相邻两段至少间隔 SEGMENT_GAP_MINUTES。
+ * 由计划器在每天第一次检查时排成几段，每段 minSegment–maxSegment 分钟（分不开时只有最后一段更短），开始时间与长度随机，相邻两段至少间隔 SEGMENT_GAP_MINUTES。
  * null 表示不使用。执行见 planner.js
  */
 
@@ -108,14 +108,20 @@ function planSegments({ total, start, end, minSegment, maxSegment, random = Math
   const fewest = Math.ceil(total / maxSegment);
   const most = Math.max(fewest, Math.min(Math.floor(total / minSegment), Math.floor((window - total) / SEGMENT_GAP_MINUTES) + 1));
   const count = randomInt(random, fewest, most);
-  // 每段先给最短长度（总数不够时平分），余下的分钟随机加到还没到最长的段上
-  const base = Math.min(minSegment, Math.floor(total / count));
-  const lengths = Array.from({ length: count }, () => base);
-  let left = total - base * count;
-  while (left > 0) {
-    const open = lengths.map((length, index) => (length < maxSegment ? index : -1)).filter((index) => index >= 0);
-    lengths[open[Math.floor(random() * open.length)]] += 1;
-    left -= 1;
+  let lengths;
+  if (total >= count * minSegment) {
+    // 每段先给最短长度，余下的分钟随机加到还没到最长的段上
+    lengths = Array.from({ length: count }, () => minSegment);
+    let left = total - minSegment * count;
+    while (left > 0) {
+      const open = lengths.map((length, index) => (length < maxSegment ? index : -1)).filter((index) => index >= 0);
+      lengths[open[Math.floor(random() * open.length)]] += 1;
+      left -= 1;
+    }
+  } else {
+    // 分不成每段都在 minSegment–maxSegment 之间（例如每段固定 20 分钟、一天 50 分钟）：前面各段读满 maxSegment，
+    // 只有最后一段读剩下的、短于 minSegment（与“剩下不到一段才排一段”一致）
+    lengths = Array.from({ length: count }, (_, index) => (index < count - 1 ? maxSegment : total - (count - 1) * maxSegment));
   }
   // 空闲时间随机分到各段之前：取 count 个 [0, slack] 之间的随机数排序，作为每段之前累计的空闲
   const slack = window - total - (count - 1) * SEGMENT_GAP_MINUTES;
