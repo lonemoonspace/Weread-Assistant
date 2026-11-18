@@ -352,6 +352,35 @@ describe("createPlanner", () => {
     assert.equal(enqueued.length, 1);
   });
 
+  it("面板刚启动、恢复完成之前「仅登录」成功：补读记成待办，恢复完成后执行", async () => {
+    await store.update((data) => {
+      data.accounts[0].goal = { enabled: true, minutes: 60, checkAt: "23:00" };
+    });
+    const first = createPlanner({ dataDir, store, runner, clock });
+    now = zonedTime("2026-11-15", "07:05", "Asia/Shanghai");
+    quietly(() => {
+      first.recover();
+      first.handleFinished(failedRun({ errorKind: "login-timeout", minutes: 0 }));
+    });
+    quietly(() => first.close());
+
+    // 重启后、启动恢复之前登录成功
+    const planner = createPlanner({ dataDir, store, runner, clock });
+    now = zonedTime("2026-11-15", "07:30", "Asia/Shanghai");
+    const loginRun = { id: "20261115T000000000Z-login", accountId: "a1", mode: "login", trigger: "manual", status: "success" };
+    quietly(() => planner.handleFinished(loginRun));
+    assert.equal(enqueued.length, 0, "恢复完成之前不入队");
+    assert.equal(planner.accountStatus("a1").catchups.waitingLogin, false);
+    assert.deepEqual(
+      planner.accountStatus("a1").pending.map(({ kind, attempt, minutes }) => ({ kind, attempt, minutes })),
+      [{ kind: "retry", attempt: 2, minutes: 30 }]
+    );
+    quietly(() => planner.recover());
+    assert.deepEqual(enqueued, [
+      { accountId: "a1", mode: "read", trigger: "retry", minutes: 30, attempt: 2, originRunId: "20261115T000000000Z-aaaa" },
+    ]);
+  });
+
   it("扫码超时后：过了检查时间再登录按每日目标补差额；阅读成功只解除不另外补读；第二天不再等", async () => {
     await store.update((data) => {
       data.accounts[0].goal = { enabled: true, minutes: 60, checkAt: "21:00" };

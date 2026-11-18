@@ -94,7 +94,7 @@ const GoalCard = {
   template: `
     <article class="goal-card">
       <h3>每日目标</h3>
-      <p class="muted">每天到检查时间，如果今天累计阅读不到目标分钟数，就补跑差额。补跑最晚读到 23:57，每天最多 3 次；补跑时需要扫码而超时，当天不再补跑。</p>
+      <p class="muted">每天到检查时间，如果今天累计阅读不到目标分钟数，就补跑差额。补跑最晚读到 23:57，每天最多 3 次；补跑时需要扫码而超时，重新登录（「仅登录」即可）后会自动补读。</p>
       <template v-if="view">
         <div class="grid rule-fields">
           <label>

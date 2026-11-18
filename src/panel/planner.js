@@ -352,7 +352,7 @@ function createPlanner({
     state.catchups[run.accountId] = record;
     save();
     console.info(`账号 ${run.accountId} 已重新登录，解除今天的补跑等待`);
-    if (run.mode !== "login" || !ready || closing) {
+    if (run.mode !== "login" || closing) {
       return;
     }
     const data = store.get();
@@ -362,8 +362,10 @@ function createPlanner({
     }
     const { goal } = account;
     if (goal && goal.enabled && clock.now() >= zonedTime(today, goal.checkAt, data.settings.timezone)) {
-      // 已过目标检查时间：按每日目标补差额（计入每天的补跑次数）
-      checkGoal(run.accountId);
+      // 已过目标检查时间：按每日目标补差额（计入每天的补跑次数）；面板刚启动时由恢复完成后的第一次检查补
+      if (ready) {
+        checkGoal(run.accountId);
+      }
       return;
     }
     if (loginWait.minutes === 0) {
@@ -371,6 +373,20 @@ function createPlanner({
     }
     const attempt = Number.isInteger(loginWait.attempt) && loginWait.attempt > 0 ? loginWait.attempt : 1;
     const originRunId = typeof loginWait.originRunId === "string" ? loginWait.originRunId : loginWait.runId;
+    if (!ready) {
+      // 面板刚启动、恢复还没完成：记成立即到期的重试待办，恢复完成后的第一次检查就会执行
+      addPending({
+        kind: "retry",
+        accountId: run.accountId,
+        failedRunId: loginWait.runId,
+        originRunId,
+        attempt: attempt + 1,
+        minutes: Number.isInteger(loginWait.minutes) ? loginWait.minutes : null,
+        dueAt: formatTime(clock.now()),
+      });
+      console.info(`扫码登录后补读：面板启动恢复完成后执行（账号 ${run.accountId}，最初运行 ${originRunId}）`);
+      return;
+    }
     enqueue(
       run.accountId,
       { trigger: "retry", minutes: minutesOption(loginWait.minutes), attempt: attempt + 1, originRunId },
