@@ -92,7 +92,7 @@ docker compose logs app | grep 面板初始密码
 | 标签 | 说明 |
 | --- | --- |
 | `latest` | 最新的正式版本（默认） |
-| `0.5.0` 等版本号 | 固定版本：在 `docker-compose.yml` 同目录的 `.env` 中写 `WEREAD_ASSISTANT_TAG=0.5.0` |
+| `0.7.0` 等版本号 | 固定版本：在 `docker-compose.yml` 同目录的 `.env` 中写 `WEREAD_ASSISTANT_TAG=0.7.0` |
 | `dev` | `main` 分支的最新构建，用于试用尚未发布的改动 |
 
 每个标签都同时包含 `linux/amd64` 与 `linux/arm64`。每周会检查最近一个正式版本镜像中的系统包（如 Chromium 的安全更新）与 Node.js 补丁版本，有更新时用同一份源码重新构建，覆盖推送该版本号与 `latest`：固定了版本号也能拿到浏览器的安全更新。使用 WUD、Watchtower 等工具时它们会检测到变化并自动升级，被打断的阅读会在面板重启后恢复。
