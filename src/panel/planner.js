@@ -124,8 +124,41 @@ function loadState(file) {
     pending,
     catchups: isPlainObject(raw.catchups) ? raw.catchups : {},
     checkinWarned: isPlainObject(raw.checkinWarned) ? raw.checkinWarned : {},
-    splits: isPlainObject(raw.splits) ? raw.splits : {},
+    splits: storedSplitPlans(raw.splits, file),
   };
+}
+
+const SEGMENT_STATUSES = ["planned", "started", "skipped", "cancelled"];
+
+// planner.json 中的分段计划（可能被手工改坏）：日期或段无效的整份丢弃，时间或分钟数无效的段丢弃
+function storedSplitPlans(raw, file) {
+  if (!isPlainObject(raw)) {
+    return {};
+  }
+  const plans = {};
+  let dropped = 0;
+  for (const [accountId, plan] of Object.entries(raw)) {
+    if (!isPlainObject(plan) || typeof plan.date !== "string" || !Array.isArray(plan.segments)) {
+      dropped += 1;
+      continue;
+    }
+    const segments = plan.segments.filter(
+      (segment) =>
+        isPlainObject(segment) &&
+        typeof segment.at === "string" &&
+        !Number.isNaN(Date.parse(segment.at)) &&
+        typeof segment.time === "string" &&
+        Number.isInteger(segment.minutes) &&
+        segment.minutes > 0 &&
+        SEGMENT_STATUSES.includes(segment.status)
+    );
+    dropped += plan.segments.length - segments.length;
+    plans[accountId] = { ...plan, segments };
+  }
+  if (dropped > 0) {
+    console.warn(`${file} 中有 ${dropped} 个分段计划或分段格式无效，已丢弃`);
+  }
+  return plans;
 }
 
 // 待办中的分钟数交给运行队列：null 与旧版本写入的 0 都表示按配置的时长
