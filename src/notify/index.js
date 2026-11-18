@@ -18,6 +18,8 @@ const NOTIFY_EVENTS = {
   loginSuccess: { toggle: "notifyOnLoginSuccess", subtitle: "登录成功", level: "active", sound: "birdsong" },
   done: { toggle: "notifyOnDone", subtitle: "阅读完成", level: "active", sound: "success" },
   failure: { toggle: "notifyOnFailure", subtitle: "运行失败", level: "critical", sound: "alarm" },
+  // 由面板的计划器发送
+  checkinWarning: { toggle: "notifyOnCheckinWarning", subtitle: "今天还没打卡", level: "timeSensitive", sound: "alarm" },
 };
 
 const PANEL_ONLY_TEXT = "需要扫码登录，但未能从二维码中解析出登录链接，请在面板中扫码。";

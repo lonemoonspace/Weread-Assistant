@@ -179,7 +179,7 @@ async function startPanel(options) {
       ...options.runner,
     });
     // options.planner：测试时缩短启动等待与重试间隔
-    planner = createPlanner({ dataDir: options.dataDir, store, runner, interrupted, ...options.planner });
+    planner = createPlanner({ dataDir: options.dataDir, store, runner, interrupted, publicUrl: options.publicUrl, ...options.planner });
     cleanup();
     // 在后台为各账号建立按天统计的缓存，总览的连续打卡天数不必等第一次全量读取
     for (const account of store.get().accounts) {
