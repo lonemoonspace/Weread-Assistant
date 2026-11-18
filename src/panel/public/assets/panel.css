@@ -1590,7 +1590,7 @@ table.history td {
   white-space: nowrap;
 }
 
-/* 笔记：书单、按章节的划线与想法、搜索结果 */
+/* 书库：宽屏三栏（书 | 章节 | 笔记）；窄屏先是封面网格，点开一本书再看章节与笔记 */
 .notes-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1603,31 +1603,290 @@ table.history td {
   margin: 0;
 }
 
-.notes-removed {
-  opacity: 0.7;
+.library {
+  display: grid;
+  grid-template-columns: minmax(15rem, 19rem) minmax(12rem, 15rem) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  margin-top: -0.75rem;
 }
 
-.notes-chapter h4 {
-  margin-top: 1.5rem;
-  padding-bottom: 0.25rem;
-  border-bottom: 1px solid var(--pico-muted-border-color);
+.library-books,
+.library-chapters {
+  position: sticky;
+  top: 4.5rem;
+  max-height: calc(100vh - 5.5rem);
+  overflow-y: auto;
+  padding: 0.75rem 1rem 1rem 0;
+  border-right: 1px solid var(--wa-line);
 }
 
+.library-chapters {
+  display: block;
+  padding-left: 1rem;
+}
+
+.library-notes {
+  grid-column: 3;
+}
+
+.library.searching .library-notes {
+  grid-column: 2 / -1;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.library-books .page-title {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.library-books .page-title small {
+  font-family: var(--pico-font-family);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+.sort-select {
+  width: auto;
+  margin: 0;
+  padding: 0.2rem 2rem 0.2rem 0.6rem;
+  height: auto;
+  font-size: 0.82rem;
+  background-position: center right 0.5rem;
+}
+
+.library-books input[type="search"] {
+  margin-bottom: 0.6rem;
+}
+
+.book-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.book-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  border-radius: 12px;
+  color: var(--wa-ink);
+  text-decoration: none;
+}
+
+.book-item:hover {
+  background: var(--wa-tint);
+}
+
+.book-item[aria-current="page"] {
+  background: var(--wa-raised);
+}
+
+.book-item.removed {
+  opacity: 0.65;
+}
+
+/* 封面色块：书脊一侧圆角小一些 */
+.cover {
+  flex: none;
+  width: 36px;
+  height: 50px;
+  border-radius: 3px 7px 7px 3px;
+  box-shadow: inset 3px 0 0 rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+
+.cover-title {
+  display: none;
+}
+
+.cover-0 { background: #3e5a6b; }
+.cover-1 { background: #8a4b2a; }
+.cover-2 { background: #35603f; }
+.cover-3 { background: #5b4a7a; }
+.cover-4 { background: #6b5a3a; }
+.cover-5 { background: #4a5a6b; }
+.cover-6 { background: #7a3e4a; }
+.cover-7 { background: #3f5f5a; }
+
+.book-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.book-title {
+  display: block;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.book-sub {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--pico-muted-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-sync {
+  margin-top: 1.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--wa-line);
+  font-size: 0.85rem;
+}
+
+.library-sync p {
+  margin-bottom: 0.5rem;
+}
+
+.library-sync .notes-actions {
+  margin: 0;
+}
+
+.pane-label {
+  margin: 0 0 0.4rem;
+  padding: 0 0.6rem;
+  font-size: 0.78rem;
+  color: var(--pico-muted-color);
+}
+
+.library-chapters .chapter-item {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0 0 2px;
+  padding: 0.5rem 0.6rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wa-ink);
+  font-size: 0.9rem;
+  font-weight: 400;
+  text-align: left;
+  line-height: 1.45;
+  box-shadow: none;
+}
+
+.library-chapters .chapter-item:hover {
+  background: var(--wa-tint);
+}
+
+.library-chapters .chapter-item[aria-pressed="true"] {
+  background: var(--wa-raised);
+}
+
+.chapter-count {
+  flex: none;
+  color: var(--pico-muted-color);
+}
+
+.chapter-item[aria-pressed="true"] .chapter-count {
+  color: var(--wa-accent);
+}
+
+.library-notes {
+  min-width: 0;
+  padding: 0.75rem 0 2rem 2.5rem;
+}
+
+.back-link,
+.chapter-chips {
+  display: none;
+}
+
+.notes-book-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.notes-book-head p {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.notes-heading {
+  margin: 0.15rem 0 0;
+  font-family: var(--wa-serif);
+  font-weight: 600;
+  font-size: 1.75rem;
+  line-height: 1.35;
+}
+
+.notes-tools {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.notes-tools > * {
+  margin: 0;
+}
+
+.notes-chapter h3 {
+  margin: 1.75rem 0 0;
+  padding-bottom: 0.4rem;
+  font-size: 0.95rem;
+  color: var(--pico-muted-color);
+  border-bottom: 1px solid var(--wa-line);
+}
+
+/* 一条笔记：衬线大字的划线（荧光笔效果），想法放在浅色框中 */
 .note-entry {
-  margin: 0 0 1rem;
-  padding: 0.75rem 1rem;
+  margin: 0;
+  padding: 1.25rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--wa-line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
-.note-entry blockquote {
-  margin: 0.25rem 0 0.5rem;
-  padding: 0.25rem 0 0.25rem 0.75rem;
-  border-left: 3px solid var(--wa-brand);
+.note-entry:hover {
+  box-shadow: none;
+}
+
+.note-text {
+  margin: 0 0 0.6rem;
+  font-family: var(--wa-serif);
+  font-size: 1.2rem;
+  line-height: 1.85;
   white-space: pre-wrap;
+}
+
+.marker {
+  background: linear-gradient(transparent 62%, var(--wa-marker) 62%);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .note-review {
-  margin-bottom: 0.25rem;
+  display: flex;
+  gap: 0.6rem;
+  margin: 0 0 0.6rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  background: var(--wa-raised);
   white-space: pre-wrap;
+}
+
+.review-mark {
+  flex: none;
+  color: var(--wa-accent);
 }
 
 .weekly-report {
@@ -1637,6 +1896,139 @@ table.history td {
 
 .notes-search mark {
   padding: 0 0.1em;
+}
+
+/* 窄屏：书单是 3 列封面网格；点开一本书时隐藏书单，章节横向排列 */
+@media (max-width: 1023px) {
+  .library {
+    display: block;
+    margin-top: 0;
+  }
+
+  .library-books,
+  .library-chapters {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+    border-right: 0;
+  }
+
+  .library:not(.book-open) .library-chapters,
+  .library:not(.book-open):not(.searching) .library-notes,
+  .library.book-open .library-books {
+    display: none;
+  }
+
+  .book-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+    gap: 1rem 0.75rem;
+  }
+
+  .book-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.4rem;
+    padding: 0;
+  }
+
+  .book-item:hover,
+  .book-item[aria-current="page"] {
+    background: transparent;
+  }
+
+  .cover {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 3 / 4;
+    padding: 0.5rem;
+    display: flex;
+    align-items: flex-end;
+  }
+
+  .cover-title {
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    color: #fff;
+    font-family: var(--wa-serif);
+    font-size: 0.82rem;
+    line-height: 1.35;
+  }
+
+  .book-title {
+    font-size: 0.85rem;
+    line-height: 1.35;
+    white-space: normal;
+  }
+
+  .book-author,
+  .book-when {
+    display: none;
+  }
+
+  .library .library-chapters {
+    display: none;
+  }
+
+  .chapter-chips {
+    display: flex;
+    gap: 0.4rem;
+    overflow-x: auto;
+    margin: 0.75rem calc(var(--pico-spacing) * -1) 0.25rem;
+    padding: 0 var(--pico-spacing) 0.25rem;
+    scrollbar-width: none;
+  }
+
+  .chapter-chips .chapter-item {
+    flex: none;
+    max-width: 14rem;
+    margin: 0;
+    padding: 0.3rem 0.75rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    border: 1px solid var(--wa-line);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--wa-ink);
+    font-size: 0.85rem;
+    font-weight: 400;
+    box-shadow: none;
+  }
+
+  .chapter-chips .chapter-item[aria-pressed="true"] {
+    background: var(--wa-raised);
+    border-color: var(--wa-line-strong);
+  }
+
+  .library-notes {
+    padding: 0.5rem 0 1rem;
+  }
+
+  .library.searching:not(.book-open) .library-notes {
+    margin-top: 1rem;
+  }
+
+  .library.book-open .library-notes {
+    padding-top: 0;
+  }
+
+  .back-link {
+    display: inline-block;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+  }
+
+  .notes-heading {
+    font-size: 1.45rem;
+  }
+
+  .note-text {
+    font-size: 1.1rem;
+  }
 }
 
 .actions button {

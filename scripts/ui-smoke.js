@@ -430,19 +430,28 @@ async function desktop(env, h, driver, results) {
   await h.go("#/accounts/ok-1/notes");
   await driver.wait(async () => (await driver.getCurrentUrl()).endsWith("#/library"), 10000, "旧的笔记地址应跳到书库");
   await h.clickButton("立即同步");
-  await h.waitText("table.notes-books", "测试之书");
-  await h.waitText("table.notes-books", "读到 42%");
+  await h.waitText(".book-list", "测试之书");
+  // 宽屏三栏：没有选书时打开第一本
+  await h.waitText(".notes-book-head", "读到 42%");
+  await h.waitText(".library-chapters", "第一章");
   await h.type(await h.waitFor("input[aria-label='搜索笔记']"), "想法");
   await h.waitText(".notes-search mark", "想法");
   await h.waitText(".notes-search", "第一章");
   await h.shot("09a-notes-search");
-  await h.click(await h.waitText("table.notes-books a, .notes-search a", "测试之书"));
-  await h.waitText(".notes-chapter h4", "第一章");
-  await h.waitText(".note-entry blockquote", "第一段划线");
+  await h.click(await h.waitText(".notes-search a", "测试之书"));
+  await driver.wait(async () => (await driver.getCurrentUrl()).endsWith("#/library/100001"), 10000, "点搜索结果中的书名应打开这本书");
+  await h.waitText(".notes-chapter h3", "第一章");
+  await h.waitText(".note-entry .note-text", "第一段划线");
   await h.waitText(".note-entry .note-review", "我的想法");
   await h.waitText(".notes-book", "下载 Markdown");
+  // 按章节查看
+  await h.click(await h.waitText(".library-chapters .chapter-item", "第二章"));
+  await h.waitText(".notes-heading", "第二章");
+  await h.waitText(".note-entry .note-text", "第二段划线");
+  assert.strictEqual((await driver.findElements(By.css(".notes-chapter h3"))).length, 0, "只看一章时不重复显示章节标题");
+  await h.button("复制本章");
   await h.shot("09a-notes-book");
-  step("笔记：立即同步后显示书单；搜索划线与想法并标出关键词；打开一本书按章节显示划线与想法");
+  step("书库：立即同步后显示书单，宽屏时打开第一本；搜索划线与想法并标出关键词；点结果打开这本书，按章节显示与筛选划线与想法");
 
   await h.go("#/stats/ok-1");
   await h.waitFor(".heatmap rect");
@@ -692,7 +701,8 @@ async function mobile(env, h, driver, results) {
     ["m06-config", "#/accounts/ok-1/config", ".config-form"],
     ["m07-settings", "#/settings/general", ".settings-grid"],
     ["m08-stats", "#/stats/ok-1", ".heatmap rect"],
-    ["m09-notes", "#/library", "table.notes-books tbody tr"],
+    ["m09-notes", "#/library", ".book-list .book-item .cover"],
+    ["m10-notes-book", "#/library/100001", ".chapter-chips .chapter-item"],
   ];
   for (const [name, hash, css] of pages) {
     await h.go(hash);
@@ -725,7 +735,7 @@ async function mobile(env, h, driver, results) {
   const errors = await h.consoleErrors();
   assert.deepStrictEqual(errors, [], `浏览器控制台不应有错误或警告：\n${errors.join("\n")}`);
   results.push("手机");
-  console.log("✅ 手机宽度（390px）：自动阅读、实时、历史、日历、调度、配置、设置、报告、书库都没有横向滚动，控制台没有错误");
+  console.log("✅ 手机宽度（390px）：自动阅读、实时、历史、日历、调度、配置、设置、报告、书库（封面网格与一本书）都没有横向滚动，控制台没有错误");
 }
 
 // ---------- passkey ----------
