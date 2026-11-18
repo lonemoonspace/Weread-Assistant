@@ -22,7 +22,9 @@ function tempDir(base = os.tmpdir()) {
   return dir;
 }
 
-function panelOptions(overrides = {}) {
+// 计划器的晚间断签预警默认不发送：多数场景用真实时钟，在面板时区晚上运行时会多出真实的推送请求；
+// 专门的预警场景传 planner: { warn: undefined } 恢复
+function panelOptions({ planner, ...overrides } = {}) {
   return {
     port: 0,
     host: "127.0.0.1",
@@ -35,6 +37,7 @@ function panelOptions(overrides = {}) {
     runner: { workerPath: STUB_WORKER, killTimeoutMs: 500 },
     sseHeartbeatMs: 100,
     ...overrides,
+    planner: { warn: async () => {}, ...planner },
   };
 }
 

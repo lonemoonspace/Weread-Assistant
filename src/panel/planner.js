@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { CONFIG_SCHEMA } = require("../config/schema");
 const { createNotifier } = require("../notify");
 const { writeFileAtomic } = require("../shared/files");
 const { resolveAccountConfig } = require("./config");
@@ -10,6 +11,9 @@ const { dateInZone } = require("./dates");
 const { CHECK_IN_MINUTES, todayStats } = require("./stats");
 const { AUTO_TRIGGERS, RETRYABLE_ERROR_KINDS, RETRY_DELAYS_MS, retriesLeftFor, retryDelayMs } = require("./retry");
 const { describeSchedule, jitterOf, nextRuns } = require("./schedules");
+
+// 晚间提醒时间的格式，与配置项保存时的校验同一个正则
+const WARN_AT_PATTERN = CONFIG_SCHEMA.find((field) => field.key === "checkinWarningAt").pattern;
 
 /**
  * 计划器：调度器到点触发之外的自动运行都在这里安排。
@@ -451,7 +455,8 @@ function createPlanner({
   // ---------- 晚间断签预警 ----------
 
   // 今天还会自动进行的运行：启用的调度规则今天还会触发，或者每日目标的检查时间还没到（且今天还能补跑）
-  function moreRunsToday(account, today, timezone, now) {
+  // 今天已读够每日目标时不会再补跑，不算
+  function moreRunsToday(account, today, timezone, now, minutes) {
     const later = (account.schedules || []).some(
       (rule) =>
         rule.enabled &&
@@ -461,7 +466,7 @@ function createPlanner({
       return true;
     }
     const { goal } = account;
-    if (!goal || !goal.enabled || now >= zonedTime(today, goal.checkAt, timezone)) {
+    if (!goal || !goal.enabled || minutes >= goal.minutes || now >= zonedTime(today, goal.checkAt, timezone)) {
       return false;
     }
     const record = catchupsOf(account.id, today);
@@ -469,7 +474,7 @@ function createPlanner({
   }
 
   function checkinWarningText(account, read, today) {
-    const lines = [`今天（${today}）只读了 ${read} 分钟，还没打卡（每天至少 ${CHECK_IN_MINUTES} 分钟），今天也没有安排其他运行。`];
+    const lines = [`今天只读了 ${read} 分钟，还没打卡（每天至少 ${CHECK_IN_MINUTES} 分钟），今天也没有安排其他运行。`];
     const record = catchupsOf(account.id, today);
     if (record.loginWait) {
       lines.push("自动运行等待扫码超时：在面板中扫码登录（「仅登录」即可）后会自动补读。");
@@ -479,6 +484,10 @@ function createPlanner({
       lines.push("需要的话请在面板中手动运行。");
     }
     return lines.join("\n");
+  }
+
+  function expectsDailyRuns(account) {
+    return (account.schedules || []).some((rule) => rule.enabled) || Boolean(account.goal && account.goal.enabled);
   }
 
   function checkCheckin(accountId) {
@@ -499,16 +508,20 @@ function createPlanner({
     } catch (_) {
       return;
     }
-    // 时间格式不对（手工改过 panel.json）时不提醒
+    // 只提醒“每天应该打卡”的账号：有启用的调度规则或每日目标；只手动运行的账号不提醒
+    if (!expectsDailyRuns(account)) {
+      return;
+    }
+    // 时间格式不对（手工改过 panel.json）时不提醒；格式与配置项的校验共用一个正则
     const warnAt = String(config.checkinWarningAt).trim();
-    if (!config.notifyOnCheckinWarning || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(warnAt) || now < zonedTime(today, warnAt, timezone)) {
+    if (!config.notifyOnCheckinWarning || !WARN_AT_PATTERN.test(warnAt) || now < zonedTime(today, warnAt, timezone)) {
       return;
     }
     if (runner.isActive(accountId) || state.pending.some((item) => item.accountId === accountId)) {
       return;
     }
     const { minutes, checkedIn } = todayStats(panelDataDir, accountId, { timezone, now: new Date(now) });
-    if (checkedIn || moreRunsToday(account, today, timezone, now)) {
+    if (checkedIn || moreRunsToday(account, today, timezone, now, minutes)) {
       return;
     }
     // 先记下再发送：发送失败也不在下一分钟重复
