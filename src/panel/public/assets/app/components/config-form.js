@@ -59,11 +59,12 @@ export const ConfigForm = {
     // 否则正在编辑、尚未保存的输入会被清掉
     watch(() => JSON.stringify(props.values), reset);
 
+    // 只能在账号中设置的项（例如微信读书 API Key）不出现在全局默认中
+    const fields = computed(() => props.schema.fields.filter((field) => props.mode === "overrides" || !field.accountOnly));
     const groups = computed(() =>
-      props.schema.groups.map((group) => ({
-        ...group,
-        fields: props.schema.fields.filter((field) => field.group === group.id),
-      }))
+      props.schema.groups
+        .map((group) => ({ ...group, fields: fields.value.filter((field) => field.group === group.id) }))
+        .filter((group) => group.fields.length > 0)
     );
 
     function isSet(field) {
@@ -73,7 +74,7 @@ export const ConfigForm = {
     // 只提交有变化的项；null 表示删除该项（回到上一级的值）
     function patch() {
       const result = {};
-      for (const field of props.schema.fields) {
+      for (const field of fields.value) {
         const key = field.key;
         const has = Object.prototype.hasOwnProperty.call(props.values, key);
         if (props.mode === "overrides" && !override[key]) {
