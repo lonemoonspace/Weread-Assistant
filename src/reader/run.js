@@ -78,6 +78,7 @@ async function notifyWithScreenshot(eventName, body, driver, ctx) {
  * options.retry: { attempt, retriesLeft }，第几次尝试与出错后还会自动重试的次数：还会重试时不发送失败通知，
  *   最后一次失败的通知中写明重试过几次
  * options.goalDeficit: 每日目标补跑时当天还差的分钟数，写进扫码超时的通知
+ * options.resumeAfterLogin: 自动触发的阅读（定时、重试、补跑、恢复）为 true：面板会在重新登录后自动补读，写进扫码超时的通知
  * options.homeUrl / options.timing: 覆盖首页地址与时间参数，供测试使用
  *
  * 返回 { status: "success" | "login-timeout" | "error" | "stopped", minutes, error }
@@ -88,7 +89,13 @@ async function runOnce(config, options = {}) {
   const report = options.report || (() => {});
   const retry = { attempt: 1, retriesLeft: 0, ...options.retry };
   const retriedNote = retry.attempt > 1 ? `（已重试 ${retry.attempt - 1} 次）` : "";
-  const goalNote = options.goalDeficit > 0 ? `；今天还差 ${options.goalDeficit} 分钟，需要扫码后手动运行` : "";
+  const reloginHint = "在面板中扫码登录（「仅登录」即可）后会自动补读";
+  let goalNote = "";
+  if (options.goalDeficit > 0) {
+    goalNote = `；今天还差 ${options.goalDeficit} 分钟，${reloginHint}`;
+  } else if (options.resumeAfterLogin) {
+    goalNote = `；${reloginHint}`;
+  }
   const timing = { ...resolveTiming(config), ...options.timing };
   const paths = getDataPaths(config, { screenshotDir: options.screenshotDir });
   const notifier = createNotifier(config, {

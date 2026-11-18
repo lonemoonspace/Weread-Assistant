@@ -10,6 +10,7 @@ const { createPlanner, zonedTime } = require("../../src/panel/planner");
 const { retriesLeftFor, retryDelayMs } = require("../../src/panel/retry");
 const { describeSchedule, nextRunInfo, normalizeSchedules } = require("../../src/panel/schedules");
 const { createStore } = require("../../src/panel/store");
+const { minutesFrom, writeRun } = require("../../scripts/fixtures/run-records");
 
 // 静默运行，返回捕获的日志
 function quietly(fn) {
@@ -330,7 +331,7 @@ describe("createPlanner", () => {
       planner.tick();
     });
     assert.equal(enqueued.length, 3, "每天最多补跑 3 次");
-    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 3, max: 3, blocked: false });
+    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 3, max: 3, blocked: false, waitingLogin: false });
   });
 
   it("每日目标：加入队列失败时不计入当天的次数", async () => {
@@ -341,7 +342,226 @@ describe("createPlanner", () => {
     const planner = createPlanner({ dataDir, store, runner: failing, clock });
     now = zonedTime("2026-11-15", "23:20", "Asia/Shanghai");
     quietly(() => planner.recover());
-    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 0, max: 3, blocked: false });
+    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 0, max: 3, blocked: false, waitingLogin: false });
+  });
+
+  it("扫码超时后先不补跑；之后「仅登录」成功时补读失败那次剩下的分钟", async () => {
+    await store.update((data) => {
+      data.accounts[0].goal = { enabled: true, minutes: 60, checkAt: "23:00" };
+    });
+    const planner = createPlanner({ dataDir, store, runner, clock });
+    now = zonedTime("2026-11-15", "07:05", "Asia/Shanghai");
+    quietly(() => {
+      planner.recover();
+      planner.handleFinished(failedRun({ errorKind: "login-timeout", minutes: 0 }));
+    });
+    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 0, max: 3, blocked: false, waitingLogin: true });
+    assert.equal(planner.accountStatus("a1").pending.length, 0, "扫码超时不重试");
+
+    // 到了检查时间也不补跑，等重新登录
+    now = zonedTime("2026-11-15", "07:30", "Asia/Shanghai");
+    const loginRun = { id: "20261115T000000000Z-login", accountId: "a1", mode: "login", trigger: "manual", status: "success" };
+    // 「仅登录」失败不解除
+    quietly(() => planner.handleFinished({ ...loginRun, status: "failed", errorKind: "login-timeout" }));
+    assert.equal(planner.accountStatus("a1").catchups.waitingLogin, true);
+    const logs = quietly(() => planner.handleFinished(loginRun));
+    assert.ok(logs.some((line) => line.includes("已重新登录")));
+    assert.deepEqual(enqueued, [
+      { accountId: "a1", mode: "read", trigger: "retry", minutes: 30, attempt: 2, originRunId: "20261115T000000000Z-aaaa" },
+    ]);
+    assert.equal(planner.accountStatus("a1").catchups.waitingLogin, false);
+    // 只补读一次
+    quietly(() => planner.handleFinished(loginRun));
+    assert.equal(enqueued.length, 1);
+  });
+
+  it("面板刚启动、恢复完成之前「仅登录」成功：补读记成待办，恢复完成后执行", async () => {
+    await store.update((data) => {
+      data.accounts[0].goal = { enabled: true, minutes: 60, checkAt: "23:00" };
+    });
+    const first = createPlanner({ dataDir, store, runner, clock });
+    now = zonedTime("2026-11-15", "07:05", "Asia/Shanghai");
+    quietly(() => {
+      first.recover();
+      first.handleFinished(failedRun({ errorKind: "login-timeout", minutes: 0 }));
+    });
+    quietly(() => first.close());
+
+    // 重启后、启动恢复之前登录成功
+    const planner = createPlanner({ dataDir, store, runner, clock });
+    now = zonedTime("2026-11-15", "07:30", "Asia/Shanghai");
+    const loginRun = { id: "20261115T000000000Z-login", accountId: "a1", mode: "login", trigger: "manual", status: "success" };
+    quietly(() => planner.handleFinished(loginRun));
+    assert.equal(enqueued.length, 0, "恢复完成之前不入队");
+    assert.equal(planner.accountStatus("a1").catchups.waitingLogin, false);
+    assert.deepEqual(
+      planner.accountStatus("a1").pending.map(({ kind, attempt, minutes }) => ({ kind, attempt, minutes })),
+      [{ kind: "retry", attempt: 2, minutes: 30 }]
+    );
+    quietly(() => planner.recover());
+    assert.deepEqual(enqueued, [
+      { accountId: "a1", mode: "read", trigger: "retry", minutes: 30, attempt: 2, originRunId: "20261115T000000000Z-aaaa" },
+    ]);
+  });
+
+  it("扫码超时后：过了检查时间再登录按每日目标补差额；阅读成功只解除不另外补读；第二天不再等", async () => {
+    await store.update((data) => {
+      data.accounts[0].goal = { enabled: true, minutes: 60, checkAt: "21:00" };
+    });
+    const planner = createPlanner({ dataDir, store, runner, clock });
+    now = zonedTime("2026-11-15", "21:00", "Asia/Shanghai");
+    quietly(() => planner.recover());
+    assert.deepEqual(enqueued.map((item) => item.trigger), ["catchup"]);
+    quietly(() => planner.handleFinished(failedRun({ trigger: "catchup", errorKind: "login-timeout", plannedMinutes: 60, minutes: 0 })));
+    now = zonedTime("2026-11-15", "21:10", "Asia/Shanghai");
+    quietly(() => planner.tick());
+    assert.equal(enqueued.length, 1, "等待扫码时不补跑");
+    const loginRun = { id: "20261115T000000000Z-login", accountId: "a1", mode: "login", trigger: "manual", status: "success" };
+    quietly(() => planner.handleFinished(loginRun));
+    assert.deepEqual(enqueued[1], { accountId: "a1", mode: "read", trigger: "catchup", minutes: 60, goalDeficit: 60 });
+    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 2, max: 3, blocked: false, waitingLogin: false });
+
+    // 手动阅读成功：解除等待，不另外安排补读（之后照常检查每日目标）
+    quietly(() => planner.handleFinished(failedRun({ trigger: "catchup", errorKind: "login-timeout", plannedMinutes: 60, minutes: 0 })));
+    active.add("a1");
+    quietly(() => planner.handleFinished({ ...failedRun({ trigger: "manual" }), status: "success", errorKind: "" }));
+    assert.equal(planner.accountStatus("a1").catchups.waitingLogin, false);
+    assert.equal(enqueued.length, 2);
+    active.clear();
+
+    // 前一天的等待不影响第二天
+    quietly(() => planner.handleFinished(failedRun({ trigger: "catchup", errorKind: "login-timeout", plannedMinutes: 60, minutes: 0 })));
+    now = zonedTime("2026-11-16", "21:00", "Asia/Shanghai");
+    quietly(() => planner.tick());
+    assert.equal(enqueued.at(-1).trigger, "catchup");
+    assert.deepEqual(planner.accountStatus("a1").catchups, { count: 1, max: 3, blocked: false, waitingLogin: false });
+  });
+
+  describe("晚间断签预警", () => {
+    let warnings;
+    const warn = async (config, body, url) => {
+      warnings.push({ name: config.accountName, body, url });
+    };
+    const at = (time, date = "2026-11-15") => zonedTime(date, time, "Asia/Shanghai");
+    const create = () => createPlanner({ dataDir, store, runner, clock, warn, publicUrl: "https://panel.example" });
+
+    // 只提醒“每天应该打卡”的账号：默认给账号一条今天已经触发过的定时规则
+    const morningRule = () => normalizeSchedules([{ type: "daily", times: ["07:00"] }]);
+    beforeEach(async () => {
+      warnings = [];
+      await store.update((data) => {
+        data.accounts[0].schedules = morningRule();
+      });
+    });
+
+    it("到时间还没打卡时提醒一次，附账号页面链接；第二天照常", () => {
+      const planner = create();
+      now = at("21:29");
+      quietly(() => planner.recover());
+      assert.equal(warnings.length, 0, "预警时间之前不提醒");
+      now = at("21:30");
+      quietly(() => planner.tick());
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0].body, /^今天只读了 0 分钟，还没打卡/);
+      assert.equal(warnings[0].url, "https://panel.example#/accounts/a1/live");
+      now = at("21:40");
+      quietly(() => planner.tick());
+      assert.equal(warnings.length, 1, "每天只提醒一次");
+      planner.close();
+      // 重启后不重复
+      const again = create();
+      quietly(() => again.recover());
+      assert.equal(warnings.length, 1);
+      now = at("21:30", "2026-11-16");
+      quietly(() => again.tick());
+      assert.equal(warnings.length, 2);
+    });
+
+    it("已打卡、正在运行、有待办、今天还有调度或补跑、关闭或账号停用时不提醒", async () => {
+      const planner = create();
+      now = at("21:30");
+      quietly(() => planner.recover());
+      warnings = [];
+
+      const reset = () => {
+        warnings = [];
+        fs.rmSync(path.join(dataDir, "planner.json"), { force: true });
+      };
+      const check = (label) => {
+        reset();
+        const fresh = create();
+        quietly(() => fresh.recover());
+        assert.equal(warnings.length, 0, label);
+        return fresh;
+      };
+
+      active.add("a1");
+      check("正在运行或排队");
+      active.clear();
+
+      await store.update((data) => {
+        data.accounts[0].schedules = normalizeSchedules([{ type: "daily", times: ["07:00", "22:00"] }]);
+      });
+      check("今天 22:00 还有定时运行");
+      await store.update((data) => {
+        data.accounts[0].schedules = [];
+        data.accounts[0].goal = { enabled: true, minutes: 30, checkAt: "22:30" };
+      });
+      check("每日目标的检查时间还没到");
+      await store.update((data) => {
+        data.accounts[0].goal = { enabled: false, minutes: 30, checkAt: "21:00" };
+      });
+      check("只手动运行：没有启用的调度规则，每日目标也没启用");
+      await store.update((data) => {
+        data.accounts[0].schedules = morningRule();
+        data.accounts[0].goal = null;
+        data.defaults.notifyOnCheckinWarning = false;
+      });
+      check("关闭了提醒");
+      await store.update((data) => {
+        data.defaults.notifyOnCheckinWarning = true;
+        data.accounts[0].overrides.checkinWarningAt = "22:00";
+      });
+      check("账号的提醒时间改为 22:00");
+      await store.update((data) => {
+        data.accounts[0].overrides = {};
+        data.accounts[0].enabled = false;
+      });
+      check("账号停用");
+      await store.update((data) => {
+        data.accounts[0].enabled = true;
+      });
+
+      writeRun(dataDir, "a1", { queuedAt: new Date(at("08:00")).toISOString(), marks: minutesFrom(new Date(at("08:00")).toISOString(), 5) });
+      check("已经读满 5 分钟");
+    });
+
+    it("每日目标不到 5 分钟且今天已读够：不再等目标检查时间，到点照常提醒", async () => {
+      await store.update((data) => {
+        data.accounts[0].schedules = [];
+        data.accounts[0].goal = { enabled: true, minutes: 3, checkAt: "22:30" };
+      });
+      writeRun(dataDir, "a1", { queuedAt: new Date(at("08:00")).toISOString(), marks: minutesFrom(new Date(at("08:00")).toISOString(), 3) });
+      const planner = create();
+      now = at("21:30");
+      quietly(() => planner.recover());
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0].body, /^今天只读了 3 分钟/);
+    });
+
+    it("扫码超时后提醒中写明扫码登录后会补读", async () => {
+      await store.update((data) => {
+        data.accounts[0].goal = { enabled: true, minutes: 30, checkAt: "21:00" };
+      });
+      const planner = create();
+      now = at("21:00");
+      quietly(() => planner.recover());
+      quietly(() => planner.handleFinished(failedRun({ trigger: "catchup", errorKind: "login-timeout", plannedMinutes: 30, minutes: 0 })));
+      now = at("21:30");
+      quietly(() => planner.tick());
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0].body, /扫码登录（「仅登录」即可）后会自动补读/);
+    });
   });
 
   it("planner.json 中到期时间无效的待办在加载时丢弃", () => {

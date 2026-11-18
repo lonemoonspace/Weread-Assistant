@@ -1,4 +1,4 @@
-// 面板 smoke：计划器（失败重试、代发失败通知、启动恢复、错过的调度、随机延后、每日目标补跑）
+// 面板 smoke：计划器（失败重试、代发失败通知、启动恢复、错过的调度、随机延后、每日目标补跑、扫码后补读、晚间断签预警）
 
 const assert = require("assert");
 const fs = require("fs");
@@ -13,7 +13,8 @@ const { tempDir, until } = require("./helpers");
 const TIMEZONE = "Asia/Shanghai";
 const RULE = { id: "r1", type: "daily", times: ["06:00"], enabled: true };
 
-// 计划器的测试参数：不等待启动、每 50 毫秒检查一次、重试间隔缩短；clock.offset 可以把时钟往后拨
+// 计划器的测试参数：不等待启动、每 50 毫秒检查一次、重试间隔缩短；clock.offset 可以把时钟往后拨。
+// 晚间断签预警默认不发送（与 helpers.js 的 panelOptions 一致）；需要时传 warn: undefined 恢复
 function plannerOptions(extra = {}) {
   const clock = {
     offset: 0,
@@ -23,7 +24,7 @@ function plannerOptions(extra = {}) {
     setInterval: (fn, ms) => setInterval(fn, ms),
     clearInterval: (timer) => clearInterval(timer),
   };
-  return { clock, startupDelayMs: 0, tickMs: 50, retryDelaysMs: [100, 200, 300], ...extra };
+  return { clock, startupDelayMs: 0, tickMs: 50, retryDelaysMs: [100, 200, 300], warn: async () => {}, ...extra };
 }
 
 // 账号的全部运行记录，按时间升序
@@ -283,7 +284,7 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
     assert.doesNotMatch(runLog(panel, retried), /随机增加/);
   });
 
-  await scenario("每日目标：到检查时间后补跑差额；补跑不跨过 23:57，每天最多 3 次；扫码超时后当天不再补跑；接口校验", async () => {
+  await scenario("每日目标：到检查时间后补跑差额；补跑不跨过 23:57，每天最多 3 次；扫码超时后等重新登录再补跑；接口校验", async () => {
     const options = plannerOptions();
     const panel = await startAuthed({ planner: options });
     const today = dateInZone(new Date(), TIMEZONE);
@@ -292,7 +293,7 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
     };
     setClock("12:00");
     await panel.call("PATCH", "api/settings", { settings: { maxConcurrentRuns: 3 } });
-    for (const id of ["goal-l", "goal-m", "timeout-n"]) {
+    for (const id of ["goal-l", "goal-m", "timeout-n", "relogin-p"]) {
       await panel.call("POST", "api/accounts", { id });
     }
 
@@ -327,13 +328,63 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
     );
     assert.strictEqual(runs.length, 3);
 
-    // 扫码超时：通知中写明还差多少，当天不再补跑
+    // 扫码超时：通知中写明还差多少，重新登录之前不再补跑
     setClock("12:00");
     await panel.call("PUT", "api/accounts/timeout-n/goal", { goal: { minutes: 30, checkAt: "06:00" } });
     const [timedOut] = await settle(panel, "timeout-n", 1);
-    assert.match(runLog(panel, timedOut), /goalDeficit=30/);
+    assert.match(runLog(panel, timedOut), /goalDeficit=30 resumeAfterLogin=true/);
     await new Promise((resolve) => setTimeout(resolve, 300));
-    assert.strictEqual(accountRuns(panel, "timeout-n").length, 1, "扫码超时后当天不应再补跑");
-    assert.strictEqual(panel.planner.accountStatus("timeout-n").catchups.blocked, true);
+    assert.strictEqual(accountRuns(panel, "timeout-n").length, 1, "扫码超时后不应再补跑");
+    assert.deepStrictEqual(panel.planner.accountStatus("timeout-n").catchups, { count: 1, max: 3, blocked: false, waitingLogin: true });
+
+    // 扫码超时后「仅登录」成功：已过检查时间，按每日目标补读差额
+    await panel.call("PUT", "api/accounts/relogin-p/goal", { goal: { minutes: 3, checkAt: "06:00" } });
+    await settle(panel, "relogin-p", 1);
+    assert.strictEqual(panel.planner.accountStatus("relogin-p").catchups.waitingLogin, true);
+    assert.strictEqual((await panel.call("POST", "api/accounts/relogin-p/runs", { mode: "login" })).status, 202);
+    const relogin = await settle(panel, "relogin-p", 3, "仅登录成功后应补读");
+    assert.deepStrictEqual(
+      relogin.map((run) => [run.mode, run.trigger, run.status]),
+      [["read", "catchup", "failed"], ["login", "manual", "success"], ["read", "catchup", "success"]]
+    );
+    assert.strictEqual(relogin[2].plannedMinutes, 3);
+    assert.match(runLog(panel, relogin[1]), /resumeAfterLogin=false/, "手动运行不会自动补读，通知里不提示");
+    assert.deepStrictEqual(panel.planner.accountStatus("relogin-p").catchups, { count: 2, max: 3, blocked: false, waitingLogin: false });
+  });
+
+  await scenario("晚间断签预警：到时间还没打卡时经通知渠道提醒一次；关闭后、只手动运行的账号不提醒", async () => {
+    const bark = await startBarkServer();
+    try {
+      const options = plannerOptions({ warn: undefined });
+      const today = dateInZone(new Date(), TIMEZONE);
+      options.clock.offset = zonedTime(today, "21:00", TIMEZONE) - Date.now();
+      const panel = await startAuthed({ planner: options });
+      await panel.call("PATCH", "api/settings", {
+        defaults: { barkKey: "bark-key", barkServer: bark.url, notifyOnStart: false, checkinWarningAt: "21:10" },
+      });
+      assert.strictEqual(
+        (await panel.call("PATCH", "api/settings", { defaults: { checkinWarningAt: "9:10" } })).status,
+        400,
+        "提醒时间格式不对时应拒绝"
+      );
+      for (const id of ["idle-w", "idle-x", "idle-y"]) {
+        await panel.call("POST", "api/accounts", { id });
+      }
+      // 只提醒有启用的调度规则或每日目标的账号：idle-y 只手动运行
+      for (const id of ["idle-w", "idle-x"]) {
+        await panel.call("PUT", `api/accounts/${id}/schedules`, { schedules: [{ type: "daily", times: ["06:00"] }] });
+      }
+      await panel.call("PATCH", "api/accounts/idle-x", { overrides: { notifyOnCheckinWarning: false } });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.strictEqual(bark.pushes.length, 0, "提醒时间之前不应提醒");
+      options.clock.offset = zonedTime(today, "21:10", TIMEZONE) - Date.now();
+      await until(() => bark.pushes.length === 1, { message: "到提醒时间应推送一次" });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.strictEqual(bark.pushes.length, 1, "每天只提醒一次，关闭了提醒与只手动运行的账号不推送");
+      assert.match(bark.pushes[0].body, /只读了 0 分钟，还没打卡/);
+      assert.match(bark.pushes[0].title, /idle-w/);
+    } finally {
+      await bark.close();
+    }
   });
 };

@@ -1,14 +1,19 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { CONFIG_SCHEMA } = require("../config/schema");
 const { createNotifier } = require("../notify");
 const { writeFileAtomic } = require("../shared/files");
+const { resolveAccountConfig } = require("./config");
 const { PanelError } = require("./errors");
 const { MAX_CATCHUPS_PER_DAY } = require("./goal");
 const { dateInZone } = require("./dates");
-const { todayStats } = require("./stats");
+const { CHECK_IN_MINUTES, todayStats } = require("./stats");
 const { AUTO_TRIGGERS, RETRYABLE_ERROR_KINDS, RETRY_DELAYS_MS, retriesLeftFor, retryDelayMs } = require("./retry");
 const { describeSchedule, jitterOf, nextRuns } = require("./schedules");
+
+// 晚间提醒时间的格式，与配置项保存时的校验同一个正则
+const WARN_AT_PATTERN = CONFIG_SCHEMA.find((field) => field.key === "checkinWarningAt").pattern;
 
 /**
  * 计划器：调度器到点触发之外的自动运行都在这里安排。
@@ -16,10 +21,13 @@ const { describeSchedule, jitterOf, nextRuns } = require("./schedules");
  * - 失败重试：自动触发的运行因出错、超时或子进程异常退出而失败时，按 5、15、30 分钟的间隔重试，只读剩余的分钟（retry.js）
  * - 调度随机延后：规则带 jitterMinutes 时，到点后随机延后 0 到该值分钟再加入队列
  * - 每日目标：每天到账号的 goal.checkAt，当天分钟数不够时补跑差额（不跨过零点，每天最多 3 次）
+ * - 扫码后补读：自动运行因扫码超时失败后，当天先不补跑；之后同一天里任何一次运行成功（说明已重新登录）就解除，
+ *   成功的是「仅登录」时接着补读：已过目标检查时间的按每日目标补差额，否则补读失败那次剩下的分钟
+ * - 晚间断签预警：到账号配置的 checkinWarningAt，今天还没打卡、也没有正在进行或今天还会进行的运行时，经通知渠道提醒一次
  * - 启动时恢复：面板启动 startupDelayMs 后，恢复上次停止时被中断的自动运行、补触发停机期间错过的调度、执行过期的待办，
  *   都只处理宽限时间（面板设置 catchupGraceMinutes）以内的
  *
- * 待办与每天补跑的次数保存在 data/planner.json（0600，原子写入），面板重启后不丢；文件丢失或损坏时当作没有待办。
+ * 待办、每天补跑的次数与当天是否已发过断签预警保存在 data/planner.json（0600，原子写入），面板重启后不丢；文件丢失或损坏时当作没有待办。
  * 时钟与定时器经 clock 注入，测试可以直接调用 tick() 与 recover()。
  */
 
@@ -73,7 +81,7 @@ function zonedTime(date, time, timezone) {
 }
 
 function emptyState() {
-  return { version: STATE_VERSION, lastCheckAt: null, pending: [], catchups: {} };
+  return { version: STATE_VERSION, lastCheckAt: null, pending: [], catchups: {}, checkinWarned: {} };
 }
 
 const isPlainObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -112,6 +120,7 @@ function loadState(file) {
     lastCheckAt: typeof raw.lastCheckAt === "string" && !Number.isNaN(Date.parse(raw.lastCheckAt)) ? raw.lastCheckAt : null,
     pending,
     catchups: isPlainObject(raw.catchups) ? raw.catchups : {},
+    checkinWarned: isPlainObject(raw.checkinWarned) ? raw.checkinWarned : {},
   };
 }
 
@@ -137,6 +146,13 @@ async function sendFailureNotice(config, body) {
   await notifier.flush();
 }
 
+// 晚间断签预警；url 为面板中账号页面的地址（配置了 PANEL_PUBLIC_URL 时）
+async function sendCheckinWarning(config, body, url = "") {
+  const notifier = createNotifier(config);
+  notifier.event("checkinWarning", body, url ? { url, actions: [{ action: "view", label: "打开面板", url, clear: true }] } : {});
+  await notifier.flush();
+}
+
 function createPlanner({
   dataDir,
   store,
@@ -148,6 +164,8 @@ function createPlanner({
   tickMs = TICK_MS,
   retryDelaysMs = RETRY_DELAYS_MS,
   notify = sendFailureNotice,
+  warn = sendCheckinWarning,
+  publicUrl = "",
 }) {
   const panelDataDir = path.resolve(dataDir);
   const file = path.join(panelDataDir, "planner.json");
@@ -171,6 +189,7 @@ function createPlanner({
 
   const settings = () => store.get().settings;
   const graceMs = () => settings().catchupGraceMinutes * 60000;
+  const todayOf = () => dateInZone(new Date(clock.now()), settings().timezone);
   const findAccount = (data, id) => data.accounts.find((account) => account.id === id) || null;
 
   function addPending(item) {
@@ -233,6 +252,9 @@ function createPlanner({
   // 运行队列每次运行结束后调用
   // config 为这次运行实际使用的配置；retriesLeft 为启动时下发给子进程的剩余重试次数（还有时子进程出错不发通知）
   function handleFinished(run, { config = null, retriesLeft = 0 } = {}) {
+    if (run.status === "success") {
+      loginSucceeded(run);
+    }
     if (run.mode !== "read") {
       return;
     }
@@ -278,8 +300,8 @@ function createPlanner({
     const attempt = run.attempt || 1;
     const left = retriesLeftFor(run.trigger, attempt, data.settings.retryCount);
     if (run.errorKind === "login-timeout" && AUTO_TRIGGERS.includes(run.trigger)) {
-      // 需要人扫码：当天不再补跑
-      blockCatchups(run.accountId);
+      // 需要人扫码：重新登录之前不补跑
+      waitForLogin(run);
     }
     const minutes = remainingMinutes(run);
     if (RETRYABLE_ERROR_KINDS.includes(run.errorKind) && left > 0 && minutes === 0) {
@@ -310,14 +332,82 @@ function createPlanner({
   // ---------- 每日目标 ----------
 
   function blockCatchups(accountId) {
-    const today = dateInZone(new Date(clock.now()), settings().timezone);
+    const today = todayOf();
     state.catchups[accountId] = { ...catchupsOf(accountId, today), blocked: true };
     save();
   }
 
   function catchupsOf(accountId, today) {
     const record = state.catchups[accountId];
-    return record && record.date === today ? record : { date: today, count: 0, blocked: false };
+    return isPlainObject(record) && record.date === today ? record : { date: today, count: 0, blocked: false };
+  }
+
+  // 自动运行因扫码超时失败：记下要补读的运行，等重新登录。同一天再次超时时以最近的一次为准
+  function waitForLogin(run) {
+    const today = todayOf();
+    state.catchups[run.accountId] = {
+      ...catchupsOf(run.accountId, today),
+      loginWait: {
+        runId: run.id,
+        originRunId: run.originRunId || run.id,
+        attempt: run.attempt || 1,
+        minutes: remainingMinutes(run),
+      },
+    };
+    save();
+  }
+
+  // 任何一次运行成功都说明登录有效：解除当天的等待。成功的是「仅登录」时接着补读；
+  // 成功的是阅读时不另外补读，结束后照常检查每日目标
+  function loginSucceeded(run) {
+    const today = todayOf();
+    const { loginWait, ...record } = catchupsOf(run.accountId, today);
+    if (!isPlainObject(loginWait)) {
+      return;
+    }
+    state.catchups[run.accountId] = record;
+    save();
+    console.info(`账号 ${run.accountId} 已重新登录，解除今天的补跑等待`);
+    if (run.mode !== "login" || closing) {
+      return;
+    }
+    const data = store.get();
+    const account = findAccount(data, run.accountId);
+    if (!account || !account.enabled) {
+      return;
+    }
+    const { goal } = account;
+    if (goal && goal.enabled && clock.now() >= zonedTime(today, goal.checkAt, data.settings.timezone)) {
+      // 已过目标检查时间：按每日目标补差额（计入每天的补跑次数）；面板刚启动时由恢复完成后的第一次检查补
+      if (ready) {
+        checkGoal(run.accountId);
+      }
+      return;
+    }
+    if (loginWait.minutes === 0) {
+      return;
+    }
+    const attempt = Number.isInteger(loginWait.attempt) && loginWait.attempt > 0 ? loginWait.attempt : 1;
+    const originRunId = typeof loginWait.originRunId === "string" ? loginWait.originRunId : loginWait.runId;
+    if (!ready) {
+      // 面板刚启动、恢复还没完成：记成立即到期的重试待办，恢复完成后的第一次检查就会执行
+      addPending({
+        kind: "retry",
+        accountId: run.accountId,
+        failedRunId: loginWait.runId,
+        originRunId,
+        attempt: attempt + 1,
+        minutes: Number.isInteger(loginWait.minutes) ? loginWait.minutes : null,
+        dueAt: formatTime(clock.now()),
+      });
+      console.info(`扫码登录后补读：面板启动恢复完成后执行（账号 ${run.accountId}，最初运行 ${originRunId}）`);
+      return;
+    }
+    enqueue(
+      run.accountId,
+      { trigger: "retry", minutes: minutesOption(loginWait.minutes), attempt: attempt + 1, originRunId },
+      `扫码登录后补读（最初运行 ${originRunId}${loginWait.minutes > 0 ? `，补读 ${loginWait.minutes} 分钟` : ""}）`
+    );
   }
 
   function checkGoal(accountId) {
@@ -337,7 +427,7 @@ function createPlanner({
       return;
     }
     const record = catchupsOf(accountId, today);
-    if (record.blocked || record.count >= MAX_CATCHUPS_PER_DAY) {
+    if (record.blocked || record.loginWait || record.count >= MAX_CATCHUPS_PER_DAY) {
       return;
     }
     const window = Math.floor((zonedTime(today, DAY_END_TIME, timezone) - now) / 60000);
@@ -360,6 +450,86 @@ function createPlanner({
       state.catchups[accountId] = { ...record, count: record.count + 1 };
       save();
     }
+  }
+
+  // ---------- 晚间断签预警 ----------
+
+  // 今天还会自动进行的运行：启用的调度规则今天还会触发，或者每日目标的检查时间还没到（且今天还能补跑）
+  // 今天已读够每日目标时不会再补跑，不算
+  function moreRunsToday(account, today, timezone, now, minutes) {
+    const later = (account.schedules || []).some(
+      (rule) =>
+        rule.enabled &&
+        nextRuns(rule, { timezone, from: new Date(now), count: 1 }).some((time) => dateInZone(new Date(time), timezone) === today)
+    );
+    if (later) {
+      return true;
+    }
+    const { goal } = account;
+    if (!goal || !goal.enabled || minutes >= goal.minutes || now >= zonedTime(today, goal.checkAt, timezone)) {
+      return false;
+    }
+    const record = catchupsOf(account.id, today);
+    return !record.blocked && !record.loginWait && record.count < MAX_CATCHUPS_PER_DAY;
+  }
+
+  function checkinWarningText(account, read, today) {
+    const lines = [`今天只读了 ${read} 分钟，还没打卡（每天至少 ${CHECK_IN_MINUTES} 分钟），今天也没有安排其他运行。`];
+    const record = catchupsOf(account.id, today);
+    if (record.loginWait) {
+      lines.push("自动运行等待扫码超时：在面板中扫码登录（「仅登录」即可）后会自动补读。");
+    } else if (record.blocked) {
+      lines.push("今天手动停止过自动运行，不会再补跑，需要的话请在面板中手动运行。");
+    } else {
+      lines.push("需要的话请在面板中手动运行。");
+    }
+    return lines.join("\n");
+  }
+
+  function expectsDailyRuns(account) {
+    return (account.schedules || []).some((rule) => rule.enabled) || Boolean(account.goal && account.goal.enabled);
+  }
+
+  function checkCheckin(accountId) {
+    const data = store.get();
+    const account = findAccount(data, accountId);
+    if (!account || !account.enabled) {
+      return;
+    }
+    const { timezone } = data.settings;
+    const now = clock.now();
+    const today = dateInZone(new Date(now), timezone);
+    if (state.checkinWarned[accountId] === today) {
+      return;
+    }
+    let config;
+    try {
+      config = resolveAccountConfig(data, account, panelDataDir);
+    } catch (_) {
+      return;
+    }
+    // 只提醒“每天应该打卡”的账号：有启用的调度规则或每日目标；只手动运行的账号不提醒
+    if (!expectsDailyRuns(account)) {
+      return;
+    }
+    // 时间格式不对（手工改过 panel.json）时不提醒；格式与配置项的校验共用一个正则
+    const warnAt = String(config.checkinWarningAt).trim();
+    if (!config.notifyOnCheckinWarning || !WARN_AT_PATTERN.test(warnAt) || now < zonedTime(today, warnAt, timezone)) {
+      return;
+    }
+    if (runner.isActive(accountId) || state.pending.some((item) => item.accountId === accountId)) {
+      return;
+    }
+    const { minutes, checkedIn } = todayStats(panelDataDir, accountId, { timezone, now: new Date(now) });
+    if (checkedIn || moreRunsToday(account, today, timezone, now, minutes)) {
+      return;
+    }
+    // 先记下再发送：发送失败也不在下一分钟重复
+    state.checkinWarned[accountId] = today;
+    save();
+    console.info(`晚间断签预警：账号 ${accountId} 今天只读了 ${minutes} 分钟`);
+    const url = publicUrl ? `${publicUrl}#/accounts/${accountId}/live` : "";
+    warn(config, checkinWarningText(account, minutes, today), url).catch((e) => console.warn("发送断签预警出错:", e.message));
   }
 
   // ---------- 待办 ----------
@@ -417,6 +587,7 @@ function createPlanner({
     }
     for (const account of store.get().accounts) {
       checkGoal(account.id);
+      checkCheckin(account.id);
     }
     state.lastCheckAt = formatTime(now);
     save();
@@ -560,8 +731,8 @@ function createPlanner({
         .filter((item) => item.accountId === accountId && item.kind !== "resume")
         .map(({ kind, dueAt, attempt, minutes, scheduleId }) => ({ kind, dueAt, attempt, minutes, scheduleId }))
         .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
-      const { count, blocked } = catchupsOf(accountId, today);
-      return { pending, catchups: { count, max: MAX_CATCHUPS_PER_DAY, blocked } };
+      const { count, blocked, loginWait } = catchupsOf(accountId, today);
+      return { pending, catchups: { count, max: MAX_CATCHUPS_PER_DAY, blocked: Boolean(blocked), waitingLogin: Boolean(loginWait) } };
     },
 
     // 面板开始停止：不再安排新的重试与补跑，被中断的运行仍会记下
