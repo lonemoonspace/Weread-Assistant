@@ -332,7 +332,7 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
     setClock("12:00");
     await panel.call("PUT", "api/accounts/timeout-n/goal", { goal: { minutes: 30, checkAt: "06:00" } });
     const [timedOut] = await settle(panel, "timeout-n", 1);
-    assert.match(runLog(panel, timedOut), /goalDeficit=30/);
+    assert.match(runLog(panel, timedOut), /goalDeficit=30 resumeAfterLogin=true/);
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.strictEqual(accountRuns(panel, "timeout-n").length, 1, "扫码超时后不应再补跑");
     assert.deepStrictEqual(panel.planner.accountStatus("timeout-n").catchups, { count: 1, max: 3, blocked: false, waitingLogin: true });
@@ -348,6 +348,7 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
       [["read", "catchup", "failed"], ["login", "manual", "success"], ["read", "catchup", "success"]]
     );
     assert.strictEqual(relogin[2].plannedMinutes, 3);
+    assert.match(runLog(panel, relogin[1]), /resumeAfterLogin=false/, "手动运行不会自动补读，通知里不提示");
     assert.deepStrictEqual(panel.planner.accountStatus("relogin-p").catchups, { count: 2, max: 3, blocked: false, waitingLogin: false });
   });
 
