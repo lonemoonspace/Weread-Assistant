@@ -1,6 +1,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
-import { SCHEDULE_TYPE_LABELS, formatClock, formatNextRun, formatShort } from "../format.js";
+import { SCHEDULE_TYPE_LABELS, formatHourMinute, formatNextRun, formatShort } from "../format.js";
 import { setLeaveGuard } from "../router.js";
 import { notify, refreshAccounts, timezone } from "../store.js";
 
@@ -163,14 +163,14 @@ const SplitCard = {
       }
     }
 
-    async function save() {
+    async function save(clearing = false) {
       busy.value = true;
       error.value = "";
       try {
-        const split = payload();
+        const split = clearing ? null : payload();
         apply(await api(`accounts/${props.account.id}/split`, { method: "PUT", body: { split } }));
         await refreshAccounts();
-        notify(split.enabled ? "分段阅读已保存，今天剩下的段已重新安排" : "分段阅读已关闭");
+        notify(!split ? "已清除分段阅读设置" : split.enabled ? "分段阅读已保存，今天剩下的段已重新安排" : "分段阅读已关闭");
       } catch (e) {
         error.value = e.message;
       } finally {
@@ -181,11 +181,20 @@ const SplitCard = {
     // 今天的各段：只显示时刻（HH:MM）
     const segments = computed(() =>
       view.value && view.value.plan
-        ? view.value.plan.segments.map((segment) => `${formatClock(segment.at, view.value.timezone).slice(0, 5)} ${segment.minutes} 分钟（${SEGMENT_STATUS[segment.status] || segment.status}）`)
+        ? view.value.plan.segments.map((segment) => `${formatHourMinute(segment.at, view.value.timezone)} ${segment.minutes} 分钟（${SEGMENT_STATUS[segment.status] || segment.status}）`)
         : []
     );
+    // 分不成每段都在最短–最长之间时（例如每段固定 20 分钟、每天 50 分钟），只有最后一段更短：提前说明
+    const shortLast = computed(() => {
+      const { minutes, minSegment, maxSegment } = form.value;
+      if (![minutes, minSegment, maxSegment].every((value) => Number.isInteger(value) && value > 0) || minSegment > maxSegment) {
+        return 0;
+      }
+      const count = Math.ceil(minutes / maxSegment);
+      return count > 1 && count * minSegment > minutes ? minutes - (count - 1) * maxSegment : 0;
+    });
     onMounted(load);
-    return { view, form, error, busy, dirty, save, segments };
+    return { view, form, error, busy, dirty, save, segments, shortLast };
   },
   template: `
     <article class="goal-card split-card">
@@ -217,6 +226,7 @@ const SplitCard = {
             <input type="number" min="5" max="240" v-model.number="form.maxSegment">
           </label>
         </div>
+        <p v-if="shortLast" class="muted">分不成每段都在 {{ form.minSegment }}–{{ form.maxSegment }} 分钟：前面各段读 {{ form.maxSegment }} 分钟，最后一段只读 {{ shortLast }} 分钟。</p>
         <p v-if="view.split && view.split.enabled" class="muted">
           今天已读 {{ view.today.minutes }}/{{ view.split.minutes }} 分钟。
           <template v-if="segments.length">今天的安排：{{ segments.join("、") }}。</template>
@@ -226,7 +236,10 @@ const SplitCard = {
         <p v-if="dirty" class="muted">分段阅读有未保存的修改。</p>
         <div class="rule-footer">
           <label class="switch-line"><input type="checkbox" role="switch" v-model="form.enabled"> 启用</label>
-          <button type="button" :aria-busy="busy" :disabled="busy" @click="save">保存分段阅读</button>
+          <div class="form-actions">
+            <button v-if="view.split" type="button" class="secondary" :disabled="busy" @click="save(true)">清除</button>
+            <button type="button" :aria-busy="busy" :disabled="busy" @click="save()">保存分段阅读</button>
+          </div>
         </div>
       </template>
     </article>`,
