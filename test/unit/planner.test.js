@@ -423,8 +423,13 @@ describe("createPlanner", () => {
     const at = (time, date = "2026-11-15") => zonedTime(date, time, "Asia/Shanghai");
     const create = () => createPlanner({ dataDir, store, runner, clock, warn, publicUrl: "https://panel.example" });
 
-    beforeEach(() => {
+    // 只提醒“每天应该打卡”的账号：默认给账号一条今天已经触发过的定时规则
+    const morningRule = () => normalizeSchedules([{ type: "daily", times: ["07:00"] }]);
+    beforeEach(async () => {
       warnings = [];
+      await store.update((data) => {
+        data.accounts[0].schedules = morningRule();
+      });
     });
 
     it("到时间还没打卡时提醒一次，附账号页面链接；第二天照常", () => {
@@ -435,7 +440,7 @@ describe("createPlanner", () => {
       now = at("21:30");
       quietly(() => planner.tick());
       assert.equal(warnings.length, 1);
-      assert.match(warnings[0].body, /今天（2026-11-15）只读了 0 分钟，还没打卡/);
+      assert.match(warnings[0].body, /^今天只读了 0 分钟，还没打卡/);
       assert.equal(warnings[0].url, "https://panel.example#/accounts/a1/live");
       now = at("21:40");
       quietly(() => planner.tick());
@@ -473,7 +478,7 @@ describe("createPlanner", () => {
       active.clear();
 
       await store.update((data) => {
-        data.accounts[0].schedules = normalizeSchedules([{ type: "daily", times: ["22:00"] }]);
+        data.accounts[0].schedules = normalizeSchedules([{ type: "daily", times: ["07:00", "22:00"] }]);
       });
       check("今天 22:00 还有定时运行");
       await store.update((data) => {
@@ -482,6 +487,11 @@ describe("createPlanner", () => {
       });
       check("每日目标的检查时间还没到");
       await store.update((data) => {
+        data.accounts[0].goal = { enabled: false, minutes: 30, checkAt: "21:00" };
+      });
+      check("只手动运行：没有启用的调度规则，每日目标也没启用");
+      await store.update((data) => {
+        data.accounts[0].schedules = morningRule();
         data.accounts[0].goal = null;
         data.defaults.notifyOnCheckinWarning = false;
       });
@@ -502,6 +512,19 @@ describe("createPlanner", () => {
 
       writeRun(dataDir, "a1", { queuedAt: new Date(at("08:00")).toISOString(), marks: minutesFrom(new Date(at("08:00")).toISOString(), 5) });
       check("已经读满 5 分钟");
+    });
+
+    it("每日目标不到 5 分钟且今天已读够：不再等目标检查时间，到点照常提醒", async () => {
+      await store.update((data) => {
+        data.accounts[0].schedules = [];
+        data.accounts[0].goal = { enabled: true, minutes: 3, checkAt: "22:30" };
+      });
+      writeRun(dataDir, "a1", { queuedAt: new Date(at("08:00")).toISOString(), marks: minutesFrom(new Date(at("08:00")).toISOString(), 3) });
+      const planner = create();
+      now = at("21:30");
+      quietly(() => planner.recover());
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0].body, /^今天只读了 3 分钟/);
     });
 
     it("扫码超时后提醒中写明扫码登录后会补读", async () => {

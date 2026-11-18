@@ -14,7 +14,7 @@ const TIMEZONE = "Asia/Shanghai";
 const RULE = { id: "r1", type: "daily", times: ["06:00"], enabled: true };
 
 // 计划器的测试参数：不等待启动、每 50 毫秒检查一次、重试间隔缩短；clock.offset 可以把时钟往后拨。
-// 晚间断签预警默认不发送：用真实时钟时，测试在晚上运行会多出预警推送；需要时传 warn: undefined 恢复
+// 晚间断签预警默认不发送（与 helpers.js 的 panelOptions 一致）；需要时传 warn: undefined 恢复
 function plannerOptions(extra = {}) {
   const clock = {
     offset: 0,
@@ -352,7 +352,7 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
     assert.deepStrictEqual(panel.planner.accountStatus("relogin-p").catchups, { count: 2, max: 3, blocked: false, waitingLogin: false });
   });
 
-  await scenario("晚间断签预警：到时间还没打卡时经通知渠道提醒一次；关闭后不提醒", async () => {
+  await scenario("晚间断签预警：到时间还没打卡时经通知渠道提醒一次；关闭后、只手动运行的账号不提醒", async () => {
     const bark = await startBarkServer();
     try {
       const options = plannerOptions({ warn: undefined });
@@ -367,8 +367,12 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
         400,
         "提醒时间格式不对时应拒绝"
       );
-      for (const id of ["idle-w", "idle-x"]) {
+      for (const id of ["idle-w", "idle-x", "idle-y"]) {
         await panel.call("POST", "api/accounts", { id });
+      }
+      // 只提醒有启用的调度规则或每日目标的账号：idle-y 只手动运行
+      for (const id of ["idle-w", "idle-x"]) {
+        await panel.call("PUT", `api/accounts/${id}/schedules`, { schedules: [{ type: "daily", times: ["06:00"] }] });
       }
       await panel.call("PATCH", "api/accounts/idle-x", { overrides: { notifyOnCheckinWarning: false } });
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -376,7 +380,7 @@ module.exports = async function plannerScenarios({ scenario, start, startAuthed 
       options.clock.offset = zonedTime(today, "21:10", TIMEZONE) - Date.now();
       await until(() => bark.pushes.length === 1, { message: "到提醒时间应推送一次" });
       await new Promise((resolve) => setTimeout(resolve, 300));
-      assert.strictEqual(bark.pushes.length, 1, "每天只提醒一次，关闭了提醒的账号不推送");
+      assert.strictEqual(bark.pushes.length, 1, "每天只提醒一次，关闭了提醒与只手动运行的账号不推送");
       assert.match(bark.pushes[0].body, /只读了 0 分钟，还没打卡/);
       assert.match(bark.pushes[0].title, /idle-w/);
     } finally {
