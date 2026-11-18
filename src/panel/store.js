@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { writeFileAtomic } = require("../shared/files");
 const { ACCOUNT_ID_PATTERN } = require("./config");
+const { storedChallenge } = require("./challenge");
 const { storedGoal } = require("./goal");
 const { storedSplit } = require("./split");
 const { sanitizeSettings } = require("./settings");
@@ -70,7 +71,7 @@ function normalizeData(raw, seedDefaults) {
     accounts: (raw.accounts || []).map((account) => ({
       ...account,
       schedules: account.schedules || [],
-      challenge: account.challenge && typeof account.challenge === "object" ? account.challenge : null,
+      challenge: storedChallenge(account.challenge),
       goal: storedGoal(account.goal),
       split: storedSplit(account.split),
     })),
