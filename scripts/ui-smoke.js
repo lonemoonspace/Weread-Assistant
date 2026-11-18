@@ -81,7 +81,9 @@ async function startSeededPanel() {
     // 计划器不在测试期间自动补跑，页面上的运行只来自测试步骤
     planner: { startupDelayMs: 60 * 60 * 1000 },
     officialApi: { gatewayUrl: official.url, retryDelayMs: 1 },
-    notes: { delayMs: 0 },
+    // 全局默认配置中会填写 Bark Key：同步失败通知与每周阅读报告不真的发送
+    notes: { delayMs: 0, notify: async () => {} },
+    reports: { send: async () => {} },
   });
   const base = `http://127.0.0.1:${panel.port}/`;
   let cookie = "";
