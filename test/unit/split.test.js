@@ -64,6 +64,22 @@ describe("分段阅读设置", () => {
     }
   });
 
+  it("只有最后一段可以短于每段最短时长（例如每段固定 20 分钟、一天 50 分钟）", () => {
+    for (const [total, minSegment, maxSegment] of [[50, 20, 20], [30, 20, 20], [50, 15, 15], [100, 25, 40], [61, 30, 31], [60, 15, 35]]) {
+      for (let seed = 1; seed <= 100; seed += 1) {
+        const segments = planSegments({ total, start: minuteOf("07:00"), end: minuteOf("23:00"), minSegment, maxSegment, random: seeded(seed) });
+        const label = `${total}/${minSegment}–${maxSegment}: ${JSON.stringify(segments)}`;
+        assert.equal(segments.reduce((sum, segment) => sum + segment.minutes, 0), total, label);
+        assert.ok(segments.every((segment) => segment.minutes <= maxSegment), label);
+        assert.ok(segments.slice(0, -1).every((segment) => segment.minutes >= minSegment), label);
+      }
+    }
+    assert.deepEqual(
+      planSegments({ total: 50, start: minuteOf("07:00"), end: minuteOf("23:00"), minSegment: 20, maxSegment: 20, random: seeded(3) }).map((s) => s.minutes),
+      [20, 20, 10]
+    );
+  });
+
   it("剩下的分钟不到一段时排一段；时段不够时少读一些", () => {
     assert.deepEqual(
       planSegments({ total: 10, start: 600, end: 700, minSegment: 15, maxSegment: 35, random: () => 0 }),
@@ -216,6 +232,25 @@ describe("计划器中的分段阅读", () => {
     quietly(() => planner.tick());
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /^今天只读了 0 分钟/);
+  });
+
+  it("planner.json 中无效的分段计划与分段加载时丢弃", () => {
+    const valid = { at: new Date(at("10:00")).toISOString(), time: "10:00", minutes: 20, status: "planned" };
+    fs.writeFileSync(
+      path.join(dataDir, "planner.json"),
+      JSON.stringify({
+        version: 1,
+        pending: [],
+        catchups: {},
+        splits: {
+          a1: { date: "2026-11-15", key: "x", segments: [valid, { ...valid, at: "oops" }, { ...valid, minutes: "20" }, { ...valid, status: "weird" }, null] },
+          b2: { date: 20261115, segments: [] },
+          c3: "broken",
+        },
+      })
+    );
+    const logs = quietly(() => create().close());
+    assert.ok(logs.some((line) => line.includes("6 个分段计划或分段格式无效")), logs.join("\n"));
   });
 
   it("还有没开始的段时不发断签预警", async () => {
