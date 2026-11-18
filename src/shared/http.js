@@ -17,8 +17,8 @@ function isHttpUrl(str) {
   }
 }
 
-// 读取响应体：超过 MAX_RESPONSE_BYTES 或响应中途断开（此时没有 end 事件）时以错误结束
-function readBody(res, onDone) {
+// 读取响应体：超过 maxBytes（默认 MAX_RESPONSE_BYTES）或响应中途断开（此时没有 end 事件）时以错误结束
+function readBody(res, onDone, maxBytes = MAX_RESPONSE_BYTES) {
   const chunks = [];
   let size = 0;
   let done = false;
@@ -30,8 +30,8 @@ function readBody(res, onDone) {
   };
   res.on("data", (chunk) => {
     size += chunk.length;
-    if (size > MAX_RESPONSE_BYTES) {
-      finish(new Error(`response larger than ${MAX_RESPONSE_BYTES} bytes`));
+    if (size > maxBytes) {
+      finish(new Error(`response larger than ${maxBytes} bytes`));
       res.destroy();
       return;
     }
@@ -81,7 +81,8 @@ async function fetchJson(url, timeoutMs = 3000) {
 }
 
 // 统一的 JSON POST 请求，供各推送渠道复用
-function postJson(urlString, payload, extraHeaders = {}, timeoutMs = DEFAULT_POST_TIMEOUT_MS) {
+// options.maxBytes：响应体上限，默认 1 MB（微信读书官方接口的笔记列表可能更大）
+function postJson(urlString, payload, extraHeaders = {}, timeoutMs = DEFAULT_POST_TIMEOUT_MS, { maxBytes = MAX_RESPONSE_BYTES } = {}) {
   return new Promise((resolve) => {
     let urlObj;
     try {
@@ -129,7 +130,7 @@ function postJson(urlString, payload, extraHeaders = {}, timeoutMs = DEFAULT_POS
             body: responseData,
             error: "",
           });
-        });
+        }, maxBytes);
       });
     } catch (error) {
       finish({ ok: false, status: 0, body: "", error: error.message });

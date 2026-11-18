@@ -192,6 +192,10 @@ export const OverviewPage = {
     };
   },
   template: `
+    <hgroup class="section-head">
+      <h2>自动阅读</h2>
+      <p class="muted">可选功能：按计划打开微信读书读一会儿，帮账号读满时长、按时打卡。不影响笔记同步。</p>
+    </hgroup>
     <section v-if="totalAccounts" class="metrics-grid">
       <div class="metric-card">
         <div class="metric-head">
@@ -252,7 +256,7 @@ export const OverviewPage = {
     </section>
 
     <section v-if="queue.length">
-      <h2>运行队列</h2>
+      <h3>运行队列</h3>
       <div class="table-scroll">
         <table class="striped">
           <thead><tr><th>账号</th><th>状态</th><th>方式</th><th>进度</th></tr></thead>
@@ -269,7 +273,10 @@ export const OverviewPage = {
     </section>
 
     <section>
-      <h2>账号</h2>
+      <div class="section-title-row">
+        <h3>账号</h3>
+        <a href="#/accounts/new" role="button" class="secondary small">新建账号</a>
+      </div>
       <div v-if="accounts.length" class="cards">
         <account-card v-for="account in accounts" :key="account.id" :account="account" />
       </div>

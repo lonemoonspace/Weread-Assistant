@@ -32,4 +32,9 @@ module.exports = [
     languageOptions: { sourceType: "script", globals: globals.browser },
     rules: { "no-unused-vars": ["error", { caughtErrors: "none", varsIgnorePattern: "^api$" }] },
   },
+  {
+    // 普通脚本，在页面渲染前设置外观
+    files: [`${PANEL_ASSETS}/theme.js`],
+    languageOptions: { sourceType: "script", globals: globals.browser },
+  },
 ];

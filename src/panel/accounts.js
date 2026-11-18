@@ -138,6 +138,14 @@ async function deleteAccount(store, panelDataDir, id, { deleteData = false, isBu
         moved = moveAccountData(panelDataDir, id);
       }
       draft.accounts = draft.accounts.filter((account) => account.id !== id);
+      // 限定了账号的 API 令牌去掉这个账号：以后新建同名账号时，令牌不会因此获得访问权限
+      if (Array.isArray(draft.auth.tokens)) {
+        for (const token of draft.auth.tokens) {
+          if (token && Array.isArray(token.accounts)) {
+            token.accounts = token.accounts.filter((accountId) => accountId !== id);
+          }
+        }
+      }
     });
   } catch (e) {
     restoreMoved(moved);

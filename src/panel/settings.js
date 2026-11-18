@@ -55,6 +55,20 @@ const SETTINGS_FIELDS = [
     default: 3,
   },
   {
+    key: "notesSyncAt",
+    type: "string",
+    label: "每天同步笔记的时间",
+    description: "填写了微信读书 API Key 的账号，每天到这个时间（HH:MM，面板时区）自动同步一次笔记与划线，写入数据目录的 accounts/<账号>/notes/。",
+    default: "04:30",
+  },
+  {
+    key: "weeklyReportAt",
+    type: "string",
+    label: "每周一发送阅读报告的时间",
+    description: "账号配置中开启了“每周阅读报告”并填写了微信读书 API Key 的账号，每周一到这个时间（HH:MM，面板时区）之后推送上周的阅读报告。",
+    default: "09:00",
+  },
+  {
     key: "vncUrl",
     type: "string",
     label: "noVNC 地址",
@@ -90,9 +104,17 @@ function checkHttpUrl(field, value) {
   }
 }
 
+function checkTime(field, value) {
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+    throw badRequest(`${field.label}格式应为 HH:MM（00:00–23:59）：${value}`);
+  }
+}
+
 const EXTRA_CHECKS = {
   timezone: checkTimezone,
   vncUrl: checkHttpUrl,
+  notesSyncAt: checkTime,
+  weeklyReportAt: checkTime,
 };
 
 // 按 patch 修改设置并返回新对象；值为 null 时恢复默认值

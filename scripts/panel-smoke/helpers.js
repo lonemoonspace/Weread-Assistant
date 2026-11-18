@@ -36,6 +36,8 @@ function panelOptions({ planner, ...overrides } = {}) {
     seleniumUrl: "",
     runner: { workerPath: STUB_WORKER, killTimeoutMs: 500 },
     sseHeartbeatMs: 100,
+    // 测试中不访问真实的微信读书接口：默认指向本机不存在的端口，需要时由场景换成 mock-official.js
+    officialApi: { gatewayUrl: "http://127.0.0.1:9/api/agent/gateway", retryDelayMs: 1 },
     ...overrides,
     planner: { warn: async () => {}, ...planner },
   };
