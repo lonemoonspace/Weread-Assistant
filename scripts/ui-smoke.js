@@ -408,18 +408,47 @@ async function desktop(env, h, driver, results) {
   step("调度：添加规则、预览接下来的运行时间、保存后立即生效");
 
   await h.go("#/accounts/ok-1/schedules");
-  await h.waitText(".goal-card", "每日目标");
-  const goalCard = await driver.findElement(By.css(".goal-card"));
+  // 分段阅读卡片沿用 .goal-card 的样式，每日目标卡片要排除它
+  await h.waitText(".goal-card:not(.split-card)", "每日目标");
+  const goalCard = await driver.findElement(By.css(".goal-card:not(.split-card)"));
   await h.type(await goalCard.findElement(By.css("input[type=number]")), "45");
   await h.click(await goalCard.findElement(By.css("input[role=switch]")));
   await h.clickButton("保存目标", goalCard);
   await h.waitText(".notice", "每日目标已保存");
   assert.deepStrictEqual((await call("GET", "api/accounts/ok-1/goal")).goal, { enabled: true, minutes: 45, checkAt: "22:00" });
-  await h.waitText(".goal-card", "今天已读");
+  await h.waitText(".goal-card:not(.split-card)", "今天已读");
   await h.shot("10b-goal");
   await h.go("#/");
   await h.waitText(".account-card", "/45 分钟，22:00 检查");
   step("每日目标：在调度页设置目标与检查时间，总览卡片显示今天的进度与检查时间");
+
+  await h.go("#/accounts/ok-1/schedules");
+  await h.waitText(".split-card", "分段阅读");
+  const splitCard = await driver.findElement(By.css(".split-card"));
+  const [splitMinutes, minSegment, maxSegment] = await splitCard.findElements(By.css("input[type=number]"));
+  await h.type(splitMinutes, "50");
+  await h.type(minSegment, "20");
+  await h.type(maxSegment, "20");
+  // 每段固定 20 分钟、每天 50 分钟：提前说明最后一段更短
+  await h.waitText(".split-card", "最后一段只读 10 分钟");
+  await h.click(await splitCard.findElement(By.css("input[role=switch]")));
+  await h.clickButton("保存分段阅读", splitCard);
+  await h.waitText(".notice", "分段阅读已保存");
+  assert.deepStrictEqual((await call("GET", "api/accounts/ok-1/split")).split, {
+    enabled: true,
+    minutes: 50,
+    from: "07:00",
+    to: "23:00",
+    minSegment: 20,
+    maxSegment: 20,
+  });
+  await h.waitText(".split-card", "今天已读");
+  await h.shot("10c-split");
+  // 清除设置，免得排出的段在后面的步骤中运行
+  await h.clickButton("清除", splitCard);
+  await h.waitText(".notice", "已清除分段阅读设置");
+  assert.strictEqual((await call("GET", "api/accounts/ok-1/split")).split, null);
+  step("分段阅读：在调度页填写并保存，固定段长时提示最后一段更短，可以清除");
 
   await h.go("#/accounts/ok-1/config");
   const duration = await h.field("阅读时长（分钟）");

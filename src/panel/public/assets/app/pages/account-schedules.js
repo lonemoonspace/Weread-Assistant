@@ -1,6 +1,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
-import { SCHEDULE_TYPE_LABELS, formatNextRun, formatShort } from "../format.js";
+import { SCHEDULE_TYPE_LABELS, formatHourMinute, formatNextRun, formatShort } from "../format.js";
 import { setLeaveGuard } from "../router.js";
 import { notify, refreshAccounts, timezone } from "../store.js";
 
@@ -124,9 +124,130 @@ const GoalCard = {
     </article>`,
 };
 
+const SEGMENT_STATUS = { planned: "待运行", started: "已开始", skipped: "已跳过", cancelled: "已取消" };
+
+// 分段阅读：只设每天读多少分钟、在什么时段、每段多长，由计划器每天随机排几段；与调度规则同时使用时两者叠加
+// 有未保存的修改时发出 dirty-change，由调度页并入离开确认
+const SplitCard = {
+  props: { account: Object },
+  emits: ["dirty-change"],
+  setup(props, { emit }) {
+    const view = ref(null);
+    const form = ref({ enabled: false, minutes: 60, from: "07:00", to: "23:00", minSegment: 15, maxSegment: 35 });
+    const error = ref("");
+    const busy = ref(false);
+    const saved = ref("");
+    const payload = () => ({
+      enabled: form.value.enabled,
+      minutes: Number(form.value.minutes),
+      from: form.value.from,
+      to: form.value.to,
+      minSegment: Number(form.value.minSegment),
+      maxSegment: Number(form.value.maxSegment),
+    });
+    const snapshot = () => JSON.stringify(payload());
+    const dirty = computed(() => view.value !== null && snapshot() !== saved.value);
+    watch(dirty, (value) => emit("dirty-change", value));
+
+    function apply(data) {
+      view.value = data;
+      form.value = data.split ? { ...data.split } : { enabled: false, minutes: 60, from: "07:00", to: "23:00", minSegment: 15, maxSegment: 35 };
+      saved.value = snapshot();
+    }
+
+    async function load() {
+      try {
+        apply(await api(`accounts/${props.account.id}/split`));
+      } catch (e) {
+        notify(e.message, "error");
+      }
+    }
+
+    async function save(clearing = false) {
+      busy.value = true;
+      error.value = "";
+      try {
+        const split = clearing ? null : payload();
+        apply(await api(`accounts/${props.account.id}/split`, { method: "PUT", body: { split } }));
+        await refreshAccounts();
+        notify(!split ? "已清除分段阅读设置" : split.enabled ? "分段阅读已保存，今天剩下的段已重新安排" : "分段阅读已关闭");
+      } catch (e) {
+        error.value = e.message;
+      } finally {
+        busy.value = false;
+      }
+    }
+
+    // 今天的各段：只显示时刻（HH:MM）
+    const segments = computed(() =>
+      view.value && view.value.plan
+        ? view.value.plan.segments.map((segment) => `${formatHourMinute(segment.at, view.value.timezone)} ${segment.minutes} 分钟（${SEGMENT_STATUS[segment.status] || segment.status}）`)
+        : []
+    );
+    // 分不成每段都在最短–最长之间时（例如每段固定 20 分钟、每天 50 分钟），只有最后一段更短：提前说明
+    const shortLast = computed(() => {
+      const { minutes, minSegment, maxSegment } = form.value;
+      if (![minutes, minSegment, maxSegment].every((value) => Number.isInteger(value) && value > 0) || minSegment > maxSegment) {
+        return 0;
+      }
+      const count = Math.ceil(minutes / maxSegment);
+      return count > 1 && count * minSegment > minutes ? minutes - (count - 1) * maxSegment : 0;
+    });
+    onMounted(load);
+    return { view, form, error, busy, dirty, save, segments, shortLast };
+  },
+  template: `
+    <article class="goal-card split-card">
+      <h3>分段阅读（可选）</h3>
+      <p class="muted">
+        不想手写调度时用：只设每天读多少分钟、在什么时段、每段多长，每天自动在时段内随机排几段，开始时间和长度都随机，两段之间至少隔
+        {{ view ? view.gapMinutes : 30 }} 分钟。当天读满后剩下的段自动取消；和上面的调度规则同时开启时两者叠加。某段失败时照常重试。时间按 {{ view ? view.timezone : "面板" }} 时区。
+      </p>
+      <template v-if="view">
+        <div class="grid rule-fields">
+          <label>
+            每天读（分钟）
+            <input type="number" min="1" max="1440" v-model.number="form.minutes">
+          </label>
+          <label>
+            从（HH:MM）
+            <input v-model.trim="form.from" placeholder="07:00" inputmode="numeric">
+          </label>
+          <label>
+            到（HH:MM）
+            <input v-model.trim="form.to" placeholder="23:00" inputmode="numeric">
+          </label>
+          <label>
+            每段最短（分钟）
+            <input type="number" min="5" max="240" v-model.number="form.minSegment">
+          </label>
+          <label>
+            每段最长（分钟）
+            <input type="number" min="5" max="240" v-model.number="form.maxSegment">
+          </label>
+        </div>
+        <p v-if="shortLast" class="muted">分不成每段都在 {{ form.minSegment }}–{{ form.maxSegment }} 分钟：前面各段读 {{ form.maxSegment }} 分钟，最后一段只读 {{ shortLast }} 分钟。</p>
+        <p v-if="view.split && view.split.enabled" class="muted">
+          今天已读 {{ view.today.minutes }}/{{ view.split.minutes }} 分钟。
+          <template v-if="segments.length">今天的安排：{{ segments.join("、") }}。</template>
+          <template v-else>今天没有要读的段（已读满或时段已过）。</template>
+        </p>
+        <p v-if="error" class="error-text">{{ error }}</p>
+        <p v-if="dirty" class="muted">分段阅读有未保存的修改。</p>
+        <div class="rule-footer">
+          <label class="switch-line"><input type="checkbox" role="switch" v-model="form.enabled"> 启用</label>
+          <div class="form-actions">
+            <button v-if="view.split" type="button" class="secondary" :disabled="busy" @click="save(true)">清除</button>
+            <button type="button" :aria-busy="busy" :disabled="busy" @click="save()">保存分段阅读</button>
+          </div>
+        </div>
+      </template>
+    </article>`,
+};
+
 // 调度：多条规则，可单独启停；预览接下来的运行时间，保存后立即生效
 export const SchedulesTab = {
-  components: { GoalCard },
+  components: { GoalCard, SplitCard },
   props: { account: Object },
   setup(props) {
     const rules = ref([]);
@@ -140,6 +261,7 @@ export const SchedulesTab = {
     const snapshot = () => JSON.stringify(rules.value.map(toPayload));
     const dirty = computed(() => snapshot() !== saved.value);
     const goalDirty = ref(false);
+    const splitDirty = ref(false);
 
     function apply(data) {
       rules.value = data.schedules.map(toEditable);
@@ -192,7 +314,10 @@ export const SchedulesTab = {
         if (dirty.value) {
           return "调度规则有未保存的修改，确定离开吗？";
         }
-        return goalDirty.value ? "每日目标有未保存的修改，确定离开吗？" : "";
+        if (goalDirty.value) {
+          return "每日目标有未保存的修改，确定离开吗？";
+        }
+        return splitDirty.value ? "分段阅读有未保存的修改，确定离开吗？" : "";
       })
     );
 
@@ -206,6 +331,9 @@ export const SchedulesTab = {
       dirty,
       setGoalDirty: (value) => {
         goalDirty.value = value;
+      },
+      setSplitDirty: (value) => {
+        splitDirty.value = value;
       },
       add,
       remove: (index) => rules.value.splice(index, 1),
@@ -278,6 +406,7 @@ export const SchedulesTab = {
       </div>
       <p v-if="dirty" class="muted">有未保存的修改。</p>
 
+      <split-card :account="account" @dirty-change="setSplitDirty" />
       <goal-card :account="account" @dirty-change="setGoalDirty" />
     </section>`,
 };

@@ -33,6 +33,7 @@ module.exports = async function backupScenarios({ scenario, startAuthed }) {
     });
     await panel.call("PUT", "api/accounts/me/schedules", { schedules: [{ type: "daily", times: ["06:00", "21:30"], jitterMinutes: 5 }] });
     await panel.call("PUT", "api/accounts/me/goal", { goal: { minutes: 40, checkAt: "22:00" } });
+    await panel.call("PUT", "api/accounts/me/split", { split: { minutes: 50, from: "08:00", to: "22:00", minSegment: 10, maxSegment: 30 } });
     fs.writeFileSync(cookiesFile(panel, "me"), JSON.stringify(COOKIES), { mode: 0o600 });
 
     const plain = await panel.call("POST", "api/backup/export", {});
@@ -55,6 +56,7 @@ module.exports = async function backupScenarios({ scenario, startAuthed }) {
     assert.deepStrictEqual(me.overrides, { speed: "fast", telegramChatId: "-100123" });
     assert.strictEqual(me.schedules[0].jitterMinutes, 5);
     assert.deepStrictEqual(me.goal, { enabled: true, minutes: 40, checkAt: "22:00" });
+    assert.deepStrictEqual(me.split, { enabled: true, minutes: 50, from: "08:00", to: "22:00", minSegment: 10, maxSegment: 30 });
     assert.ok(!("auth" in plain.json) && !plain.text.includes("passwordHash"), "不包含面板密码与 passkey");
 
     const missing = await panel.call("POST", "api/backup/export", { includeSecrets: true });
@@ -113,6 +115,7 @@ module.exports = async function backupScenarios({ scenario, startAuthed }) {
     assert.deepStrictEqual(me.overrides, { speed: "fast", telegramChatId: "-100123", ntfyTopic: "topic_secret_123" });
     assert.deepStrictEqual(me.challenge, { type: "month", startDate: "2026-11-01", calibration: { asOf: "2026-11-10", minutes: 600, checkedDays: 10 } });
     assert.deepStrictEqual(me.goal, { enabled: true, minutes: 40, checkAt: "22:00" });
+    assert.deepStrictEqual(me.split, { enabled: true, minutes: 50, from: "08:00", to: "22:00", minSegment: 10, maxSegment: 30 });
     assert.deepStrictEqual(me.schedules.map((rule) => rule.times), [["06:00", "21:30"]]);
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(cookiesFile(panel, "me"), "utf8")), COOKIES);
     assert.strictEqual(fs.statSync(cookiesFile(panel, "me")).mode & 0o777, 0o600);

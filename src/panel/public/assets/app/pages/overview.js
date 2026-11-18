@@ -22,9 +22,20 @@ const AccountCard = {
       }
       return "";
     });
+    // 计划器中最早的待办：重试、随机延后的定时运行与今天还没开始的分段阅读
+    const planned = computed(() => {
+      const status = props.account.planned;
+      if (!status) {
+        return null;
+      }
+      const segments = (status.split ? status.split.segments : [])
+        .filter((segment) => segment.status === "planned")
+        .map((segment) => ({ kind: "split", dueAt: segment.at, minutes: segment.minutes }));
+      return [...status.pending, ...segments].sort((a, b) => a.dueAt.localeCompare(b.dueAt))[0] || null;
+    });
     // 今天还没打卡，但正在运行或今天还有待运行的调度时显示中性的“待运行”，不显示红色的“未打卡”
     const pendingToday = computed(() => {
-      if (run.value || (props.account.planned && props.account.planned.pending.length > 0)) {
+      if (run.value || planned.value) {
         return true;
       }
       const next = props.account.enabled && props.account.nextRunAt;
@@ -32,8 +43,6 @@ const AccountCard = {
     });
     // 已启用的每日目标
     const goal = computed(() => (props.account.goal && props.account.goal.enabled ? props.account.goal : null));
-    // 计划器中最早的待办（重试、随机延后的定时运行）
-    const planned = computed(() => (props.account.planned && props.account.planned.pending[0]) || null);
     return {
       run,
       avatarLetter,
