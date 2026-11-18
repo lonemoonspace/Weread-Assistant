@@ -190,6 +190,7 @@ export const CalendarTab = {
         </div>
       </div>
       <p class="muted">每天阅读满 {{ data.checkInMinutes }} 分钟算打卡；日期按 {{ data.timezone }} 时区划分。{{ data.note }}。</p>
+      <p v-if="data.challenge && data.challenge.calibration" class="muted">日历格子只显示本工具的运行记录；按 App 的校准只计入上方挑战进度的汇总，不改动校准日期之前的格子。</p>
 
       <details>
         <summary>阅读挑战设置</summary>
@@ -212,7 +213,7 @@ export const CalendarTab = {
           <template v-if="form.calibrated">
             <label>
               截至日期（含这一天）
-              <input type="date" v-model="form.asOf" :min="form.startDate" required>
+              <input type="date" v-model="form.asOf" :min="form.startDate" :max="data.today.date" required>
             </label>
             <label>
               App 显示已读（小时）

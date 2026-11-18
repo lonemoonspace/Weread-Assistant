@@ -225,6 +225,11 @@ module.exports = async function historyScenarios({ scenario, startAuthed }) {
       const res = await panel.call("PATCH", "api/accounts/me", { challenge: { type: "month", startDate: "2026-04-01", calibration } });
       assert.strictEqual(res.status, 400, JSON.stringify(calibration));
     }
+    // 校准日期不能晚于今天
+    const tomorrow = dateInZone(new Date(Date.now() + 86400000), "Asia/Shanghai");
+    const future = await panel.call("PATCH", "api/accounts/me", { challenge: { type: "month", startDate: today, calibration: { asOf: tomorrow, minutes: 0, checkedDays: 0 } } });
+    assert.strictEqual(future.status, 400);
+    assert.match(future.json.message, /不能晚于今天/);
     const withCalibration = { type: "month", startDate: today, calibration: { asOf: today, minutes: 125, checkedDays: 1 } };
     assert.deepStrictEqual((await panel.call("PATCH", "api/accounts/me", { challenge: withCalibration })).json.account.challenge, withCalibration);
     const goal = (await panel.call("GET", "api/accounts/me/goal")).json;

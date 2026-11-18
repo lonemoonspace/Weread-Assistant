@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { writeFileAtomic } = require("../shared/files");
 const { ACCOUNT_ID_PATTERN } = require("./config");
+const { storedChallenge } = require("./challenge");
 const { storedGoal } = require("./goal");
 const { sanitizeSettings } = require("./settings");
 
@@ -69,7 +70,7 @@ function normalizeData(raw, seedDefaults) {
     accounts: (raw.accounts || []).map((account) => ({
       ...account,
       schedules: account.schedules || [],
-      challenge: account.challenge && typeof account.challenge === "object" ? account.challenge : null,
+      challenge: storedChallenge(account.challenge),
       goal: storedGoal(account.goal),
     })),
     // 已完成的一次性升级迁移，避免每次启动重复执行

@@ -28,7 +28,8 @@ const isCount = (value) => Number.isInteger(value) && value >= 0;
 
 // 校准：截至 asOf 这一天（含）微信读书 App 中本轮挑战显示的累计分钟数与打卡天数。
 // 进度 = 校准值 + 面板在 asOf 之后的记录
-function normalizeCalibration(raw, type, startDate) {
+// today（YYYY-MM-DD，可选）：给出时校准日期不能晚于今天（用户保存时校验；备份导入与已保存的值不按当天校验）
+function normalizeCalibration(raw, type, startDate, today = null) {
   if (!isObject(raw)) {
     throw badRequest("challenge.calibration 必须是对象或 null");
   }
@@ -44,6 +45,9 @@ function normalizeCalibration(raw, type, startDate) {
   if (raw.asOf < startDate || raw.asOf > endDate) {
     throw badRequest(`校准日期应在本轮挑战之内（${startDate} 至 ${endDate}）：${raw.asOf}`);
   }
+  if (today && raw.asOf > today) {
+    throw badRequest(`校准日期不能晚于今天（${today}）：${raw.asOf}`);
+  }
   const days = daysBetween(startDate, raw.asOf) + 1;
   if (!isCount(raw.checkedDays) || raw.checkedDays > days) {
     throw badRequest(`已打卡天数应为 0–${days} 的整数（开始日期到校准日期共 ${days} 天）：${raw.checkedDays}`);
@@ -55,8 +59,8 @@ function normalizeCalibration(raw, type, startDate) {
 }
 
 // 账号的挑战设置：null 表示不设置；{ type: "month" | "year", startDate: "YYYY-MM-DD", calibration? }，
-// calibration 见 normalizeCalibration，null 或不填表示不校准
-function normalizeChallenge(raw) {
+// calibration 见 normalizeCalibration，null 或不填表示不校准；options.today 见 normalizeCalibration
+function normalizeChallenge(raw, { today = null } = {}) {
   if (raw === null) {
     return null;
   }
@@ -75,7 +79,7 @@ function normalizeChallenge(raw) {
   }
   const challenge = { type: raw.type, startDate: raw.startDate };
   if (raw.calibration !== undefined && raw.calibration !== null) {
-    challenge.calibration = normalizeCalibration(raw.calibration, raw.type, raw.startDate);
+    challenge.calibration = normalizeCalibration(raw.calibration, raw.type, raw.startDate, today);
   }
   return challenge;
 }
@@ -92,10 +96,27 @@ function storedCalibration(challenge) {
   }
 }
 
+// panel.json 加载时清洗：校准无效时去掉校准，挑战本身保留
+function storedChallenge(challenge) {
+  if (!isObject(challenge)) {
+    return null;
+  }
+  if (challenge.calibration === undefined || challenge.calibration === null) {
+    return challenge;
+  }
+  const calibration = storedCalibration(challenge);
+  if (calibration) {
+    return { ...challenge, calibration };
+  }
+  const { calibration: _dropped, ...rest } = challenge;
+  return rest;
+}
+
 module.exports = {
   CHALLENGES,
   isChallengeType,
   isValidDate,
   normalizeChallenge,
   storedCalibration,
+  storedChallenge,
 };

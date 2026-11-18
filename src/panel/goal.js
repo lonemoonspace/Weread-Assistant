@@ -66,7 +66,8 @@ function suggestedFromProgress(challenge, progress) {
   if (!progress || progress.status === "ended" || progress.minutesPerDayNeeded === null) {
     return suggestedGoalMinutes(challenge);
   }
-  return Math.max(5, Math.ceil(progress.minutesPerDayNeeded / 5) * 5);
+  // 不超过每日目标的上限：挑战末期落后很多时，所需分钟数可能超过一天
+  return Math.min(MAX_GOAL_MINUTES, Math.max(5, Math.ceil(progress.minutesPerDayNeeded / 5) * 5));
 }
 
 // 接口中返回的目标：附带按挑战的建议值，以及 checkAt 太晚、来不及补满目标时的提示。
